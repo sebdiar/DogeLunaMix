@@ -4,6 +4,10 @@ language = "nodejs"
 
 # Start command - runs both backend and frontend
 run = "npm run start:replit"
+modules = ["nodejs-20", "web", "bash"]
+
+[nix]
+channel = "stable-25_05"
 
 # Nix packages (if needed)
 # nix = "pkgs.nodejs_20 pkgs.npm"
