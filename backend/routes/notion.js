@@ -114,6 +114,17 @@ router.post('/webhook', async (req, res) => {
     // Por ahora, confiamos en que viene de Notion (en producción, verificar la firma)
     const signature = req.headers['x-notion-signature'];
     
+    // Log del body completo para debugging
+    console.log('Webhook received:', JSON.stringify(req.body, null, 2));
+    
+    // Manejar verificación de webhook (Notion envía un verification_token)
+    if (req.body.type === 'webhook.verification' || req.body.verification_token) {
+      const { verification_token } = req.body;
+      console.log('🔑 Webhook verification token received:', verification_token);
+      // Devolver el token de verificación para confirmar la suscripción
+      return res.status(200).json({ verification_token });
+    }
+    
     // Obtener el evento del body
     const { object, type, data } = req.body;
     
