@@ -544,9 +544,8 @@ export const searchConfig = [
 ];
 
 export const config = {
-  // En producción/Replit, usar ruta relativa (el frontend hace proxy)
-  // En desarrollo local, usar localhost:3001
-  API_URL: import.meta.env.VITE_API_URL || (import.meta.env.DEV ? 'http://localhost:3001' : ''),
+  // Always use relative URLs - the proxy in server.js handles routing to backend
+  API_URL: '',
 };
 
 export const appsPerPageConfig = [

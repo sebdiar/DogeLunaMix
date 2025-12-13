@@ -5,10 +5,8 @@ const USER_KEY = 'dogeub_user';
 
 class Api {
   constructor() {
-    // En producción/Replit, usar ruta relativa (el frontend hace proxy)
-    // En desarrollo local, usar localhost:3001
-    const isDev = import.meta.env.DEV || window.location.hostname === 'localhost';
-    this.baseUrl = config.API_URL || (isDev ? 'http://localhost:3001' : '');
+    // Always use relative URLs - the proxy in server.js handles routing to backend
+    this.baseUrl = '';
   }
 
   getToken() {
