@@ -92,18 +92,18 @@ class TabManager {
       unsupported: CONFIG.unsupported,
       filter: CONFIG.filter,
       options: stored,
-      prType: stored.prType || 'auto',
+      prType: stored.prType || 'scr',
       search: stored.engine || 'https://www.google.com/search?q=',
       newTabUrl: '/new',
       newTabTitle: 'New Tab',
       enc: arr[0],
       dnc: arr[1],
       frames: {},
-      tabs: [{ id: 1, title: 'New Tab', url: '/new', active: true }],
+      tabs: [], // Start with no tabs - they will be loaded from backend
       history: new Map(),
       urlTrack: new Map(),
       nextId: 2,
-      maxTabs: 10,
+      maxTabs: 9999, // Effectively unlimited
       minW: 50,
       maxW: 200,
       urlInterval: 1000,
@@ -123,7 +123,11 @@ class TabManager {
       fCss: 'w-full h-full border-0 absolute top-0 left-0 z-0 transition-opacity duration-200 ease-in-out opacity-0 pointer-events-none',
     });
 
-    this.ab.onclick = () => this.add();
+    // Don't set onclick here - let luna-integration.js handle it for modal
+    // If luna-integration is not available, fallback to default behavior
+    if (!window.lunaIntegration) {
+      this.ab.onclick = () => this.add();
+    }
 
     this.tc.onclick = (e) => {
       const el = e.target.closest('.close-tab, .tab-item');
@@ -133,7 +137,7 @@ class TabManager {
     };
 
     if (this.ui) {
-      this.ui.value = this.isNewTab(this.tabs[0].url) ? '' : this.tabs[0].url;
+      this.ui.value = this.tabs.length > 0 && !this.isNewTab(this.tabs[0].url) ? this.tabs[0].url : '';
       this.ui.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
           e.preventDefault();
@@ -212,16 +216,43 @@ class TabManager {
 
   setFrameState = (tabId, active) => {
     const f = document.getElementById(`iframe-${tabId}`);
-    if (!f) return;
-    f.style.zIndex = active ? 10 : 0;
-    f.style.opacity = active ? '1' : '0';
-    f.style.pointerEvents = active ? 'auto' : 'none';
-    f.classList.toggle('f-active', active);
+    const chatContainer = document.getElementById(`chat-${tabId}`);
+    const dashboardContainer = document.getElementById(`dashboard-${tabId}`);
+    
+    if (f) {
+      f.style.zIndex = active ? 10 : 0;
+      f.style.opacity = active ? '1' : '0';
+      f.style.pointerEvents = active ? 'auto' : 'none';
+      f.classList.toggle('f-active', active);
+    }
+    
+    if (chatContainer) {
+      chatContainer.style.zIndex = active ? 10 : 0;
+      chatContainer.style.opacity = active ? '1' : '0';
+      chatContainer.style.pointerEvents = active ? 'auto' : 'none';
+      chatContainer.classList.toggle('f-active', active);
+    }
+    
+    if (dashboardContainer) {
+      dashboardContainer.style.zIndex = active ? 10 : 0;
+      dashboardContainer.style.opacity = active ? '1' : '0';
+      dashboardContainer.style.pointerEvents = active ? 'auto' : 'none';
+      dashboardContainer.classList.toggle('f-active', active);
+    }
   };
 
   showActive = () => {
     const activeTab = this.active();
     this.tabs.forEach((t) => this.setFrameState(t.id, t === activeTab));
+    
+    // Hide/show URL bar based on active tab type
+    const urlBar = document.getElementById('d-url');
+    if (urlBar && activeTab) {
+      const isSpecial = this.isChatUrl(activeTab.url) || activeTab.url?.startsWith('doge://ai-dashboard') || activeTab.url?.startsWith('luna://ai-dashboard');
+      urlBar.style.display = isSpecial ? 'none' : 'flex';
+    } else if (urlBar && !activeTab) {
+      urlBar.style.display = 'flex';
+    }
   };
 
   startTracking = () => this.tabs.forEach((t) => this.track(t.id));
@@ -239,23 +270,78 @@ class TabManager {
     }
   };
 
+  isChatUrl = (url) => {
+    return url && (url.startsWith('luna://chat/') || url.startsWith('doge://chat/'));
+  };
+
+  isSpecialUrl = (url) => {
+    return url && (url.startsWith('luna://') || url.startsWith('doge://') || url.startsWith('tabs://'));
+  };
+
   createIframes = () => {
     this.tabs.forEach((t) => {
-      if (!document.getElementById(`iframe-${t.id}`)) {
-        const f = document.createElement('iframe');
-        f.id = `iframe-${t.id}`;
-        f.className = this.fCss;
-        f.style.zIndex = 0;
-        if (this.isNewTab(t.url)) {
-          f.src = t.url;
-          f.onload = () => {
-            try {
-              contentObserver.unbind();
-              contentObserver.bind();
-            } catch {}
-          };
+      if (this.isChatUrl(t.url)) {
+        // Create chat container instead of iframe
+        if (!document.getElementById(`chat-${t.id}`)) {
+          const chatContainer = document.createElement('div');
+          chatContainer.id = `chat-${t.id}`;
+          chatContainer.className = this.fCss;
+          chatContainer.style.zIndex = 0;
+          chatContainer.style.backgroundColor = '#ffffff';
+          chatContainer.innerHTML = '<div class="chat-wrapper"></div>';
+          this.ic.appendChild(chatContainer);
+          // Initialize chat when container is created
+          if (window.lunaIntegration) {
+            const spaceId = t.url.split('/').pop();
+            window.lunaIntegration.initChat(t.id, spaceId);
+          }
         }
-        this.ic.appendChild(f);
+      } else if (t.url && (t.url.startsWith('doge://ai-dashboard') || t.url.startsWith('luna://ai-dashboard'))) {
+        // Create AI Dashboard container
+        if (!document.getElementById(`dashboard-${t.id}`)) {
+          const dashboardContainer = document.createElement('div');
+          dashboardContainer.id = `dashboard-${t.id}`;
+          dashboardContainer.className = this.fCss;
+          dashboardContainer.style.zIndex = 0;
+          dashboardContainer.style.backgroundColor = '#ffffff';
+          dashboardContainer.style.display = 'flex';
+          dashboardContainer.style.alignItems = 'center';
+          dashboardContainer.style.justifyContent = 'center';
+          dashboardContainer.innerHTML = `
+            <div style="display: flex; align-items: center; justify-content: center; height: 100%; flex-direction: column; gap: 16px; padding: 32px; text-align: center; max-width: 600px;">
+              <div style="width: 80px; height: 80px; border-radius: 16px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); display: flex; align-items: center; justify-content: center;">
+                <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path>
+                  <circle cx="12" cy="12" r="5"></circle>
+                </svg>
+              </div>
+              <div>
+                <h2 style="font-size: 28px; font-weight: 600; color: #202124; margin: 0 0 8px 0;">AI Dashboard</h2>
+                <p style="color: #5f6368; margin: 0; font-size: 16px; line-height: 1.5;">${t.title || 'Custom Dashboard'}</p>
+              </div>
+              <p style="color: #9aa0a6; margin: 0; font-size: 14px; line-height: 1.5;">This dashboard will be available soon. You can create custom dashboards with AI-powered widgets.</p>
+            </div>
+          `;
+          this.ic.appendChild(dashboardContainer);
+        }
+      } else {
+        // Regular iframe for browser tabs
+        if (!document.getElementById(`iframe-${t.id}`)) {
+          const f = document.createElement('iframe');
+          f.id = `iframe-${t.id}`;
+          f.className = this.fCss;
+          f.style.zIndex = 0;
+          if (this.isNewTab(t.url)) {
+            f.src = t.url;
+            f.onload = () => {
+              try {
+                contentObserver.unbind();
+                contentObserver.bind();
+              } catch {}
+            };
+          }
+          this.ic.appendChild(f);
+        }
       }
     });
     this.showActive();
@@ -274,7 +360,7 @@ class TabManager {
     hist.position--;
     const decodedUrl = hist.urls[hist.position];
     if (decodedUrl) {
-      const handler = TYPE[this.prType] || TYPE.auto;
+      const handler = TYPE[this.prType] || TYPE.scr;
       const iframe = document.getElementById(`iframe-${activeTab.id}`);
       handler.navigate(decodedUrl, this, activeTab, iframe);
       if (this.ui) this.ui.value = decodedUrl;
@@ -296,7 +382,7 @@ class TabManager {
     hist.position++;
     const decodedUrl = hist.urls[hist.position];
     if (decodedUrl) {
-      const handler = TYPE[this.prType] || TYPE.auto;
+      const handler = TYPE[this.prType] || TYPE.scr;
       const iframe = document.getElementById(`iframe-${activeTab.id}`);
       handler.navigate(decodedUrl, this, activeTab, iframe);
       if (this.ui) this.ui.value = decodedUrl;
@@ -403,7 +489,6 @@ class TabManager {
   };
 
   add = () => {
-    if (this.tabs.length >= this.maxTabs) return;
     this.tabs.forEach((t) => (t.active = false));
     const t = {
       id: this.nextId++,
@@ -422,7 +507,7 @@ class TabManager {
   };
 
   close = (id) => {
-    if (this.tabs.length === 1) return;
+    if (this.tabs.length === 0) return;
     const i = this.tabs.findIndex((t) => t.id === id);
     if (i === -1) return;
     const wasActive = this.tabs[i].active;
@@ -430,13 +515,21 @@ class TabManager {
     this.stopTrack(id);
     this.history.delete(id);
     document.getElementById(`iframe-${id}`)?.remove();
+    document.getElementById(`chat-${id}`)?.remove();
+    document.getElementById(`dashboard-${id}`)?.remove();
     if (wasActive) {
       const newIdx = Math.min(i, this.tabs.length - 1);
       this.tabs.forEach((t) => (t.active = false));
       this.tabs[newIdx].active = true;
       this.showActive();
-      if (this.ui)
-        this.ui.value = this.isNewTab(this.tabs[newIdx].url) ? '' : this.ex(this.tabs[newIdx].url);
+      if (this.ui) {
+        const nextTab = this.tabs[newIdx];
+        if (this.isNewTab(nextTab.url) || this.isSpecialUrl(nextTab.url)) {
+          this.ui.value = '';
+        } else {
+          this.ui.value = this.ex(nextTab.url);
+        }
+      }
       this.emitNewFrame();
     }
     this.render();
@@ -451,7 +544,12 @@ class TabManager {
     this.showActive();
     if (this.ui) {
       const activeTab = this.active();
-      this.ui.value = activeTab && !this.isNewTab(activeTab.url) ? this.ex(activeTab.url) : '';
+      // Don't show URL for special URLs (chat, AI dashboard, etc.)
+      if (activeTab && !this.isNewTab(activeTab.url) && !this.isSpecialUrl(activeTab.url)) {
+        this.ui.value = this.ex(activeTab.url);
+      } else {
+        this.ui.value = '';
+      }
     }
     this.emitNewFrame();
   };
@@ -459,7 +557,8 @@ class TabManager {
   returnMeta = () => {
     const t = this.active();
     if (!t) return { name: '', url: '' };
-    const url = t.url && !this.isNewTab(t.url) ? this.ex(t.url) : '';
+    // Don't return URL for special URLs (chat, AI dashboard, etc.)
+    const url = t.url && !this.isNewTab(t.url) && !this.isSpecialUrl(t.url) ? this.ex(t.url) : '';
     return { name: t.title || '', url };
   };
 
@@ -480,6 +579,12 @@ class TabManager {
     if (!input) return;
     const t = this.active();
     if (!t) return;
+    
+    // Don't navigate special URLs (luna://, doge://, tabs://) - they are handled separately
+    if (this.isSpecialUrl(input)) {
+      return;
+    }
+    
     if (this.unsupported.some((s) => input.includes(s))) {
       alert(`The website "${input}" is not supported at this time`);
       return;
@@ -520,7 +625,12 @@ class TabManager {
 
     t.url = url;
     try {
-      t.title = new URL(url).hostname.replace('www.', '');
+      // Don't extract title from special URLs
+      if (this.isSpecialUrl(url)) {
+        t.title = t.title || input;
+      } else {
+        t.title = new URL(url).hostname.replace('www.', '');
+      }
     } catch {
       t.title = input;
     }
@@ -530,50 +640,113 @@ class TabManager {
   };
 
   getTabWidth = () => {
-    const w = this.tc.offsetWidth || 800;
-    return Math.min(this.maxW, Math.max(this.minW, w / this.tabs.length));
+    // No longer needed for vertical sidebar - tabs are full width
+    return 0;
   };
 
   updateWidths = () => {
-    const w = this.getTabWidth();
-    this.tc.querySelectorAll('.tab-item').forEach((el) => {
-      el.style.width = w + 'px';
-      el.style.minWidth = this.minW + 'px';
-    });
+    // No longer needed for vertical sidebar - tabs are full width
   };
 
   updateAddBtn = () => {
-    const dis = this.tabs.length >= this.maxTabs || this.getTabWidth() <= this.minW;
-    this.ab.disabled = dis;
-    this.ab.classList.toggle('opacity-50', dis);
-    this.ab.classList.toggle('cursor-not-allowed', dis);
-    this.ab.classList.toggle('hover:bg-[#b6bfc748]', !dis);
-    this.ab.classList.toggle('active:bg-[#d8e4ee6e]', !dis);
-    this.ab.title = dis ? `Maximum ${this.maxTabs} tabs allowed` : 'Add new tab';
+    // No restrictions - always allow adding tabs
+    this.ab.disabled = false;
+    this.ab.classList.remove('opacity-50', 'cursor-not-allowed');
+    this.ab.classList.add('hover:bg-[#b6bfc748]', 'active:bg-[#d8e4ee6e]');
+    this.ab.title = 'Add new tab';
   };
 
   render = (() => {
-    const tabTemplate = (t, w, i, op, showClose) =>
-      `
+    const tabTemplate = (t, op, showClose) => {
+      // Get icon - prioritize custom avatar over favicon
+      let iconHtml = '';
+      let hasCustomIcon = false;
+      const isChat = this.isChatUrl(t.url);
+      const isDashboard = t.url?.startsWith('luna://ai-dashboard') || t.url?.startsWith('doge://ai-dashboard');
+      
+      // Check for custom avatar first (from backend)
+      if (t.avatar_photo) {
+        iconHtml = `<img src="${t.avatar_photo}" alt="" class="w-full h-full rounded-full object-cover" />`;
+        hasCustomIcon = true;
+      } else if (t.avatar_emoji) {
+        iconHtml = `<span class="text-sm">${t.avatar_emoji}</span>`;
+        hasCustomIcon = true;
+      }
+      
+      // If no custom avatar, try favicon for regular URLs
+      if (!hasCustomIcon && !isChat && !isDashboard) {
+        try {
+          const url = t.url;
+          if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
+            const urlObj = new URL(url);
+            iconHtml = `<img src="https://www.google.com/s2/favicons?domain=${urlObj.hostname}&sz=32" alt="" class="w-4 h-4 object-contain" onerror="this.style.display='none'; if(this.nextElementSibling) this.nextElementSibling.style.display='block';" />`;
+            hasCustomIcon = true;
+          }
+        } catch {}
+      }
+      
+      // Special icons for chat and dashboard
+      if (isChat) {
+        iconHtml = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0 text-[#4285f4]"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`;
+        hasCustomIcon = true;
+      } else if (isDashboard) {
+        iconHtml = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0 text-[#4285f4]"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" x2="21" y1="9" y2="9"/><line x1="9" x2="9" y1="21" y2="9"/></svg>`;
+        hasCustomIcon = true;
+      }
+      
+      // Default icon if nothing else
+      if (!hasCustomIcon) {
+        iconHtml = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="flex-shrink-0"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="9" x2="15" y1="15" y2="15"/></svg>`;
+      }
+      
+      // Determine border color for icon container
+      const borderColor = t.avatar_color || '#e8eaed';
+      const iconColor = t.avatar_color || '#6b7280';
+      
+      return `
       <div ${t.justAdded ? 'data-m="bounce-up" data-m-duration="0.2"' : ''} 
-           class="tab-item relative flex items-center rounded-b-none justify-between pl-2.5 pr-1.5 py-[0.28rem] rounded-[6px] cursor-pointer transition-all duration-200 ease-in-out ${
+           class="tab-item group relative flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-all ${
              t.active
-               ? `border border-b-0 text-[${op.bodyText || '#8a9bb8'}]`
-               : 'hover:bg-[#cccccc2f]'
-           } ${i === 0 ? 'ml-0' : '-ml-px'}" 
-           style="width:${w}px;min-width:${this.minW}px;background-color:${t.active ? op.urlBarBg || '#1d303f' : undefined}" 
-           data-tab-id="${t.id}">
-        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-globe-icon lucide-globe"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>
-        <span class="text-[12px] font-medium truncate flex-1 mr-2 ml-1.5" title="${this.escapeHTML(t.title)}">${this.escapeHTML(t.title)}</span>
-        ${showClose ? `<button class="close-tab shrink-0 w-4 h-4 rounded-full hover:bg-[#b6bfc748] active:bg-[#d0dbe467] flex items-center justify-center transition-colors" data-tab-id="${t.id}" title="Close ${this.escapeHTML(t.title)}"><svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>` : ''}
+               ? 'bg-[#4285f4]/10 text-[#4285f4] font-medium shadow-sm'
+               : 'text-[#202124] hover:bg-[#e8eaed]'
+           }" 
+           data-tab-id="${t.id}"
+           ${t.backendId ? `data-sortable-id="${t.backendId}"` : ''}>
+        <div class="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0" style="border: 1px solid ${borderColor}; color: ${iconColor}">
+          ${iconHtml}
+        </div>
+        <span class="flex-1 text-sm truncate" title="${this.escapeHTML(t.title)}">${this.escapeHTML(t.title)}</span>
+        ${showClose && !isChat && !isDashboard ? `<button class="close-tab shrink-0 p-0.5 opacity-0 group-hover:opacity-100 hover:text-[#202124] transition-opacity" data-tab-id="${t.id}" title="Close ${this.escapeHTML(t.title)}"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>` : ''}
       </div>`.trim();
+    };
 
     return function () {
-      const w = this.getTabWidth();
       const op = JSON.parse(localStorage.getItem('options') || '{}');
       const showClose = this.tabs.length > 1;
 
-      this.tc.innerHTML = this.tabs.map((t, i) => tabTemplate(t, w, i, op, showClose)).join('');
+      // Filtrar tabs: si hay un espacio activo, NO mostrar los tabs del espacio en el sidebar
+      // (solo se muestran en el TopBar para evitar duplicados visuales)
+      let tabsToShow = this.tabs;
+      if (window.lunaIntegration && window.lunaIntegration.activeSpace && window.lunaIntegration.spaceTabs) {
+        const spaceTabUrls = new Set(
+          window.lunaIntegration.spaceTabs
+            .map(t => {
+              const url = t.url || t.bookmark_url;
+              if (!url) return null;
+              return window.lunaIntegration.normalizeUrl(url);
+            })
+            .filter(Boolean)
+        );
+        
+        tabsToShow = this.tabs.filter(t => {
+          const tUrl = t.url || '';
+          if (!tUrl || tUrl === '/new' || tUrl === 'tabs://new') return true;
+          const normalizedUrl = window.lunaIntegration.normalizeUrl(tUrl);
+          return !spaceTabUrls.has(normalizedUrl);
+        });
+      }
+      
+      this.tc.innerHTML = tabsToShow.map((t) => tabTemplate(t, op, showClose)).join('');
 
       this.tabs.forEach((t) => delete t.justAdded);
     };
@@ -644,41 +817,32 @@ window.addEventListener('load', async () => {
     throw err;
   }
 
-  const query = sessionStorage.getItem('query');
-  if (query) {
-    tabManager.navigate(query);
+  // Get URL from query params or sessionStorage
+  const urlParams = new URLSearchParams(window.location.search);
+  const queryUrl = urlParams.get('url') || sessionStorage.getItem('query');
+  
+  if (queryUrl && queryUrl !== 'tabs://new') {
+    // If there's a URL, navigate to it
+    if (tabManager.tabs[0].url === '/new' || tabManager.tabs[0].url === 'tabs://new') {
+      tabManager.updateUrl(queryUrl);
+    } else {
+      tabManager.navigate(queryUrl);
+    }
     sessionStorage.removeItem('query');
   }
 
   setInterval(setTransport, 30000);
 
   const domMap = {
-    'tabs-btn': () => document.getElementById('tb')?.classList.toggle('hidden'),
-    'tbtog': () => {
-      document.getElementById('tb')?.classList.add('hidden');
-      if (!localStorage.getItem('tip0')) {
-        document.dispatchEvent(
-          new CustomEvent('basecoat:toast', {
-            detail: {
-              config: {
-                category: 'info',
-                title: 'Tips Notifier',
-                duration: Math.pow(6400, 2),
-                description: 'You can hide the tab bar automatically in Settings!',
-                cancel: { label: 'Got it!' },
-              },
-            },
-          }),
-        );
-        localStorage.setItem('tip0', '1');
-      }
-    },
     'n-bk': () => tabManager.back(),
     'n-fw': () => tabManager.forward(),
     'n-rl': () => tabManager.reload(),
+    'settings-btn': () => {
+      // Navigate to settings page
+      window.parent.postMessage({ action: 'navigate', to: '/settings' }, '*');
+    },
   };
 
-  (tabManager.options.showTb ?? true) && domMap['tabs-btn']();
   Object.entries(domMap).forEach(([id, fn]) =>
     document.getElementById(id)?.addEventListener('click', fn),
   );

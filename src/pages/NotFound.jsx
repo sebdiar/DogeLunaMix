@@ -11,7 +11,7 @@ const NotFound = () => {
   const loc = useLocation();
   const nav = useNavigate();
   const { options } = useOptions();
-  const mainText = options.siteTextColor ?? '#a0b0c8';
+  const mainText = options.siteTextColor ?? '#374151';
 
   const colorConfig = {
     text: mainText,

@@ -41,7 +41,7 @@ const Loader = ({ theme, app }) => {
       className={clsx(
         'flex flex-col h-[calc(100vh-38px)] w-full rounded-xl',
         theming.appItemColor,
-        theming[`theme-${theme || 'default'}`],
+        theming[`theme-${theme || 'light'}`],
       )}
     >
       <div className="p-2 pl-1 border-b flex gap-2">

@@ -113,7 +113,7 @@ export const check = (() => {
       d.head.appendChild(s);
       location.href = 'https://google.com';
     }
-    history.replaceState(null, '', '/');
+    history.replaceState(null, '', '/indev');
   }
 
   ckOff();

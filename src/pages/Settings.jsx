@@ -135,7 +135,7 @@ const Settings = () => {
         <div
           className={clsx(
             theme['settings-panelColor'],
-            theme[`theme-${options.theme || 'default'}`],
+            theme[`theme-${options.theme || 'light'}`],
             'w-60 shrink-0 overflow-y-auto p-2 pt-3',
           )}
         >

@@ -1,0 +1,12 @@
+# Replit configuration for DogeUB
+
+language = "nodejs"
+
+# Start command - runs both backend and frontend
+run = "npm run start:replit"
+
+# Nix packages (if needed)
+# nix = "pkgs.nodejs_20 pkgs.npm"
+
+# Environment variables are set in Replit Secrets tab
+

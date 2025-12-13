@@ -543,6 +543,12 @@ export const searchConfig = [
   },
 ];
 
+export const config = {
+  // En producción/Replit, usar ruta relativa (el frontend hace proxy)
+  // En desarrollo local, usar localhost:3001
+  API_URL: import.meta.env.VITE_API_URL || (import.meta.env.DEV ? 'http://localhost:3001' : ''),
+};
+
 export const appsPerPageConfig = [
   { option: '20 apps', value: { itemsPerPage: 20 } },
   { option: '30 apps', value: { itemsPerPage: 30 } },
@@ -565,21 +571,15 @@ export const navScaleConfig = [
 
 export const prConfig = [
   {
-    option: 'Automatic',
+    option: 'Scramjet only',
     value: {
-      prType: 'auto',
+      prType: 'scr',
     },
   },
   {
     option: 'Ultraviolet only',
     value: {
       prType: 'uv',
-    },
-  },
-  {
-    option: 'Scramjet only',
-    value: {
-      prType: 'scr',
     },
   },
 ];

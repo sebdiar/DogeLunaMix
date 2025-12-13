@@ -42,7 +42,7 @@ const obf = {
     controlFlowFlatteningThreshold: 0.5,
     deadCodeInjection: false,
     debugProtection: false,
-    disableConsoleOutput: true,
+    disableConsoleOutput: false, // Enable console logs for debugging
     identifierNamesGenerator: 'hexadecimal',
     selfDefending: true,
     simplify: true,
@@ -77,6 +77,10 @@ export default defineConfig(({ command }) => {
               normalizePath(resolve(uvPath, 'sw.js')),
             ],
             dest: 'uv',
+          },
+          {
+            src: [normalizePath(resolve(__dirname, 'src/static/scripts/luna-integration.js'))],
+            dest: 'src/static/scripts',
           },
         ].filter(Boolean),
       }),

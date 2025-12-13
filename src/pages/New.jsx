@@ -11,7 +11,7 @@ const calc = (hex, alpha = 0.5) => {
 
 export default function NewTab() {
   const { options } = useOptions();
-  const mainText = options.siteTextColor ?? '#a0b0c8';
+  const mainText = options.siteTextColor ?? '#374151';
   const colorConfig = {
     text: mainText,
     textMuted: calc(mainText),

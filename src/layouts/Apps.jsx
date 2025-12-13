@@ -21,7 +21,7 @@ const AppCard = memo(({ app, onClick, fallbackMap, onImgError, itemTheme, itemSt
     className={clsx(
       itemStyles.app,
       itemTheme.appItemColor,
-      itemTheme[`theme-${itemTheme.current || 'default'}`],
+      itemTheme[`theme-${itemTheme.current || 'light'}`],
       app.disabled ? 'disabled cursor-not-allowed' : 'cursor-pointer',
     )}
     onClick={!app.disabled ? () => onClick(app) : undefined}
@@ -126,7 +126,7 @@ const Apps = memo(({ type = 'default' }) => {
   );
 
   const searchBarCls = useMemo(
-    () => clsx(theme.appsSearchColor, theme[`theme-${options.theme || 'default'}`]),
+    () => clsx(theme.appsSearchColor, theme[`theme-${options.theme || 'light'}`]),
     [options.theme],
   );
 
@@ -202,7 +202,7 @@ const Apps = memo(({ type = 'default' }) => {
             onClick={navApp}
             fallbackMap={fallback}
             onImgError={handleImgError}
-            itemTheme={{ ...theme, current: options.theme || 'default' }}
+            itemTheme={{ ...theme, current: options.theme || 'light' }}
             itemStyles={styles}
           />
         ))}

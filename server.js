@@ -115,10 +115,54 @@ app.get("/return", async (req, reply) =>
     : reply.code(401).send({ error: "query parameter?" })
 );
 
+// Proxy para el backend API (necesario en Replit donde solo un puerto es público)
+const backendPort = process.env.BACKEND_PORT || 3001;
+const backendUrl = process.env.BACKEND_URL || `http://localhost:${backendPort}`;
+
+app.all("/api/*", async (req, reply) => {
+  try {
+    const targetUrl = `${backendUrl}${req.url}`;
+    
+    // Preparar headers (filtrar headers que no deben ser enviados)
+    const headers = {};
+    for (const [key, value] of Object.entries(req.headers)) {
+      const lowerKey = key.toLowerCase();
+      if (!['host', 'connection', 'content-length'].includes(lowerKey)) {
+        headers[key] = value;
+      }
+    }
+    
+    // Asegurar Content-Type si hay body
+    if (req.method !== 'GET' && req.method !== 'HEAD' && req.body) {
+      headers['Content-Type'] = req.headers['content-type'] || 'application/json';
+    }
+    
+    // Preparar body
+    let body;
+    if (req.method !== 'GET' && req.method !== 'HEAD' && req.body) {
+      body = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
+    }
+    
+    const response = await fetch(targetUrl, {
+      method: req.method,
+      headers,
+      body,
+    });
+
+    const data = await response.text();
+    const contentType = response.headers.get('content-type') || 'application/json';
+    reply.code(response.status).type(contentType);
+    return reply.send(data);
+  } catch (error) {
+    console.error('Backend proxy error:', error);
+    return reply.code(502).send({ error: 'Backend unavailable' });
+  }
+});
+
 app.setNotFoundHandler((req, reply) =>
   req.raw.method === "GET" && req.headers.accept?.includes("text/html")
     ? reply.sendFile("index.html")
     : reply.code(404).send({ error: "Not Found" })
 );
 
-app.listen({ port }).then(() => console.log(`Server running on ${port}`));
+app.listen({ port, host: '0.0.0.0' }).then(() => console.log(`Server running on ${port}`));

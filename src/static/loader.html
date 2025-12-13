@@ -5,21 +5,21 @@
         const options = JSON.parse(localStorage.getItem("options") || "{}");
 
         const css = `
-          body { color: ${options.bodyText || "#acbed8"}; }
-          #url input::placeholder { color: ${options.urlBarText}; }
-          #d-url { background-color: ${options.urlBarBg || "#1d303f"}; color: ${options.urlBarText || "#dce7ff"}; }
-          #tb { background-color: ${options.tabBarBg || "#1e2a3a"}; border-color: ${options.tabBarBorder || "#3a4a5c"}; }
-          .ub { background-color: ${options.ubBg || "#0c1625af"}; }
-          .ub:hover:not(:has(input:focus)) { background-color: ${options.ubHover || "#6868683d"}; }
-          .tooltip { background-color: ${options.tooltipBg || "#292e36e0"}; color: ${options.tooltipText || "#fff"}; }
-          .has-tooltip:hover { background-color: ${options.hoverBg || "#b6bfc748"}; }
-          .has-tooltip:active { background-color: ${options.activeBg || "#d8e4ee6e"}; }
-          .lscr { background-color: ${options.loadingSrBgColor || "#07111d"}; }
-          .loading svg polyline#back { stroke: ${options.loadingIconBack || "#504dff33"}; }
-          .loading svg polyline#front { stroke: ${options.loadingIconFront || "#4d8bff"}; }
+          body { color: ${options.bodyText || "#111827"}; }
+          #url input::placeholder { color: ${options.urlBarText || "#111827"}; }
+          #d-url { background-color: ${options.urlBarBg || "#ffffff"}; color: ${options.urlBarText || "#111827"}; }
+          #sidebar { background-color: ${options.tabBarBg || "#f3f4f6"}; border-color: ${options.tabBarBorder || "#d1d5db"}; }
+          .ub { background-color: ${options.ubBg || "#efefefcc"}; }
+          .ub:hover:not(:has(input:focus)) { background-color: ${options.ubHover || "#e5e7eb"}; }
+          .tooltip { background-color: ${options.tooltipBg || "#111827"}; color: ${options.tooltipText || "#fff"}; }
+          .has-tooltip:hover { background-color: ${options.hoverBg || "#e5e7eb"}; }
+          .has-tooltip:active { background-color: ${options.activeBg || "#d1d5db6e"}; }
+          .lscr { background-color: ${options.loadingSrBgColor || "#f4f5f7"}; }
+          .loading svg polyline#back { stroke: ${options.loadingIconBack || "#d1d5db33"}; }
+          .loading svg polyline#front { stroke: ${options.loadingIconFront || "#111827"}; }
         `;
 
-        document.documentElement.classList.add(options.type || 'dark');
+        document.documentElement.classList.add(options.type || 'light');
 
         const style = document.createElement("style");
         style.innerHTML = css;
@@ -39,7 +39,8 @@
         Plus,
         Search,
         PanelBottomClose,
-        Star
+        Star,
+        Settings
       } from "lucide";
 
       createIcons({
@@ -52,7 +53,8 @@
           Plus,
           Search,
           PanelBottomClose,
-          Star
+          Star,
+          Settings
         },
       });
     </script>
@@ -94,12 +96,51 @@
       }
 
       .tab-item {
-        border-top-left-radius: 6px;
-        border-top-right-radius: 6px;
+        border-radius: 6px;
+        margin-bottom: 2px;
       }
 
       .tab-item:hover {
         user-select: none;
+      }
+      
+      #sidebar {
+        min-width: 200px;
+        max-width: 300px;
+      }
+      
+      #tabs-cont {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+
+      /* LUNA-style scrollbar */
+      #sidebar::-webkit-scrollbar {
+        width: 6px;
+        height: 6px;
+      }
+
+      #sidebar::-webkit-scrollbar-track {
+        background: transparent;
+      }
+
+      #sidebar::-webkit-scrollbar-thumb {
+        background: #d1d5db;
+        border-radius: 3px;
+      }
+
+      #sidebar::-webkit-scrollbar-thumb:hover {
+        background: #9ca3af;
+      }
+
+      .overflow-y-auto::-webkit-scrollbar {
+        width: 6px;
+      }
+
+      .overflow-y-auto::-webkit-scrollbar-thumb {
+        background: #d1d5db;
+        border-radius: 3px;
       }
 
       #fcn iframe {
@@ -147,17 +188,89 @@
   </head>
 
   <body>
-    <div class="flex flex-col justify-center items-center h-screen select-none">
-      <div id="tb" class="hidden w-full shadow-xl/5 flex items-center px-2 pt-[0.3rem]">
-        <div id="tabs-cont" class="flex flex-1 overflow-hidden gap-1"></div>
-        <button id="tab-btn" class="ml-2 w-6 h-6 mb-1 rounded-lg flex items-center justify-center transition-all duration-200">
-          <i data-lucide="plus" class="w-4 h-4"></i>
-        </button>
-        <button id="tbtog" class="ml-2 w-6 h-6 mb-1 mr-1 rounded-lg flex items-center justify-center transition-all duration-200 hover:bg-[#b6bfc748] active:bg-[#d8e4ee6e]"
-          title="Hide Tab bar">
-          <i data-lucide="panel-bottom-close" class="w-4 h-4"></i>
-        </button>
+    <div class="flex h-screen select-none">
+      <!-- Sidebar vertical izquierdo - Estilo LUNA -->
+      <div id="sidebar" class="h-screen flex flex-col relative p-3" style="width: 240px; min-width: 240px; max-width: 350px;">
+        <!-- Floating sidebar card -->
+        <div class="h-full flex flex-col bg-[#f5f7fa] rounded-2xl shadow-[0_1px_3px_rgba(0,0,0,0.05),0_1px_2px_rgba(0,0,0,0.1)] overflow-hidden">
+          <!-- Logo -->
+          <div class="flex items-center justify-between px-5 py-4 border-b border-[#e8eaed]/50">
+            <span class="text-xl font-bold bg-gradient-to-r from-[#4285f4] to-blue-600 bg-clip-text text-transparent">Luna</span>
+          </div>
+
+          <!-- Sections -->
+          <div class="flex-1 overflow-y-auto py-2">
+            <!-- Sección Tabs -->
+            <div class="py-1">
+              <div class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold text-[#5f6368] uppercase tracking-wide">
+                <span>Tabs</span>
+                <button id="tab-btn" class="p-1 hover:bg-[#e8eaed] rounded transition-colors" title="New Tab">
+                  <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+                </button>
+              </div>
+              <div id="tabs-cont" class="px-2 space-y-0.5"></div>
+              <div id="personal-tabs-cont" style="display: none;"></div>
+            </div>
+            
+            <!-- Sección Projects -->
+            <div class="py-1 mt-4">
+              <div class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold text-[#5f6368] uppercase tracking-wide">
+                <span>Projects</span>
+                <button id="project-btn" class="p-1 hover:bg-[#e8eaed] rounded transition-colors" title="New Project">
+                  <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+                </button>
+              </div>
+              <div id="projects-cont" class="px-2 space-y-0.5"></div>
+            </div>
+            
+            <!-- Sección Users -->
+            <div class="py-1 mt-4">
+              <div class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold text-[#5f6368] uppercase tracking-wide">
+                <span>Users</span>
+                <button id="dm-btn" class="p-1 hover:bg-[#e8eaed] rounded transition-colors" title="New Message">
+                  <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+                </button>
+              </div>
+              <div id="users-cont" class="px-2 space-y-0.5"></div>
+            </div>
+          </div>
+
+          <!-- Bottom section -->
+          <div class="p-3 space-y-1 border-t border-[#e8eaed]/50">
+            <!-- Settings -->
+            <button id="settings-btn" class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-[#5f6368] hover:text-[#202124] hover:bg-[#e8eaed] transition-all text-sm" title="Settings">
+              <i data-lucide="settings" class="w-4.5 h-4.5"></i>
+              <span>Settings</span>
+            </button>
+
+            <!-- User info & logout -->
+            <div id="user-info-cont" class="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-[#e8eaed] transition-all cursor-pointer">
+              <!-- User info will be rendered here by luna-integration.js -->
+            </div>
+          </div>
+        </div>
       </div>
+      
+      <!-- Contenido principal (TopBar si hay espacio activo + nav bar + iframe) -->
+      <div class="flex-1 flex flex-col">
+      <!-- TopBar for active space (Projects/DMs) - estilo LUNA horizontal -->
+      <div id="topbar-space" class="bg-white border-b border-[#e8eaed] hidden" style="display: none;">
+        <div class="flex items-center h-10 px-2 gap-1 overflow-x-auto">
+          <!-- Space name (minimal) -->
+          <div class="px-3 py-1.5 text-xs font-medium text-[#5f6368] border-r border-[#e8eaed] mr-1 shrink-0">
+            <span id="topbar-space-name"></span>
+          </div>
+          <!-- Space tabs row (horizontal como tabs del navegador) -->
+          <div id="topbar-tabs-cont" class="flex items-center gap-0.5 flex-1 overflow-x-auto">
+            <!-- Tabs will be rendered here by luna-integration.js -->
+          </div>
+          <!-- Close space button -->
+          <button id="close-space-btn" class="ml-auto px-2 py-1 text-[#5f6368] hover:text-[#202124] hover:bg-[#e8eaed] rounded transition-colors shrink-0" title="Close space">
+            <i data-lucide="x" class="w-4 h-4"></i>
+          </button>
+        </div>
+      </div>
+      
       <div class="flex w-full h-[45px] p-1 pl-2 pr-3 gap-1 z-50 shadow-xl/5 items-center" id="d-url">
         <div class="has-tooltip w-6 h-6 duration-100 ease-in rounded-md flex justify-center items-center relative">
           <i data-lucide="arrow-left" class="w-4.5" id="n-bk"></i>
@@ -174,10 +287,6 @@
           <div class="flex items-center justify-center rounded-md w-6 mr-1 has-tooltip" id="bookmark-btn">
             <i data-lucide="star" class="w-4" id="bookmark"></i>
           </div>
-        </div>
-        <div class="has-tooltip w-6 h-6 duration-100 ease-in rounded-md flex justify-center items-center relative" id="tabs-btn">
-          <i data-lucide="folder" class="w-4"></i>
-          <span class="tooltip rounded-sm shadow-lg p-1 text-[11px] absolute top-full mt-1 whitespace-nowrap">Toggle Tabs</span>
         </div>
         <div id="dropdown" class="dropdown-menu">
           <button id="menu-btn" popovertarget="menu-popover" aria-haspopup="menu" aria-controls="menu-popover" aria-expanded="false" class="has-tooltip w-6 h-6 duration-100 ease-in rounded-md flex justify-center items-center relative">
@@ -198,22 +307,104 @@
           </div>
         </div>
       </div>
-      <div id="fcn" class="w-full flex-1 relative">
-        <div class="relative w-full h-full lscr"></div>
-          <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2">
-            <div class="loading">
-              <svg width="64px" height="48px">
-                <polyline points="0.157 23.954, 14 23.954, 21.843 48, 43 0, 50 24, 64 24" id="back"></polyline>
-                <polyline points="0.157 23.954, 14 23.954, 21.843 48, 43 0, 50 24, 64 24" id="front"></polyline>
-              </svg>
+        <div id="fcn" class="w-full flex-1 relative">
+          <div class="relative w-full h-full lscr"></div>
+            <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2">
+              <div class="loading">
+                <svg width="64px" height="48px">
+                  <polyline points="0.157 23.954, 14 23.954, 21.843 48, 43 0, 50 24, 64 24" id="back"></polyline>
+                  <polyline points="0.157 23.954, 14 23.954, 21.843 48, 43 0, 50 24, 64 24" id="front"></polyline>
+                </svg>
+              </div>
             </div>
           </div>
+          <div id="class-portal" style="position: absolute; inset: 0; z-index: 1; display: none;"></div>
         </div>
-        <div id="class-portal" style="position: absolute; inset: 0; z-index: 1; display: none;"></div>
       </div>
     </div>
 
     <div id="toaster" class="toaster"></div>
     <script src="./scripts/tabs.js" type="module"></script>
+    <script src="./scripts/luna-integration.js" type="module"></script>
+    <script>
+      // Intercept tab close to delete from backend
+      const API_URL = 'http://localhost:3001';
+      const token = localStorage.getItem('dogeub_token');
+      
+      const setupDOMInterceptor = () => {
+        const tabsContainer = document.getElementById('tabs-cont');
+        if (!tabsContainer) {
+          setTimeout(setupDOMInterceptor, 500);
+          return;
+        }
+        
+        // Wait for TabManager to set onclick, then wrap it
+        const checkForOnclick = () => {
+          if (tabsContainer.onclick && typeof tabsContainer.onclick === 'function') {
+            const originalOnclick = tabsContainer.onclick.bind(tabsContainer);
+            tabsContainer.onclick = function(e) {
+              const closeBtn = e.target.closest('.close-tab');
+              if (closeBtn) {
+                // Get tab info from DOM BEFORE it gets removed
+                const tabEl = closeBtn.closest('.tab-item');
+                const tabTitle = tabEl?.querySelector('span')?.textContent?.trim() || '';
+                
+                // Skip deleting if it's the default new tab or special URLs
+                if (!tabTitle || tabTitle === 'New Tab' || tabTitle.includes('localhost:2345') || tabTitle === 'new') {
+                  originalOnclick(e);
+                  return;
+                }
+                
+                // Delete from backend (don't wait)
+                if (token && tabTitle) {
+                  (async () => {
+                    try {
+                      const response = await fetch(`${API_URL}/api/tabs`, {
+                        headers: {
+                          'Authorization': `Bearer ${token}`,
+                          'Content-Type': 'application/json'
+                        }
+                      });
+                      
+                      if (response.ok) {
+                        const { tabs } = await response.json();
+                        const tabToDelete = tabs.find(t => {
+                          const tTitle = (t.title || '').trim();
+                          return tTitle === tabTitle || tTitle.toLowerCase() === tabTitle.toLowerCase();
+                        });
+                        
+                        if (tabToDelete) {
+                          await fetch(`${API_URL}/api/tabs/${tabToDelete.id}`, {
+                            method: 'DELETE',
+                            headers: {
+                              'Authorization': `Bearer ${token}`,
+                              'Content-Type': 'application/json'
+                            }
+                          });
+                        }
+                      }
+                    } catch (err) {
+                      // Silent error handling
+                    }
+                  })();
+                }
+                
+                // Call original handler for close button
+                originalOnclick(e);
+              } else {
+                // Not a close button - just call original handler immediately
+                originalOnclick(e);
+              }
+            };
+          } else {
+            setTimeout(checkForOnclick, 100);
+          }
+        };
+        checkForOnclick();
+      };
+      
+      // Set up DOM interceptor
+      setupDOMInterceptor();
+    </script>
   </body>
 </html>

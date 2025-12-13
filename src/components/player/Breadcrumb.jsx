@@ -11,7 +11,7 @@ const Breadcrumb = ({ theme, name }) => {
       className={clsx(
         'flex h-2 w-fit max-w-72 px-3 p-4 items-center rounded-xl',
         theming.appItemColor,
-        theming[`theme-${theme || 'default'}`],
+        theming[`theme-${theme || 'light'}`],
       )}
     >
       <Gamepad2 size="16" /> &nbsp;

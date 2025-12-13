@@ -116,7 +116,7 @@ const SearchContainer = memo(function SearchContainer({ logo = true, cls, nav = 
               'flex items-center gap-3 shadow-xl pl-4 pr-4 w-full h-[3.41rem]',
               results.length ? 'rounded-t-[14px] rounded-b-none' : 'rounded-[14px]',
               theme[`searchBarColor`],
-              theme[`theme-${options.theme || 'default'}`],
+              theme[`theme-${options.theme || 'light'}`],
             )}
           >
             {iconSrc ? (
@@ -143,7 +143,7 @@ const SearchContainer = memo(function SearchContainer({ logo = true, cls, nav = 
               className={clsx(
                 'shadow-xl mt-0 p-2 text-[14px] w-full rounded-b-[14px] space-y-1',
                 theme[`searchResultStyle`],
-                theme[`theme-${options.theme || 'default'}`],
+                theme[`theme-${options.theme || 'light'}`],
               )}
             >
               {results.map((result) => (

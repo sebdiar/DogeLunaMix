@@ -1,6 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import NavItem from '../components/NavItem';
-import { LayoutGrid, Gamepad2, Cog } from 'lucide-react';
+import { Cog } from 'lucide-react';
 import { useOptions } from '/src/utils/optionsContext';
 import pkg from '../../package.json';
 import nav from '../styles/nav.module.css';
@@ -13,8 +13,6 @@ const version = pkg.version;
 const itemSize = 16;
 
 const navItems = [
-  { name: 'Apps', id: 'btn-a', type: LayoutGrid, route: '/materials' },
-  { name: 'Games', id: 'btn-g', type: Gamepad2, route: '/docs' },
   { name: 'Settings', id: 'btn-s', type: Cog, route: '/settings' },
 ];
 
@@ -34,7 +32,7 @@ const Nav = memo(() => {
     [scale],
   );
 
-  const handleLogoClick = useCallback(() => navigate('/'), [navigate]);
+  const handleLogoClick = useCallback(() => navigate('/indev'), [navigate]);
 
   const items = useMemo(
     () =>
@@ -51,7 +49,7 @@ const Nav = memo(() => {
       className={clsx(
         nav.nav,
         theme['nav-backgroundColor'],
-        theme[`theme-${options.theme || 'default'}`],
+        theme[`theme-${options.theme || 'light'}`],
         ' w-full shadow-x1/20 flex items-center pl-6 pr-5 gap-5 z-50',
       )}
       style={{ height: `${dimensions.navHeight}px` }}

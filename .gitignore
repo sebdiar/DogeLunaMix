@@ -24,5 +24,18 @@ dist-ssr
 *.sw?
 
 .env
+.env.local
+.env.*.local
 
-package-lock.json
+# Backend node_modules
+backend/node_modules
+
+# Logs
+/tmp/
+*.log
+
+# Replit
+.replit.local
+
+# Lock files (opcional - puedes descomentar si quieres incluirlos)
+# package-lock.json

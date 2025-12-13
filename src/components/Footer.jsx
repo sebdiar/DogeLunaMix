@@ -19,7 +19,7 @@ const Footer = memo(() => {
         )}
         onClick={handleDs}
       >
-        <Disc className="w-4" fill={options.siteTextColor || '#a0b0c8'} />
+        <Disc className="w-4" fill={options.siteTextColor || '#374151'} />
         Discord
       </div>
       {options.donationBtn !== false && (

@@ -6,7 +6,7 @@ const InfoCard = ({ app, theme }) => {
     <div
       className={clsx(
         'flex h-16 w-full p-4 items-center rounded-xl',
-        theming[`theme-${theme || 'default'}`],
+        theming[`theme-${theme || 'light'}`],
       )}
     >
       <img src={app?.icon} className="w-12 h-12 rounded-md object-cover" />

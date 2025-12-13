@@ -50,7 +50,7 @@ const Setting = ({ setting }) => {
   const Container = ({ children }) => (
     <div
       className={clsx(
-        theme[`theme-${options.theme || 'default'}`],
+        theme[`theme-${options.theme || 'light'}`],
         'flex flex-1 flex-col overflow-y-auto py-6 px-4 sm:px-8 md:px-16',
         scroll,
       )}

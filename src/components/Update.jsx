@@ -25,7 +25,7 @@ const UpdateDialog = () => {
           style={{ backgroundColor: options.quickModalBgColor || '#252f3e' }}
         >
           <DialogTitle className="text-[1.05rem] mb-1">Important Reminder</DialogTitle>
-          <p className="text-sm" style={{ color: options.siteTextColor || '#a0b0c8' }}>
+          <p className="text-sm" style={{ color: options.siteTextColor || '#374151' }}>
             DogeUB has just been updated! Please ensure you are up-to-date by clearing your cache in
             Settings {`>`} Advanced.
           </p>
