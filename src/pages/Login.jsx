@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../utils/api';
 
@@ -10,6 +10,12 @@ export default function Login() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+
+  useEffect(() => {
+    if (api.isAuthenticated()) {
+      navigate('/indev', { replace: true });
+    }
+  }, [navigate]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -27,7 +33,7 @@ export default function Login() {
         }
         await api.register(email, password, name);
       }
-      navigate('/indev');
+      window.location.href = '/indev';
     } catch (err) {
       setError(err.message || 'Authentication failed');
     } finally {
