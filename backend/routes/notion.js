@@ -126,10 +126,23 @@ router.post('/webhook', async (req, res) => {
     }
     
     // Obtener el evento del body
-    const { object, type, data } = req.body;
+    // Notion puede enviar el evento de diferentes formas:
+    // - { object: 'page', type: 'page.deleted', data: { id: '...' } }
+    // - { type: 'page.deleted', record: { id: '...' } }
+    const { object, type, data, record } = req.body;
+    
+    // Determinar el pageId según la estructura del evento
+    let pageId = null;
+    if (data?.id) {
+      pageId = data.id;
+    } else if (record?.id) {
+      pageId = record.id;
+    } else if (data) {
+      pageId = data;
+    }
     
     // Solo procesar eventos de páginas (pages)
-    if (object !== 'page') {
+    if (object !== 'page' && !pageId) {
       return res.status(200).json({ received: true, message: 'Not a page event, ignoring' });
     }
     
@@ -145,13 +158,14 @@ router.post('/webhook', async (req, res) => {
     switch (type) {
       case 'page.created':
       case 'page.updated':
-        await handlePageUpdate(data, apiKey, databaseId);
+        await handlePageUpdate(data || record, apiKey, databaseId);
         break;
       case 'page.archived':
-        await handlePageArchived(data);
+        await handlePageArchived(data || record || { id: pageId });
         break;
       case 'page.deleted':
-        await handlePageDeleted(data);
+        // Para page.deleted, usar el pageId directamente
+        await handlePageDeleted({ id: pageId });
         break;
       default:
         console.log('Unhandled webhook event type:', type);
@@ -282,13 +296,39 @@ async function handlePageArchived(pageData) {
 // Helper: Manejar página eliminada
 async function handlePageDeleted(pageData) {
   try {
-    const pageId = pageData.id;
+    const pageId = pageData?.id || pageData;
+    
+    if (!pageId) {
+      console.error('handlePageDeleted: No pageId provided', pageData);
+      return;
+    }
+    
+    console.log('🗑️ Handling page deleted:', pageId);
+    
+    // Buscar el espacio por notion_page_id
+    const { data: space, error: findError } = await supabase
+      .from('spaces')
+      .select('id, name')
+      .eq('notion_page_id', pageId)
+      .single();
+    
+    if (findError || !space) {
+      console.log(`Space with Notion ID ${pageId} not found, may have been already deleted`);
+      return;
+    }
     
     // Marcamos como archivado en lugar de eliminar (para mantener historial)
-    await supabase
+    const { error: updateError } = await supabase
       .from('spaces')
-      .update({ archived: true })
+      .update({ archived: true, updated_at: new Date().toISOString() })
       .eq('notion_page_id', pageId);
+    
+    if (updateError) {
+      console.error('Error archiving space from deleted page:', updateError);
+      throw updateError;
+    }
+    
+    console.log(`✅ Space "${space.name}" archived from deleted Notion page`);
   } catch (error) {
     console.error('Error handling page deleted:', error);
     throw error;
