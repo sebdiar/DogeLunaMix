@@ -50,14 +50,9 @@ const app = Fastify({
 await app.register(fastifyCookie);
 await app.register(compress, { global: true, encodings: ['gzip','deflate','br'] });
 
-// Parse JSON body for API proxy
-app.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body, done) => {
-  try {
-    const json = body ? JSON.parse(body) : {};
-    done(null, json);
-  } catch (err) {
-    done(err, undefined);
-  }
+// Parse all content types for API proxy (pass raw body)
+app.addContentTypeParser('*', { parseAs: 'buffer' }, (req, body, done) => {
+  done(null, body);
 });
 
 app.register(fastifyStatic, {
@@ -133,24 +128,28 @@ app.all("/api/*", async (req, reply) => {
   try {
     const targetUrl = `${backendUrl}${req.url}`;
     
-    // Preparar headers (filtrar headers que no deben ser enviados)
-    const headers = {};
-    for (const [key, value] of Object.entries(req.headers)) {
-      const lowerKey = key.toLowerCase();
-      if (!['host', 'connection', 'content-length'].includes(lowerKey)) {
-        headers[key] = value;
-      }
-    }
+    // Preparar headers
+    const headers = {
+      'Content-Type': req.headers['content-type'] || 'application/json'
+    };
     
-    // Asegurar Content-Type si hay body
-    if (req.method !== 'GET' && req.method !== 'HEAD' && req.body) {
-      headers['Content-Type'] = req.headers['content-type'] || 'application/json';
+    if (req.headers.authorization) {
+      headers['Authorization'] = req.headers.authorization;
+    }
+    if (req.headers.cookie) {
+      headers['Cookie'] = req.headers.cookie;
     }
     
     // Preparar body
     let body;
-    if (req.method !== 'GET' && req.method !== 'HEAD' && req.body) {
-      body = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      if (Buffer.isBuffer(req.body)) {
+        body = req.body.toString();
+      } else if (typeof req.body === 'object' && req.body !== null) {
+        body = JSON.stringify(req.body);
+      } else if (req.body) {
+        body = req.body;
+      }
     }
     
     const response = await fetch(targetUrl, {
