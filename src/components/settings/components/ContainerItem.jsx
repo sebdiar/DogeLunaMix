@@ -15,6 +15,7 @@ const SettingsContainerItem = ({
   disabled = false,
   isLast = false,
   isFirst = false,
+  variant,
 }) => {
   const { options } = useOptions();
 
@@ -41,7 +42,7 @@ const SettingsContainerItem = ({
           )}
           {type === 'switch' && <Switch action={action} value={value} />}
           {type === 'input' && <Input onChange={action} defValue={value} />}
-          {type === 'button' && <Button action={action} value={value} />}
+          {type === 'button' && <Button action={action} value={value} variant={variant} />}
         </div>
       )}
     </div>

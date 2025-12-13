@@ -162,6 +162,19 @@ export const advancedConfig = ({ options, updateOption }) => ({
     value: 'Reset Data',
     action: () => import('/src/utils/utils.js').then(({ resetInstance }) => resetInstance()),
   },
+  4: {
+    name: 'Logout',
+    desc: 'Sign out of your account and return to the login page.',
+    type: 'button',
+    value: 'Logout',
+    variant: 'danger',
+    action: () => {
+      import('/src/utils/api.js').then((module) => {
+        module.default.logout();
+        window.location.href = '/login';
+      });
+    },
+  },
 });
 
 function find(config, predicate, fallbackIndex = 0) {
