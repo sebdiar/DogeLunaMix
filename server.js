@@ -50,6 +50,16 @@ const app = Fastify({
 await app.register(fastifyCookie);
 await app.register(compress, { global: true, encodings: ['gzip','deflate','br'] });
 
+// Parse JSON body for API proxy
+app.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body, done) => {
+  try {
+    const json = body ? JSON.parse(body) : {};
+    done(null, json);
+  } catch (err) {
+    done(err, undefined);
+  }
+});
+
 app.register(fastifyStatic, {
   root: join(__dirname, "dist"),
   prefix: "/",
