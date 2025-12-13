@@ -1,5 +1,5 @@
 // Luna Integration - Integrate backend tabs with TabManager
-const API_URL = 'http://localhost:3001';
+const API_URL = '';
 
 class LunaIntegration {
   constructor() {
