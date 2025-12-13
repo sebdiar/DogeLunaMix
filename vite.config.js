@@ -168,6 +168,10 @@ export default defineConfig(({ command }) => {
     },
     server: {
       proxy: {
+        '/api': {
+          target: 'http://localhost:3001',
+          changeOrigin: true,
+        },
         '/assets/img': {
           target: 'https://dogeub-assets.pages.dev',
           changeOrigin: true,
