@@ -168,11 +168,13 @@ export const advancedConfig = ({ options, updateOption }) => ({
     type: 'button',
     value: 'Logout',
     variant: 'danger',
-    action: () => {
-      import('/src/utils/api.js').then((module) => {
-        module.default.logout();
-        window.location.href = '/login';
-      });
+    action: async () => {
+      const api = (await import('/src/utils/api.js')).default;
+      try {
+        await api.request('/api/auth/logout', { method: 'POST' });
+      } catch (e) {}
+      api.logout();
+      window.location.href = '/login';
     },
   },
 });

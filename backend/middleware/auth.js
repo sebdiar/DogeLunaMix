@@ -4,13 +4,22 @@ const JWT_SECRET = process.env.JWT_SECRET || 'dogeub-secret-key-change-in-produc
 
 export const authenticate = async (req, res, next) => {
   try {
-    const authHeader = req.headers.authorization;
+    let token = null;
     
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'No token provided' });
+    // Try Authorization header first
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.split(' ')[1];
     }
     
-    const token = authHeader.split(' ')[1];
+    // Fallback to cookie
+    if (!token && req.cookies && req.cookies.dogeub_token) {
+      token = req.cookies.dogeub_token;
+    }
+    
+    if (!token) {
+      return res.status(401).json({ error: 'No token provided' });
+    }
     
     try {
       const decoded = jwt.verify(token, JWT_SECRET);

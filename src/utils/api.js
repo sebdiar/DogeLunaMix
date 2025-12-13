@@ -49,7 +49,8 @@ class Api {
 
     const response = await fetch(url, {
       ...options,
-      headers
+      headers,
+      credentials: 'include'
     });
 
     const contentType = response.headers.get('content-type');

@@ -45,6 +45,15 @@ router.post('/register', async (req, res) => {
     }
     
     const token = generateToken(user);
+    
+    // Set cookie
+    res.cookie('dogeub_token', token, {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'none',
+      maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+    });
+    
     res.json({ user, token });
   } catch (error) {
     console.error('Register error:', error);
@@ -81,6 +90,14 @@ router.post('/login', async (req, res) => {
     const token = generateToken(user);
     const { password_hash, ...userWithoutPassword } = user;
     
+    // Set cookie
+    res.cookie('dogeub_token', token, {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'none',
+      maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+    });
+    
     res.json({ user: userWithoutPassword, token });
   } catch (error) {
     console.error('Login error:', error);
@@ -106,6 +123,16 @@ router.get('/me', authenticate, async (req, res) => {
     console.error('Get user error:', error);
     res.status(500).json({ error: 'Failed to get user' });
   }
+});
+
+// Logout
+router.post('/logout', (req, res) => {
+  res.clearCookie('dogeub_token', {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'none'
+  });
+  res.json({ success: true });
 });
 
 export default router;
