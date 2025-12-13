@@ -112,6 +112,9 @@ app.get("/assets/img/*", proxy(req => `https://dogeub-assets.pages.dev/img/${req
 app.get("/assets-fb/*", proxy(req => `https://dogeub-assets.ftp.sh/${req.params["*"]}`, ""));
 app.get("/js/script.js", proxy(() => "https://byod.privatedns.org/js/script.js"));
 app.get("/ds", (req, res) => res.redirect("https://discord.gg/ZBef7HnAeg"));
+
+// Health check endpoint for Cloud Run
+app.get("/health", (req, reply) => reply.send({ status: "ok" }));
 app.get("/return", async (req, reply) =>
   req.query?.q
     ? fetch(`https://duckduckgo.com/ac/?q=${encodeURIComponent(req.query.q)}`)

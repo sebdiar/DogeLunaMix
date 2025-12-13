@@ -11,11 +11,11 @@ import { dirname, join } from 'path';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Puerto del frontend (Replit lo asigna automáticamente a PORT)
-const FRONTEND_PORT = process.env.PORT || 2345;
+// Puerto del frontend (Cloud Run/Replit lo asigna automáticamente a PORT)
+const FRONTEND_PORT = process.env.PORT || 5000;
 
-// Puerto del backend (usamos PORT + 1, o 3001 por defecto)
-const BACKEND_PORT = process.env.BACKEND_PORT || (parseInt(FRONTEND_PORT) + 1);
+// Puerto del backend (siempre interno, nunca expuesto)
+const BACKEND_PORT = 3001;
 
 console.log('🚀 Iniciando DogeUB en Replit...');
 console.log(`📦 Frontend: puerto ${FRONTEND_PORT}`);
