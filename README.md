@@ -1,85 +1,132 @@
-<div align="center">
-  
-  <img src="https://github.com/DogeNetwork/dogeub/blob/main/public/logo.svg" width="322" />
-  <br />
+# DogeLunaMix
 
-  [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/I3I81MF4CH) ![](https://dcbadge.limes.pink/api/server/https://discord.gg/unblocking?compact=true)
+Browser-in-Browser frontend con integración LUNA y Notion.
 
+## 🚀 Características
 
-  <hr />
-  DogeUB (Doge Unblocker) version 5 is finally here!
+- **Browser-in-Browser**: Navegación segura a través de proxy (Scramjet/Ultraviolet)
+- **Integración LUNA**: UI/UX inspirada en LUNA con sidebar vertical
+- **Backend Express + Supabase**: Autenticación, tabs, espacios, chat
+- **Integración Notion**: Sincronización bidireccional de proyectos
+- **Webhooks**: Sincronización automática Notion ↔ DogeUB
+- **Jerarquía de Proyectos**: Soporte para parents/sub-parents
+- **Chat**: Sistema de mensajería integrado
+- **AI Dashboards**: Soporte para dashboards personalizados
 
-  
-  <br />
-  <br />
+## 📋 Requisitos
 
-  <img width="1278" height="628" alt="image" src="preview.png" />
+- Node.js 18+
+- Cuenta de Supabase
+- (Opcional) Notion API key y Database ID para sincronización
 
+## 🛠️ Instalación
 
-</div>
-
-## Overview
-
-DogeUB is a modern web proxy frontend and internet browsing hub, allowing you to browse the web anonymously while providing a full suite of apps and games, built with [React](https://github.com/facebook/react).
-
-> [!IMPORTANT]
-> Please consider starring our repository if you are forking it!
-
-### Features:
-
-- **Performance:** Fast, lightweight, and highly responsive.
-- **Tabs:** Browse multiple sites with ease, providing an experience similar to a web browser!
-- **Customization:** Multiple themes, extensive settings, and user-tailored experience.
-
----
-
-## Development & Building
-
-
-### Production:
-```bash
-git clone https://github.com/DogeNetwork/dogeub.git
-cd dogeub
-npm i
-npm run build
-node server.js
-````
-
-### Development:
+### 1. Clonar el repositorio
 
 ```bash
-git clone https://github.com/DogeNetwork/dogeub.git
-cd dogeub
-npm i
-npm run dev
+git clone https://github.com/sebdiar/DogeLunaMix.git
+cd DogeLunaMix
 ```
 
----
+### 2. Instalar dependencias
 
+```bash
+# Frontend
+npm install
 
-## Contributors / Developers
+# Backend
+cd backend
+npm install
+cd ..
+```
 
-| Name          | Role               | GitHub |
-| ------------- | ------------------ | ------ |
-| Derpman | Lead Developer     |      [@qerionx](https://github.com/qerionx) |
-| Fowntain | Project Manager | [@fowntain](https://github.com/fowntain)     |
-| Akane | Contributor | [@genericness](https://github.com/genericness)     |
-| DJshelfmushroom | Contributor | [@DJshelfmushroom](https://github.com/DJshelfmushroom)     |
+### 3. Configurar variables de entorno
 
+Crea un archivo `.env` en la raíz del proyecto:
 
-> [!NOTE]
-> Want to be on this list? Make a few pull requests!
+```env
+# Supabase
+SUPABASE_URL=tu_supabase_url
+SUPABASE_KEY=tu_supabase_anon_key
+SUPABASE_SERVICE_KEY=tu_supabase_service_role_key
 
----
+# JWT
+JWT_SECRET=tu_jwt_secret_seguro
 
-### Made possible thanks to:
+# Backend
+BACKEND_PORT=3001
 
-* [MercuryWorkshop/wisp-server-node](https://github.com/MercuryWorkshop/wisp-server-node)
-* [MercuryWorkshop/scramjet](https://github.com/MercuryWorkshop/scramjet)
-* [titaniumnetwork-dev/Ultraviolet](https://github.com/titaniumnetwork-dev/Ultraviolet)
-* [lucide-icons/lucide](https://github.com/lucide-icons/lucide)
+# Notion (opcional)
+NOTION_API_KEY=tu_notion_api_key
+NOTION_DATABASE_ID=tu_notion_database_id
+```
 
-## License
+### 4. Ejecutar migraciones SQL
 
-This project is licensed under the **GNU Affero GPL v3**.  
-See the [LICENSE](LICENSE) file for more details.
+Ejecuta las migraciones en el orden indicado en `backend/migrations/` en el SQL Editor de Supabase:
+- `001-initial-schema.sql`
+- `002-add-type-column.sql`
+- `003-add-notion-integration.sql`
+
+### 5. Construir frontend
+
+```bash
+npm run build
+```
+
+### 6. Iniciar servidores
+
+```bash
+# Opción 1: Script automático
+bash start-all.sh
+
+# Opción 2: Manual
+# Terminal 1 - Backend
+cd backend && npm start
+
+# Terminal 2 - Frontend
+node server.js
+```
+
+La aplicación estará disponible en `http://localhost:2345/indev`
+
+## 🌐 Deployment en Replit
+
+Ver guía completa en [REPLIT_DEPLOY.md](./REPLIT_DEPLOY.md)
+
+1. Importa el proyecto en Replit
+2. Configura las variables de entorno en Secrets
+3. El proyecto se iniciará automáticamente
+
+## 🔗 Webhooks de Notion
+
+Para configurar sincronización automática con Notion, ver [backend/WEBHOOK_SETUP.md](./backend/WEBHOOK_SETUP.md)
+
+## 📚 Estructura del Proyecto
+
+```
+dogeub/
+├── backend/          # Backend Express + Supabase
+│   ├── routes/       # Rutas API
+│   ├── services/     # Servicios (Notion, etc.)
+│   └── migrations/   # Migraciones SQL
+├── src/              # Frontend React
+│   ├── components/   # Componentes React
+│   ├── pages/        # Páginas
+│   └── static/       # Archivos estáticos (loader.html, scripts)
+├── dist/             # Build del frontend (generado)
+└── server.js         # Servidor Fastify para frontend
+```
+
+## 🤝 Contribuir
+
+Las contribuciones son bienvenidas. Por favor:
+1. Fork el proyecto
+2. Crea una rama para tu feature (`git checkout -b feature/AmazingFeature`)
+3. Commit tus cambios (`git commit -m 'Add some AmazingFeature'`)
+4. Push a la rama (`git push origin feature/AmazingFeature`)
+5. Abre un Pull Request
+
+## 📄 Licencia
+
+Ver [LICENSE](./LICENSE) para más detalles.
