@@ -414,14 +414,10 @@ class LunaIntegration {
       
       // Setup drag and drop for tabs after render - with support for moving to/from More
       setTimeout(() => {
-        console.log('[Drag] Setting up drag and drop for tabs-cont');
         this.setupDragAndDrop('tabs-cont', this.personalTabs, false, async ({ draggedId, targetId, position, dropTarget }) => {
-          console.log('[Drag] onReorder callback called:', { draggedId, targetId, position, dropTarget });
           try {
             // Check if dropping on More dropdown or More button
             if (dropTarget === 'more-dropdown-content') {
-              console.log('[Drag] Drop on More dropdown detected, draggedId:', draggedId, typeof draggedId);
-              // Normalize draggedId to string for comparison
               const draggedIdStr = String(draggedId);
               
               // Move tab to More - try to find tab by id or backendId
@@ -432,7 +428,6 @@ class LunaIntegration {
               });
               
               if (!tab && window.tabManager) {
-                // Fallback: try to find in TabManager tabs
                 tab = window.tabManager.tabs.find(t => {
                   const tId = String(t.id);
                   const tBackendId = t.backendId ? String(t.backendId) : null;
@@ -440,17 +435,9 @@ class LunaIntegration {
                 });
               }
               
-              if (tab) {
-                const tabIdToMove = tab.backendId || tab.id;
-                console.log('[Drag] Found tab to move:', tabIdToMove);
-                await this.moveTabToMore(String(tabIdToMove));
-                return;
-              } else {
-                // Try using draggedId directly as the tab ID
-                console.log('[Drag] Tab not found in lists, using draggedId directly:', draggedIdStr);
-                await this.moveTabToMore(draggedIdStr);
-                return;
-              }
+              const tabIdToMove = tab ? String(tab.backendId || tab.id) : draggedIdStr;
+              await this.moveTabToMore(tabIdToMove);
+              return;
             }
             
             const oldIndex = this.personalTabs.findIndex(t => t.id === draggedId);
@@ -839,16 +826,47 @@ class LunaIntegration {
 
     // Store more tabs for "More" view
     this.mobileMoreTabs = moreTabs;
+    
+    // Setup event listeners for mobile bottom nav items
+    const bottomNav = document.querySelector('#mobile-tabs-container')?.parentElement;
+    if (bottomNav) {
+      bottomNav.addEventListener('click', (e) => {
+        const clickedItem = e.target.closest('.bottom-nav-item');
+        if (!clickedItem) return;
+        
+        const label = clickedItem.querySelector('.label')?.textContent?.trim();
+        
+        if (label === 'Proyectos' || label?.includes('Proyectos')) {
+          if (window.mobileUI && window.mobileUI.show) {
+            window.mobileUI.show('mobile-projects-view');
+            setTimeout(() => {
+              this.renderMobileProjects();
+            }, 50);
+          }
+        } else if (label === 'Messenger' || label?.includes('Messenger')) {
+          if (window.mobileUI && window.mobileUI.show) {
+            window.mobileUI.show('mobile-messenger-view');
+            setTimeout(() => {
+              this.renderMobileMessenger();
+            }, 50);
+          }
+        }
+      });
+    }
   }
 
   renderMobileProjects() {
     // REUTILIZAR CÓDIGO EXISTENTE: Clonar TODA la sección del sidebar (incluyendo header con botón "+")
-    const sidebarProjectsSection = document.querySelector('#sidebar .py-1.mt-4:has(#projects-cont)');
+    const projectsCont = document.getElementById('projects-cont');
     const mobileContainer = document.getElementById('mobile-projects-content');
-    if (!sidebarProjectsSection || !mobileContainer) return;
-
+    if (!projectsCont || !mobileContainer) return;
+    
+    // Find parent section - projects-cont is directly inside the section div (which includes header)
+    const fullSection = projectsCont.parentElement;
+    if (!fullSection) return;
+    
     // Clonar TODA la sección (header + contenido)
-    const cloned = sidebarProjectsSection.cloneNode(true);
+    const cloned = fullSection.cloneNode(true);
     mobileContainer.innerHTML = '';
     mobileContainer.appendChild(cloned);
     
@@ -896,12 +914,16 @@ class LunaIntegration {
 
   renderMobileMessenger() {
     // REUTILIZAR CÓDIGO EXISTENTE: Clonar TODA la sección del sidebar (incluyendo header con botón "+")
-    const sidebarUsersSection = document.querySelector('#sidebar .py-1.mt-4:has(#users-cont)');
+    const usersCont = document.getElementById('users-cont');
     const mobileContainer = document.getElementById('mobile-messenger-content');
-    if (!sidebarUsersSection || !mobileContainer) return;
-
+    if (!usersCont || !mobileContainer) return;
+    
+    // Find parent section - users-cont is directly inside the section div (which includes header)
+    const fullSection = usersCont.parentElement;
+    if (!fullSection) return;
+    
     // Clonar TODA la sección (header + contenido)
-    const cloned = sidebarUsersSection.cloneNode(true);
+    const cloned = fullSection.cloneNode(true);
     mobileContainer.innerHTML = '';
     mobileContainer.appendChild(cloned);
     
@@ -1144,7 +1166,7 @@ class LunaIntegration {
 
   // Calculate and update desktop More tabs - based on user's custom arrangement
   // skipRender: set to true when called from syncTabsToTabManager to avoid double render
-  updateDesktopMoreTabs(skipRender = false) {
+  async updateDesktopMoreTabs(skipRender = false) {
     if (!window.tabManager) return;
 
     const tabs = window.tabManager.tabs || [];
@@ -1153,23 +1175,21 @@ class LunaIntegration {
       return url && url !== '/new' && url !== 'tabs://new' && !t.spaceId && !this.isChatUrl(url);
     });
 
-    // Load which tabs are in "More" from localStorage
-    const moreTabIds = this.getDesktopMoreTabIds();
+    // Load which tabs are in "More" from backend (use sync version if cache available)
+    const moreTabIds = this.getDesktopMoreTabIdsSync();
     
     // Filter tabs that are in "More" - normalize IDs to strings for comparison
     const moreTabs = personalTabs.filter(t => {
       const tabId = String(t.backendId || t.id);
       return moreTabIds.has(tabId);
     });
-    console.log('[Drag] updateDesktopMoreTabs - moreTabIds:', Array.from(moreTabIds), 'moreTabs found:', moreTabs.length);
     
     this.desktopMoreTabs = moreTabs;
 
-    // Show More button if there are any tabs in More OR if there are tabs that could go to More
+    // Always show More button if there are personal tabs OR tabs in More (user can move them)
     const moreBtn = document.getElementById('sidebar-more-btn');
     if (moreBtn) {
-      // Always show the button if there are personal tabs (user can move them to More)
-      if (personalTabs.length > 0) {
+      if (personalTabs.length > 0 || moreTabs.length > 0) {
         moreBtn.style.display = 'flex';
       } else {
         moreBtn.style.display = 'none';
@@ -1230,7 +1250,6 @@ class LunaIntegration {
         ...preferences
       };
       this._preferencesCacheTime = Date.now();
-      console.log('[Drag] Cache updated with preferences:', preferences);
     } catch (err) {
       console.error('Failed to save preferences:', err);
     }
@@ -1255,7 +1274,6 @@ class LunaIntegration {
   async setDesktopMoreTabIds(tabIds) {
     const tabIdsArray = Array.from(tabIds).map(id => String(id));
     await this.savePreferences({ desktop_more_tab_ids: tabIdsArray });
-    console.log('[More] Saved to backend:', tabIdsArray);
   }
 
   // Get/set which tabs are in "More" from backend (mobile)
@@ -1284,13 +1302,11 @@ class LunaIntegration {
 
     // Use the same drag and drop system as tabs-cont
     this.setupDragAndDrop('more-dropdown-content', this.desktopMoreTabs || [], false, async ({ draggedId, targetId, position, dropTarget }) => {
-      console.log('[More] Dropdown drag callback:', { draggedId, targetId, position, dropTarget });
       const draggedIdStr = String(draggedId);
       
       try {
         // Check if dropping on sidebar (tabs-cont) - MOVE OUT OF MORE
         if (dropTarget === 'tabs-cont') {
-          console.log('[More] Moving tab OUT of More to sidebar');
           // Find tab by id or backendId
           const tab = this.desktopMoreTabs.find(t => 
             String(t.id) === draggedIdStr || String(t.backendId) === draggedIdStr
@@ -1309,7 +1325,6 @@ class LunaIntegration {
           String(t.id) === targetIdStr || String(t.backendId) === targetIdStr
         );
         
-        console.log('[More] Reordering:', { oldIndex, newIndex, position });
         
         if (oldIndex === -1) {
           console.error('[More] Could not find dragged tab');
@@ -1342,11 +1357,8 @@ class LunaIntegration {
 
   // Move tab to/from More - ASYNC for backend persistence
   async moveTabToMore(tabId) {
-    console.log('[More] Moving tab TO More:', tabId);
     const tabIdStr = String(tabId);
-    
     const moreTabIds = await this.getDesktopMoreTabIds();
-    console.log('[More] Current moreTabIds:', Array.from(moreTabIds));
     moreTabIds.add(tabIdStr);
     await this.setDesktopMoreTabIds(moreTabIds);
     
@@ -1364,15 +1376,11 @@ class LunaIntegration {
       this.renderMore(false, 'desktop');
       setTimeout(() => this.setupMoreDropdownDragAndDrop(), 50);
     }
-    console.log('[More] Tab moved to More successfully');
   }
 
   async moveTabFromMore(tabId) {
-    console.log('[More] Moving tab FROM More to sidebar:', tabId);
     const tabIdStr = String(tabId);
-    
     const moreTabIds = await this.getDesktopMoreTabIds();
-    console.log('[More] Current moreTabIds:', Array.from(moreTabIds));
     moreTabIds.delete(tabIdStr);
     await this.setDesktopMoreTabIds(moreTabIds);
     
@@ -1390,7 +1398,6 @@ class LunaIntegration {
       this.renderMore(false, 'desktop');
       setTimeout(() => this.setupMoreDropdownDragAndDrop(), 50);
     }
-    console.log('[More] Tab moved from More successfully');
   }
 
   async saveMobileTabsOrder() {
@@ -3758,13 +3765,11 @@ class LunaIntegration {
         itemElement = e.target.closest('[data-tab-id]');
       }
       if (!itemElement) {
-        console.log('[Drag] No item element found for drag start');
         return;
       }
 
       draggedId = itemElement.dataset.sortableId || itemElement.dataset.tabId;
       draggedElement = itemElement;
-      console.log('[Drag] Drag start - draggedId:', draggedId, 'element:', itemElement);
       dragStartY = e.clientY;
       dragStartX = e.clientX;
       isDragging = false;
@@ -3777,7 +3782,6 @@ class LunaIntegration {
           : Math.abs(e.clientY - dragStartY);
         if (distance >= activationDistance && !isDragging && draggedElement) {
           isDragging = true;
-          console.log('[Drag] Drag activated, draggedId:', draggedId);
           
           // Congelar el hover: agregar clase para mantener estilo hover + mostrar menú
           draggedElement.classList.add('dragging-item');
@@ -3790,7 +3794,6 @@ class LunaIntegration {
       };
 
       const handleMouseUp = async (e) => {
-        console.log('[Drag] Mouse up - isDragging:', isDragging, 'draggedElement:', !!draggedElement, 'isReordering:', isReordering);
         
         // CRÍTICO: Detener todos los listeners inmediatamente
         window.removeEventListener('mousemove', handleMouseMoveDrag);
@@ -3816,7 +3819,6 @@ class LunaIntegration {
         container.classList.remove('dragging-active');
         
         if (isDragging && draggedElement && !isReordering) {
-          console.log('[Drag] Processing drop - containerId:', containerId, 'draggedId:', draggedId);
           if (draggedElement && draggedElement.style) {
             // Restaurar estilos del elemento arrastrado
             draggedElement.style.opacity = '';
@@ -3851,7 +3853,6 @@ class LunaIntegration {
             // Check if over More button (highest priority) - check elementAtPoint and its parents
             if (moreBtnDrop && isWithinElement(elementAtPoint, moreBtnDrop)) {
               dropTarget = 'more-dropdown-content';
-              console.log('[Drag] Drop detected on More button (elementAtPoint:', elementAtPoint?.tagName, elementAtPoint?.className, ')');
               // Open dropdown if not already open
               if (moreDropdownMenu && !moreDropdownMenu.classList.contains('active')) {
                 this.showMoreDropdown();
@@ -3862,49 +3863,39 @@ class LunaIntegration {
             // Check if over dropdown menu
             else if (moreDropdownMenu && isWithinElement(elementAtPoint, moreDropdownMenu)) {
               dropTarget = 'more-dropdown-content';
-              console.log('[Drag] Drop detected on More dropdown menu');
             }
             // Check if over dropdown content
             else if (moreDropdown && isWithinElement(elementAtPoint, moreDropdown)) {
               dropTarget = 'more-dropdown-content';
-              console.log('[Drag] Drop detected on More dropdown content');
             }
           } else if (containerId === 'more-dropdown-content') {
             // Check if dropping back to sidebar - detect sidebar element or tabs-cont
             const sidebar = document.getElementById('sidebar');
             if (tabsContDrop && isWithinElement(elementAtPoint, tabsContDrop)) {
               dropTarget = 'tabs-cont';
-              console.log('[Drag] Drop detected on tabs-cont');
             } else if (sidebar && isWithinElement(elementAtPoint, sidebar) && !isWithinElement(elementAtPoint, moreBtnDrop) && !isWithinElement(elementAtPoint, moreDropdownMenu)) {
               // Dropped on sidebar but not on More button/dropdown - move to tabs-cont
               dropTarget = 'tabs-cont';
-              console.log('[Drag] Drop detected on sidebar (moving to tabs-cont)');
             } else if (moreBtnDrop && isWithinElement(elementAtPoint, moreBtnDrop)) {
               // Dropping on More button stays in More (already there)
               dropTarget = 'more-dropdown-content';
-              console.log('[Drag] Drop detected on More button (staying in More)');
             }
           }
           
-          console.log('[Drag] Final dropTarget:', dropTarget, 'containerId:', containerId, 'elementAtPoint:', elementAtPoint?.tagName, elementAtPoint?.id, elementAtPoint?.className);
-          console.log('[Drag] moreBtnDrop:', moreBtnDrop?.id, 'moreDropdown:', moreDropdown?.id, 'moreDropdownMenu:', moreDropdownMenu?.id);
           
           // Handle dropping on different container (move between sidebar and More)
           if (dropTarget !== containerId) {
-            console.log('[Drag] Drop detected on different container:', dropTarget, 'from:', containerId, 'draggedId:', draggedId, 'onReorder exists:', !!onReorder);
             if (!onReorder) {
               console.error('[Drag] ERROR: onReorder callback is not defined!');
             } else {
               isReordering = true;
               try {
-                console.log('[Drag] Calling onReorder with:', { draggedId, targetId: null, position: 'after', dropTarget });
                 await onReorder({ 
                   draggedId, 
                   targetId: null, 
                   position: 'after',
                   dropTarget: dropTarget
                 });
-                console.log('[Drag] Move between containers successful');
               } catch (err) {
                 console.error('[Drag] Move between containers failed:', err);
                 console.error('[Drag] Error stack:', err.stack);
@@ -3915,7 +3906,6 @@ class LunaIntegration {
               }
             }
           } else {
-            console.log('[Drag] Drop on same container - dropTarget:', dropTarget, 'containerId:', containerId);
             // Try data-sortable-id first, then fallback to data-tab-id
             let overElement = elementAtPoint?.closest('[data-sortable-id]');
             if (!overElement) {

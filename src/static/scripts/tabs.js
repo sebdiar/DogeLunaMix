@@ -995,19 +995,12 @@ class TabManager {
       let visibleTabs = tabsToShow;
       if (window.lunaIntegration && window.lunaIntegration.getDesktopMoreTabIdsSync) {
         const moreTabIds = window.lunaIntegration.getDesktopMoreTabIdsSync();
-        console.log('[Render] moreTabIds from localStorage:', Array.from(moreTabIds));
         if (moreTabIds.size > 0) {
-          const beforeCount = tabsToShow.length;
           visibleTabs = tabsToShow.filter(t => {
             // Normalize to string for consistent comparison
             const tabId = String(t.backendId || t.id);
-            const shouldShow = !moreTabIds.has(tabId);
-            if (!shouldShow) {
-              console.log('[Render] Hiding tab:', tabId, 'because it is in More');
-            }
-            return shouldShow;
+            return !moreTabIds.has(tabId);
           });
-          console.log('[Render] Filtered tabs: before=', beforeCount, 'after=', visibleTabs.length);
         }
       }
 
