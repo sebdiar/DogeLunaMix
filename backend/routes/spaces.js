@@ -342,6 +342,7 @@ router.get('/:id', async (req, res) => {
       .from('tabs')
       .select('*')
       .eq('space_id', id)
+      .order('position', { ascending: true, nullsFirst: false })
       .order('created_at', { ascending: true });
     
     const chatUrl = `luna://chat/${id}`;

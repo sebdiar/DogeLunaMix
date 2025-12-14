@@ -107,6 +107,8 @@ class TabManager {
       minW: 50,
       maxW: 200,
       urlInterval: 1000,
+      maxOpenTabs: 5, // Maximum tabs with loaded content (for memory management)
+      inactiveTimeout: 15 * 60 * 1000, // 15 minutes in milliseconds
     });
 
     const els = ['tabs-cont', 'tab-btn', 'fcn', 'url', 'class-portal'].reduce(
@@ -278,6 +280,115 @@ class TabManager {
     return url && (url.startsWith('luna://') || url.startsWith('doge://') || url.startsWith('tabs://'));
   };
 
+  // Check if a tab has loaded content (iframe has a real URL)
+  hasLoadedContent = (tab) => {
+    if (this.isChatUrl(tab.url) || this.isSpecialUrl(tab.url)) return true; // Special tabs are considered "loaded"
+    const f = document.getElementById(`iframe-${tab.id}`);
+    if (!f) return false;
+    const src = f.src || '';
+    // Consider loaded if it has a real URL (not placeholder)
+    return src && src !== '/new' && src !== 'tabs://new' && 
+           (src.includes('http') || src.includes('scramjet') || src.includes('uv/service'));
+  };
+
+  // Get count of tabs with loaded content
+  getLoadedTabsCount = () => {
+    return this.tabs.filter(t => this.hasLoadedContent(t)).length;
+  };
+
+  // Enforce memory limits: close inactive tabs if we exceed maxOpenTabs (OPTIMIZED)
+  enforceMemoryLimits = () => {
+    // Early exit if we don't have enough tabs to worry about
+    if (this.tabs.length <= this.maxOpenTabs) return;
+    
+    const now = Date.now();
+    const loadedTabs = [];
+    
+    // Single pass to identify loaded tabs
+    for (const tab of this.tabs) {
+      if (this.hasLoadedContent(tab)) {
+        loadedTabs.push(tab);
+      }
+    }
+    
+    // Only proceed if we exceed the limit
+    if (loadedTabs.length <= this.maxOpenTabs) return;
+    
+    // Find inactive tabs (single pass)
+    const inactiveTabs = [];
+    for (const tab of loadedTabs) {
+      if (tab.active) continue; // Skip active tab
+      
+      const lastAccessed = tab.lastAccessed || tab.createdAt || 0;
+      if (now - lastAccessed > this.inactiveTimeout) {
+        inactiveTabs.push(tab);
+      }
+    }
+    
+    // Close inactive tabs first
+    if (inactiveTabs.length > 0) {
+      inactiveTabs.sort((a, b) => {
+        const aTime = a.lastAccessed || a.createdAt || 0;
+        const bTime = b.lastAccessed || b.createdAt || 0;
+        return aTime - bTime;
+      });
+      
+      for (const tab of inactiveTabs) {
+        this.unloadTab(tab.id);
+      }
+    }
+    
+    // Re-check remaining loaded tabs after closing inactive ones
+    const remainingLoaded = [];
+    for (const tab of this.tabs) {
+      if (this.hasLoadedContent(tab)) {
+        remainingLoaded.push(tab);
+      }
+    }
+    
+    // If still over limit, close oldest non-active tabs
+    if (remainingLoaded.length > this.maxOpenTabs) {
+      const tabsToClose = [];
+      for (const tab of remainingLoaded) {
+        if (!tab.active) {
+          tabsToClose.push(tab);
+        }
+      }
+      
+      tabsToClose.sort((a, b) => {
+        const aTime = a.lastAccessed || a.createdAt || 0;
+        const bTime = b.lastAccessed || b.createdAt || 0;
+        return aTime - bTime;
+      });
+      
+      const toClose = tabsToClose.slice(0, remainingLoaded.length - this.maxOpenTabs);
+      for (const tab of toClose) {
+        this.unloadTab(tab.id);
+      }
+    }
+  };
+
+  // Unload a tab (remove iframe but keep tab object)
+  unloadTab = (id) => {
+    const tab = this.tabs.find(t => t.id === id);
+    if (!tab || tab.active) return; // Never unload active tab
+    
+    // Remove iframe
+    const f = document.getElementById(`iframe-${id}`);
+    if (f) {
+      // Stop tracking
+      this.stopTrack(id);
+      
+      // Remove iframe from DOM
+      f.remove();
+      
+      // Remove from frames
+      if (this.frames[id]) {
+        delete this.frames[id];
+      }
+    }
+  };
+
   createIframes = () => {
     this.tabs.forEach((t) => {
       if (this.isChatUrl(t.url)) {
@@ -290,9 +401,10 @@ class TabManager {
           chatContainer.style.backgroundColor = '#ffffff';
           chatContainer.innerHTML = '<div class="chat-wrapper"></div>';
           this.ic.appendChild(chatContainer);
-          // Initialize chat when container is created
-          if (window.lunaIntegration) {
+          // Initialize chat IMMEDIATELY when container is created (only if tab is active)
+          if (window.lunaIntegration && t.active) {
             const spaceId = t.url.split('/').pop();
+            // Inicializar inmediatamente sin delay para tabs activos
             window.lunaIntegration.initChat(t.id, spaceId);
           }
         }
@@ -466,7 +578,33 @@ class TabManager {
 
     t.url = newUrl;
 
+    // Solo actualizar título si NO tiene un título fijo
+    // Lógica: Si el título actual es igual a la URL o al dominio, es dinámico
+    // Si el título es diferente de la URL/dominio, es fijo (usuario lo especificó)
     const updateTitle = (tries = 10) => {
+      const currentTitle = t.title || '';
+      const currentUrl = t.url || '';
+      const currentDomain = this.domain(currentUrl);
+      const decodedUrl = this.ex(newUrl);
+      const decodedDomain = this.domain(decodedUrl);
+      
+      // Si el título actual es igual a la URL o al dominio, es dinámico - actualizar
+      // Si el título es diferente, fue especificado por el usuario - NO actualizar
+      const isDynamicTitle = !currentTitle || 
+                             currentTitle === currentUrl || 
+                             currentTitle === decodedUrl ||
+                             currentTitle === currentDomain ||
+                             currentTitle === decodedDomain ||
+                             currentTitle === 'New Tab' ||
+                             currentTitle === 'Untitled';
+      
+      if (!isDynamicTitle) {
+        // Mantener el título fijo - NO actualizar
+        this.render();
+        return;
+      }
+      
+      // Si tiene título dinámico, actualizar dinámicamente como antes
       const ttl = f.contentDocument?.title?.trim();
       if (ttl) {
         t.title = ttl.length > 20 ? ttl.slice(0, 20) + '...' : ttl;
@@ -496,6 +634,8 @@ class TabManager {
       url: this.newTabUrl,
       active: true,
       justAdded: true,
+      createdAt: Date.now(),
+      lastAccessed: Date.now(),
     };
     this.tabs.push(t);
     this.render();
@@ -537,13 +677,16 @@ class TabManager {
     this.updateWidths();
   };
 
-  activate = (id) => {
-    if (this.active()?.id === id) return;
+  activate = (id, forceLoad = false) => {
+    // Si ya está activo y no forzamos la carga, solo retornar
+    // Pero si forceLoad es true, continuar para asegurar que se carga la URL
+    if (this.active()?.id === id && !forceLoad) return;
     this.tabs.forEach((t) => (t.active = t.id === id));
     this.render();
     this.showActive();
+    
+    const activeTab = this.active();
     if (this.ui) {
-      const activeTab = this.active();
       // Don't show URL for special URLs (chat, AI dashboard, etc.)
       if (activeTab && !this.isNewTab(activeTab.url) && !this.isSpecialUrl(activeTab.url)) {
         this.ui.value = this.ex(activeTab.url);
@@ -551,6 +694,64 @@ class TabManager {
         this.ui.value = '';
       }
     }
+    
+    // Auto-navigate to tab's URL if not already loaded (OPTIMIZED)
+    // Si es chat, inicializar inmediatamente
+    if (activeTab && this.isChatUrl(activeTab.url)) {
+      const chatContainer = document.getElementById(`chat-${activeTab.id}`);
+      if (chatContainer) {
+        // Inicializar chat inmediatamente si no está inicializado
+        if (!chatContainer.querySelector('.chat-container')) {
+          const spaceId = activeTab.url.split('/').pop();
+          if (window.lunaIntegration) {
+            window.lunaIntegration.initChat(activeTab.id, spaceId);
+          }
+        }
+      } else {
+        // Crear container e inicializar
+        this.createIframes();
+        const newChatContainer = document.getElementById(`chat-${activeTab.id}`);
+        if (newChatContainer && window.lunaIntegration) {
+          const spaceId = activeTab.url.split('/').pop();
+          window.lunaIntegration.initChat(activeTab.id, spaceId);
+        }
+      }
+    } else if (activeTab && !this.isNewTab(activeTab.url) && !this.isSpecialUrl(activeTab.url)) {
+      let f = document.getElementById(`iframe-${activeTab.id}`);
+      
+      // Si el iframe no existe, crearlo primero
+      if (!f && activeTab.url) {
+        // Crear el iframe usando createIframes (que maneja chat, dashboard, etc.)
+        this.createIframes();
+        f = document.getElementById(`iframe-${activeTab.id}`);
+      }
+      
+      if (f && activeTab.url) {
+        const currentSrc = f.src || '';
+        // Quick check: only navigate if clearly empty/placeholder
+        if (!currentSrc || currentSrc === '/new' || currentSrc === 'tabs://new') {
+          const handler = TYPE[this.prType] || TYPE.auto;
+          handler.navigate(activeTab.url, this, activeTab, f);
+        } else if (!currentSrc.includes('http') && !currentSrc.includes('scramjet') && !currentSrc.includes('uv/service')) {
+          // Only do expensive check if src doesn't look like a URL
+          const handler = TYPE[this.prType] || TYPE.auto;
+          handler.navigate(activeTab.url, this, activeTab, f);
+        }
+      } else if (activeTab.url && !f) {
+        // Si aún no existe el iframe después de createIframes, crear uno directamente
+        const handler = TYPE[this.prType] || TYPE.auto;
+        handler.create(activeTab.url, this, activeTab);
+      }
+    }
+    
+    // Update last accessed time for memory management
+    if (activeTab) {
+      activeTab.lastAccessed = Date.now();
+    }
+    
+    // Enforce memory limits ASYNC (don't block navigation)
+    setTimeout(() => this.enforceMemoryLimits(), 0);
+    
     this.emitNewFrame();
   };
 
@@ -589,6 +790,9 @@ class TabManager {
       alert(`The website "${input}" is not supported at this time`);
       return;
     }
+
+    // Update last accessed time when navigating
+    t.lastAccessed = Date.now();
 
     if (input === 'tabs://new') {
       document.getElementById(`iframe-${t.id}`)?.remove();
@@ -656,8 +860,8 @@ class TabManager {
     this.ab.title = 'Add new tab';
   };
 
-  render = (() => {
-    const tabTemplate = (t, op, showClose) => {
+  // UNIFIED TAB TEMPLATE - usado en sidebar Y TopBar
+  tabTemplate = (t, showMenu = true, isTopBar = false) => {
       // Get icon - prioritize custom avatar over favicon
       let iconHtml = '';
       let hasCustomIcon = false;
@@ -703,50 +907,136 @@ class TabManager {
       const borderColor = t.avatar_color || '#e8eaed';
       const iconColor = t.avatar_color || '#6b7280';
       
+      // Tamaños adaptativos: TopBar más pequeño, sidebar normal
+      const iconSize = isTopBar ? 'w-5 h-5' : 'w-7 h-7';
+      const textSize = isTopBar ? 'text-xs' : 'text-sm';
+      const padding = isTopBar ? 'px-2.5 py-1.5' : 'px-3 py-2.5';
+      const gap = isTopBar ? 'gap-2' : 'gap-3';
+      const maxWidth = isTopBar ? 'max-w-[100px]' : '';
+      
+      // Menu button (3 dots) - siempre disponible cuando showMenu es true
+      const menuButton = showMenu ? `
+        <button class="tab-menu-btn shrink-0 p-0.5 opacity-0 group-hover:opacity-100 hover:text-[#202124] transition-opacity relative" data-tab-id="${t.id}" ${t.backendId ? `data-backend-id="${t.backendId}"` : ''} title="Menu">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="1"></circle>
+            <circle cx="12" cy="5" r="1"></circle>
+            <circle cx="12" cy="19" r="1"></circle>
+          </svg>
+        </button>
+      ` : '';
+      
       return `
       <div ${t.justAdded ? 'data-m="bounce-up" data-m-duration="0.2"' : ''} 
-           class="tab-item group relative flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-all ${
+           class="tab-item group relative flex items-center ${gap} ${padding} rounded-lg cursor-pointer transition-all ${
              t.active
                ? 'bg-[#4285f4]/10 text-[#4285f4] font-medium shadow-sm'
                : 'text-[#202124] hover:bg-[#e8eaed]'
            }" 
            data-tab-id="${t.id}"
            ${t.backendId ? `data-sortable-id="${t.backendId}"` : ''}>
-        <div class="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0" style="border: 1px solid ${borderColor}; color: ${iconColor}">
+        <div class="${iconSize} rounded-full flex items-center justify-center flex-shrink-0" style="border: 1px solid ${borderColor}; color: ${iconColor}">
           ${iconHtml}
         </div>
-        <span class="flex-1 text-sm truncate" title="${this.escapeHTML(t.title)}">${this.escapeHTML(t.title)}</span>
-        ${showClose && !isChat && !isDashboard ? `<button class="close-tab shrink-0 p-0.5 opacity-0 group-hover:opacity-100 hover:text-[#202124] transition-opacity" data-tab-id="${t.id}" title="Close ${this.escapeHTML(t.title)}"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>` : ''}
+        <span class="flex-1 ${textSize} truncate ${maxWidth}" title="${this.escapeHTML(t.title)}">${this.escapeHTML(t.title)}</span>
+        ${menuButton}
       </div>`.trim();
     };
 
-    return function () {
-      const op = JSON.parse(localStorage.getItem('options') || '{}');
-      const showClose = this.tabs.length > 1;
+  render = (() => {
 
+    return function () {
       // Filtrar tabs: si hay un espacio activo, NO mostrar los tabs del espacio en el sidebar
       // (solo se muestran en el TopBar para evitar duplicados visuales)
+      // TAMBIÉN: NUNCA mostrar tabs de chat en el sidebar externo (solo en TopBar)
       let tabsToShow = this.tabs;
-      if (window.lunaIntegration && window.lunaIntegration.activeSpace && window.lunaIntegration.spaceTabs) {
-        const spaceTabUrls = new Set(
-          window.lunaIntegration.spaceTabs
-            .map(t => {
-              const url = t.url || t.bookmark_url;
-              if (!url) return null;
-              return window.lunaIntegration.normalizeUrl(url);
-            })
-            .filter(Boolean)
-        );
-        
+      if (window.lunaIntegration && window.lunaIntegration.activeSpace) {
+        // Cuando hay un espacio activo, solo mostrar tabs personales (sin spaceId) en sidebar
+        // Los tabs de proyectos (con spaceId) solo se muestran en TopBar
         tabsToShow = this.tabs.filter(t => {
           const tUrl = t.url || '';
-          if (!tUrl || tUrl === '/new' || tUrl === 'tabs://new') return true;
-          const normalizedUrl = window.lunaIntegration.normalizeUrl(tUrl);
-          return !spaceTabUrls.has(normalizedUrl);
+          
+          // Permitir tabs especiales (/new, tabs://new) solo si no tienen spaceId
+          if (!tUrl || tUrl === '/new' || tUrl === 'tabs://new') {
+            return !t.spaceId;
+          }
+          
+          // NUNCA mostrar tabs de chat en sidebar externo
+          if (this.isChatUrl(tUrl)) return false;
+          
+          // Si el tab tiene spaceId (de CUALQUIER proyecto), NO mostrarlo en sidebar
+          // Los tabs de proyectos solo se muestran en TopBar de su proyecto correspondiente
+          if (t.spaceId) {
+            return false;
+          }
+          
+          // Solo mostrar tabs personales (sin spaceId)
+          return true;
+        });
+      } else {
+        // Sin espacio activo: mostrar solo tabs personales (sin spaceId)
+        // NUNCA mostrar chats en sidebar externo
+        tabsToShow = this.tabs.filter(t => {
+          const tUrl = t.url || '';
+          if (!tUrl || tUrl === '/new' || tUrl === 'tabs://new') {
+            // Permitir tabs especiales solo si no tienen spaceId
+            return !t.spaceId;
+          }
+          
+          // NUNCA mostrar chats
+          if (this.isChatUrl(tUrl)) return false;
+          
+          // Solo mostrar tabs personales (sin spaceId)
+          return !t.spaceId;
         });
       }
       
-      this.tc.innerHTML = tabsToShow.map((t) => tabTemplate(t, op, showClose)).join('');
+      // USAR EL MISMO template unificado (showMenu=true para sidebar, isTopBar=false)
+      // Este es el ÚNICO código que genera tabs - usado en sidebar Y TopBar
+      this.tc.innerHTML = tabsToShow.map((t) => this.tabTemplate(t, true, false)).join('');
+
+      // Setup menu handlers para sidebar tabs
+      this.tc.querySelectorAll('.tab-menu-btn').forEach(btn => {
+        btn.onclick = async (e) => {
+          e.stopPropagation();
+          const tabId = +btn.dataset.tabId;
+          const tab = this.tabs.find(t => t.id === tabId);
+          if (tab && window.lunaIntegration) {
+            // Si tiene backendId, obtener datos actualizados del backend
+            if (tab.backendId) {
+              try {
+                const response = await window.lunaIntegration.request(`/api/tabs/${tab.backendId}`);
+                window.lunaIntegration.showTabMenu(e, response.tab);
+              } catch (err) {
+                // Si falla, usar datos del tab actual
+                const backendTab = {
+                  id: tab.backendId,
+                  title: tab.title,
+                  url: tab.url,
+                  bookmark_url: tab.url,
+                  avatar_emoji: tab.avatar_emoji,
+                  avatar_color: tab.avatar_color,
+                  avatar_photo: tab.avatar_photo,
+                  cookie_container_id: tab.cookie_container_id
+                };
+                window.lunaIntegration.showTabMenu(e, backendTab);
+              }
+            } else {
+              // Tab sin backendId (tab nuevo o local) - crear en backend primero si es necesario
+              const backendTab = {
+                id: null, // No tiene backendId aún
+                title: tab.title,
+                url: tab.url,
+                bookmark_url: tab.url,
+                avatar_emoji: tab.avatar_emoji,
+                avatar_color: tab.avatar_color,
+                avatar_photo: tab.avatar_photo,
+                cookie_container_id: tab.cookie_container_id
+              };
+              window.lunaIntegration.showTabMenu(e, backendTab);
+            }
+          }
+        };
+      });
 
       this.tabs.forEach((t) => delete t.justAdded);
     };
@@ -873,9 +1163,12 @@ window.addEventListener('load', async () => {
   document.addEventListener('newFrame', (e) => {
     const bookmark = document.getElementById('bookmark');
     const options = JSON.parse(localStorage.getItem('options')) || { quickLinks: [] };
-    bookmark.setAttribute(
-      'fill',
-      options.quickLinks.some((q) => q.link === e.detail.url) ? 'currentColor' : 'none',
-    );
+    const quickLinks = options.quickLinks || [];
+    if (bookmark) {
+      bookmark.setAttribute(
+        'fill',
+        quickLinks.some((q) => q.link === e.detail.url) ? 'currentColor' : 'none',
+      );
+    }
   });
 });

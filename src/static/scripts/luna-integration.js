@@ -13,6 +13,8 @@ class LunaIntegration {
     this.savedPersonalTabs = null; // Tabs personales guardados cuando se abre un espacio
     this.showingModal = false; // Flag to prevent TabManager.add from running
     this.mouseY = 0; // Track mouse Y for drag and drop
+    this.menuCloseListener = null; // Track menu close listener
+    this.currentChatId = null; // Current active chat ID for message sending
     
     this.init();
   }
@@ -150,28 +152,69 @@ class LunaIntegration {
     // Override TabManager's onclick for tab-btn to show modal instead
     const setupTabButton = () => {
       const tabBtn = document.getElementById('tab-btn');
-      if (!tabBtn) {
+      const submenu = document.getElementById('tab-submenu');
+      if (!tabBtn || !submenu) {
         setTimeout(setupTabButton, 100);
         return;
       }
       
-      // Clear any existing onclick handlers
-      tabBtn.onclick = null;
-      
-      // Remove any existing event listeners by cloning the button
-      const newBtn = tabBtn.cloneNode(true);
-      tabBtn.parentNode?.replaceChild(newBtn, tabBtn);
-      
-      // Add our modal handler
-      newBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
+      // Toggle submenu on button click
+      tabBtn.addEventListener('click', (e) => {
         e.preventDefault();
-        this.handleNewTab();
-      });
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        submenu.classList.toggle('hidden');
+        return false;
+      }, true); // Use capture phase
       
-      // Update TabManager's reference
+      // Browser Tab option
+      const browserBtn = submenu.querySelector('.tab-submenu-browser');
+      if (browserBtn) {
+        browserBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          e.stopImmediatePropagation();
+          submenu.classList.add('hidden');
+          // Open edit modal in create mode for browser tab
+          // SIEMPRE crear tab personal cuando se crea desde el sidebar (sin space_id)
+          this.showEditTabModal({
+            id: null,
+            title: '',
+            url: '',
+            bookmark_url: '',
+            avatar_emoji: null,
+            avatar_color: null,
+            avatar_photo: null,
+            space_id: null // SIEMPRE null para tabs creados desde el sidebar
+          }, true); // true = isNewTab
+          return false;
+        }, true);
+      }
+      
+      // AI Dashboard option
+      const aiBtn = submenu.querySelector('.tab-submenu-ai');
+      if (aiBtn) {
+        aiBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          e.stopImmediatePropagation();
+          submenu.classList.add('hidden');
+          // For AI Dashboard, still use the old flow for now
+          this.showNewTabModal();
+          return false;
+        }, true);
+      }
+      
+      // Close submenu when clicking outside (with capture phase)
+      document.addEventListener('click', (e) => {
+        if (!tabBtn.contains(e.target) && !submenu.contains(e.target)) {
+          submenu.classList.add('hidden');
+        }
+      }, true);
+      
+      // Update TabManager's reference if it exists
       if (window.tabManager) {
-        window.tabManager.ab = newBtn;
+        window.tabManager.ab = tabBtn;
       }
     };
     
@@ -217,26 +260,24 @@ class LunaIntegration {
         
         // Get tab before closing
         const tabToClose = window.tabManager.tabs.find(t => t.id === id);
-        console.log('Tab to close:', tabToClose);
         
-        // If tab has a URL, try to delete from backend BEFORE closing
-        if (tabToClose && tabToClose.url && this.token) {
+        // If tab has a backendId, delete from backend using ID (more reliable)
+        if (tabToClose && tabToClose.backendId && this.token) {
+          // Delete from backend using ID (works for all tab types including AI Dashboard)
+          this.deleteTabFromBackendById(tabToClose.backendId).catch(() => {
+            // Ignore errors
+          });
+        } else if (tabToClose && tabToClose.url && this.token) {
+          // Fallback: try to delete by URL (only for non-special URLs)
           const url = tabToClose.url;
-          console.log('Tab URL:', url);
           
-          if (url !== '/new' && url !== 'tabs://new' && !url.startsWith('tabs://') && !url.startsWith('luna://') && !url.startsWith('doge://')) {
-            console.log('Will delete from backend:', url);
+          if (url !== '/new' && url !== 'tabs://new' && !url.startsWith('tabs://') && !url.startsWith('luna://chat/') && !url.startsWith('doge://chat/')) {
             // Delete from backend (async but don't await to avoid blocking UI)
-            this.deleteTabFromBackend(url).then(() => {
-              console.log('✅ Successfully deleted from backend');
-            }).catch(err => {
-              console.error('❌ Failed to delete tab from backend:', err);
+            // Include AI Dashboards (doge://ai-dashboard) - they should be deleted
+            this.deleteTabFromBackend(url).catch(() => {
+              // Ignore errors
             });
-          } else {
-            console.log('Skipping backend deletion (special URL)');
           }
-        } else {
-          console.log('Skipping backend deletion (no URL or no token)');
         }
         
         // Close in TabManager
@@ -244,8 +285,6 @@ class LunaIntegration {
         
         return result;
       };
-    } else {
-      console.error('❌ Could not intercept TabManager.close - originalClose not found');
     }
 
     // Monitor render to update TopBar
@@ -269,36 +308,80 @@ class LunaIntegration {
     try {
       const { tabs } = await this.request('/api/tabs');
       
-      // Remove duplicates by URL - keep only the most recent
-      const urlMap = new Map();
-      tabs.forEach(tab => {
-        const url = tab.url || tab.bookmark_url;
-        if (!url) return;
-        
-        const normalizedUrl = this.normalizeUrl(url);
-        const existing = urlMap.get(normalizedUrl);
-        
-        // Keep the most recent tab (by created_at or id)
-        if (!existing || (tab.created_at > existing.created_at) || 
-            (tab.created_at === existing.created_at && tab.id > existing.id)) {
-          urlMap.set(normalizedUrl, tab);
-        } else {
-          // Delete duplicate from backend
-          this.deleteDuplicateTab(tab.id).catch(err => 
-            console.error('Failed to delete duplicate tab:', err)
-          );
-        }
+      // CRÍTICO: Ordenar primero por position para mantener el orden del backend
+      // El backend ya los devuelve ordenados por position ASC, pero asegurémonos
+      // Tabs con position null/undefined van al final
+      // Si tienen la misma posición, ordenar por created_at (más reciente al final)
+      const sortedTabs = (tabs || []).sort((a, b) => {
+        const posA = a.position != null ? a.position : 999999999;
+        const posB = b.position != null ? b.position : 999999999;
+        if (posA !== posB) return posA - posB;
+        // Si misma posición, ordenar por created_at (más reciente al final para mantener orden de creación)
+        const dateA = new Date(a.created_at || 0).getTime();
+        const dateB = new Date(b.created_at || 0).getTime();
+        return dateA - dateB; // Más antiguo primero, más reciente al final
       });
       
-      this.personalTabs = Array.from(urlMap.values());
+      // Remove duplicates by URL - keep only the most recent, manteniendo el orden
+      const seenUrls = new Set();
+      const deduplicated = [];
+      const duplicateIds = [];
+      
+      // Iterar en orden para mantener la posición
+      for (const tab of sortedTabs) {
+        const url = tab.url || tab.bookmark_url;
+        if (!url) continue;
+        
+        const normalizedUrl = this.normalizeUrl(url);
+        
+        if (!seenUrls.has(normalizedUrl)) {
+          seenUrls.add(normalizedUrl);
+          deduplicated.push(tab);
+        } else {
+          // Es duplicado - marcarlo para eliminación
+          duplicateIds.push(tab.id);
+        }
+      }
+      
+      // Eliminar duplicados del backend (async, no bloquear)
+      if (duplicateIds.length > 0) {
+        Promise.all(duplicateIds.map(id => this.deleteDuplicateTab(id).catch(() => {})));
+      }
+      
+      // Ya están ordenados y sin duplicados
+      this.personalTabs = deduplicated;
+      
+      // ARREGLAR tabs con position 0: si hay múltiples tabs con position 0, reordenarlos
+      const tabsWithZeroPos = this.personalTabs.filter(t => t.position === 0 || t.position == null);
+      if (tabsWithZeroPos.length > 1) {
+        // Reordenar: asignar posiciones secuenciales comenzando desde el máximo + 1
+        let maxPosition = -1;
+        for (const tab of this.personalTabs) {
+          if (tab.position != null && tab.position > maxPosition) {
+            maxPosition = tab.position;
+          }
+        }
+        
+        const updates = tabsWithZeroPos.map((tab, index) => ({
+          id: tab.id,
+          position: maxPosition + 1 + index
+        }));
+        
+        // Actualizar en backend (async, no esperar)
+        this.request('/api/tabs/reorder', {
+          method: 'POST',
+          body: JSON.stringify({ updates })
+        }).then(() => {
+          this.loadPersonalTabs();
+        }).catch(() => {});
+      }
       
       // Sync tabs from backend to TabManager (solo si no hay espacio activo)
-      if (!this.activeSpace && window.tabManager && this.personalTabs.length > 0) {
+      if (!this.activeSpace && window.tabManager) {
         await this.syncTabsToTabManager();
       }
       
       this.renderPersonalTabs();
-      console.log('Loaded personal tabs:', this.personalTabs.length);
       
       // Setup drag and drop for tabs after render
       setTimeout(() => {
@@ -306,27 +389,72 @@ class LunaIntegration {
           try {
             const oldIndex = this.personalTabs.findIndex(t => t.id === draggedId);
             const newIndex = this.personalTabs.findIndex(t => t.id === targetId);
+            
+            // Calcular finalIndex ANTES de remover el elemento
             let finalIndex = newIndex;
             if (position === 'after') {
               finalIndex = newIndex + 1;
             }
             
-            const updates = [];
+            // OPTIMISTIC UI: Actualizar inmediatamente
             const newTabs = [...this.personalTabs];
             const [dragged] = newTabs.splice(oldIndex, 1);
+            
+            // Ajustar finalIndex si removimos un elemento antes de la posición objetivo
+            // Si oldIndex < finalIndex, el elemento ya fue removido, así que ajustar
+            if (oldIndex < finalIndex) {
+              finalIndex -= 1;
+            }
+            
             newTabs.splice(finalIndex, 0, dragged);
             
-            newTabs.forEach((tab, index) => {
-              updates.push({ id: tab.id, position: index });
-            });
+            // Actualizar posiciones localmente
+            for (let index = 0; index < newTabs.length; index++) {
+              newTabs[index].position = index;
+            }
             
-            await this.request('/api/tabs/reorder', {
+            // Actualizar estado
+            this.personalTabs = newTabs;
+            
+            // CRÍTICO: Reordenar tabs en TabManager según el nuevo orden
+            if (window.tabManager?.tabs) {
+              // Crear un mapa de backendId -> tab de TabManager
+              const tabMap = new Map();
+              for (const t of window.tabManager.tabs) {
+                if (t.backendId) {
+                  tabMap.set(t.backendId, t);
+                }
+              }
+              
+              // Reordenar según el nuevo orden de personalTabs
+              const reorderedTabs = [];
+              for (const personalTab of newTabs) {
+                const tabManagerTab = tabMap.get(personalTab.id);
+                if (tabManagerTab) {
+                  reorderedTabs.push(tabManagerTab);
+                  tabMap.delete(personalTab.id);
+                }
+              }
+              
+              // Agregar tabs restantes
+              reorderedTabs.push(...tabMap.values());
+              
+              window.tabManager.tabs = reorderedTabs;
+              window.tabManager.render();
+            }
+            
+            // Llamar al backend en segundo plano
+            const updates = newTabs.map((tab, index) => ({ id: tab.id, position: index }));
+            
+            this.request('/api/tabs/reorder', {
               method: 'POST',
               body: JSON.stringify({ updates })
+            }).catch(() => {
+              // Si falla, recargar desde el backend
+              this.loadPersonalTabs().catch(() => {});
             });
-            await this.loadPersonalTabs();
-          } catch (err) {
-            console.error('Failed to reorder tabs:', err);
+          } catch {
+            // Ignore errors
           }
         });
       }, 150);
@@ -344,7 +472,24 @@ class LunaIntegration {
   async deleteDuplicateTab(tabId) {
     try {
       await this.request(`/api/tabs/${tabId}`, { method: 'DELETE' });
-    } catch (err) {
+    } catch {
+      // Ignore errors - tab might already be deleted
+    }
+  }
+
+  async deleteTabFromBackendById(tabId) {
+    if (!this.token || !tabId) return;
+    
+    try {
+      // Delete directly using ID (works for all tab types including AI Dashboard)
+      await this.request(`/api/tabs/${tabId}`, { method: 'DELETE' });
+      
+      // Reload personal tabs to ensure sync (only if not in a space)
+      if (!this.activeSpace) {
+        await this.loadPersonalTabs();
+        await this.syncTabsToTabManager();
+      }
+    } catch {
       // Ignore errors - tab might already be deleted
     }
   }
@@ -353,7 +498,6 @@ class LunaIntegration {
     if (!this.token || !url) return;
     
     try {
-      console.log('Deleting tab from backend:', url);
       
       // Get all personal tabs from backend
       const { tabs } = await this.request('/api/tabs');
@@ -366,28 +510,22 @@ class LunaIntegration {
       });
       
       if (tabToDelete) {
-        console.log('Found tab to delete:', tabToDelete.id, tabToDelete.title);
         // Delete from backend
         await this.request(`/api/tabs/${tabToDelete.id}`, { method: 'DELETE' });
-        console.log('Tab deleted from backend successfully');
         
         // Reload personal tabs from backend to ensure sync
         await this.loadPersonalTabs();
-      } else {
-        console.log('Tab not found in backend for URL:', url);
       }
-    } catch (err) {
-      console.error('Failed to delete tab from backend:', err);
+    } catch {
+      // Ignore errors
     }
   }
 
   async syncTabsToTabManager() {
     // Si hay un espacio activo, no cargar tabs personales en TabManager
-    // Los tabs personales se mantienen en el sidebar, pero TabManager muestra los tabs del espacio
     if (this.activeSpace) return;
     
     if (!window.tabManager || !this.token) {
-      // Si no hay token, limpiar tabs (no mostrar /new)
       if (window.tabManager) {
         window.tabManager.tabs = [];
         window.tabManager.nextId = 1;
@@ -396,117 +534,98 @@ class LunaIntegration {
       return;
     }
     
-    // Cargar tabs personales del backend en TabManager al inicio
-    const tabManagerTabs = window.tabManager.tabs || [];
+    // CRÍTICO: this.personalTabs ya está ordenado por position (de loadPersonalTabs)
+    // Solo necesitamos mantener ese orden exacto al sincronizar con TabManager
     
-    // Si hay tabs del backend, SIEMPRE reemplazar el tab /new inicial
-    if (this.personalTabs.length > 0) {
-      // Reemplazar todos los tabs (incluido el /new inicial) con los tabs del backend
-      window.tabManager.tabs = [];
-      window.tabManager.nextId = 1;
+    const tabManagerTabs = window.tabManager.tabs || [];
+    const currentlyActiveTab = tabManagerTabs.find(t => t.active);
+    const activeTabUrl = currentlyActiveTab ? this.normalizeUrl(currentlyActiveTab.url || '') : null;
+    
+    // Crear mapa de tabs existentes por URL (para reutilizar objetos existentes)
+    const existingTabsMap = new Map();
+    for (const t of tabManagerTabs) {
+      const tUrl = t.url || '';
+      if (tUrl && tUrl !== '/new' && tUrl !== 'tabs://new' && !t.spaceId) {
+        existingTabsMap.set(this.normalizeUrl(tUrl), t);
+      }
+    }
+    
+    // Reconstruir array en el MISMO orden que this.personalTabs (ya ordenado por position)
+    const newTabs = [];
+    for (const backendTab of this.personalTabs) {
+      const url = backendTab.url || backendTab.bookmark_url;
+      if (!url) continue;
       
-      for (let i = 0; i < this.personalTabs.length; i++) {
-        const backendTab = this.personalTabs[i];
-        const url = backendTab.url || backendTab.bookmark_url;
-        if (!url) continue;
-        
-        const tab = {
+      const normalizedUrl = this.normalizeUrl(url);
+      let tab = existingTabsMap.get(normalizedUrl);
+      
+      if (tab) {
+        // Tab existente: actualizar datos pero mantener el objeto
+        tab.title = backendTab.title || null;
+        tab.avatar_emoji = backendTab.avatar_emoji;
+        tab.avatar_color = backendTab.avatar_color;
+        tab.avatar_photo = backendTab.avatar_photo;
+        tab.backendId = backendTab.id;
+        tab.active = activeTabUrl === normalizedUrl;
+        // Preserve or set timestamps for memory management
+        if (!tab.createdAt && backendTab.created_at) {
+          tab.createdAt = new Date(backendTab.created_at).getTime();
+        }
+        if (!tab.lastAccessed) {
+          tab.lastAccessed = backendTab.updated_at ? new Date(backendTab.updated_at).getTime() : Date.now();
+        }
+      } else {
+        // Nuevo tab: crear nuevo objeto
+        tab = {
           id: window.tabManager.nextId++,
-          title: backendTab.title || 'Untitled',
+          title: backendTab.title || null,
           url: url,
-          active: i === 0, // Activate first tab from backend
+          active: false,
           justAdded: false,
-          // Include avatar info from backend
           avatar_emoji: backendTab.avatar_emoji,
           avatar_color: backendTab.avatar_color,
           avatar_photo: backendTab.avatar_photo,
-          backendId: backendTab.id // Store backend ID for reference
+          backendId: backendTab.id,
+          createdAt: backendTab.created_at ? new Date(backendTab.created_at).getTime() : Date.now(),
+          lastAccessed: backendTab.updated_at ? new Date(backendTab.updated_at).getTime() : Date.now()
         };
-        
-        window.tabManager.tabs.push(tab);
       }
       
-      // Render and create iframes
-      if (window.tabManager.render) {
-        window.tabManager.render();
-      }
-      
-      if (window.tabManager.createIframes) {
-        window.tabManager.createIframes();
-      }
-      
-      if (window.tabManager.showActive) {
-        window.tabManager.showActive();
-      }
-      
-      return;
+      // Agregar en el orden exacto de this.personalTabs (que ya está ordenado por position)
+      newTabs.push(tab);
     }
     
-    // Si no hay tabs del backend pero hay tabs cargados (excepto el /new inicial), sincronizar
-    const alreadyLoaded = tabManagerTabs.length > 1 || 
-      (tabManagerTabs.length === 1 && 
-       tabManagerTabs[0].url !== '/new' && 
-       tabManagerTabs[0].url !== 'tabs://new');
-    
-    if (alreadyLoaded) {
-      // Ya hay tabs cargados - sincronizar: eliminar tabs que no están en backend, agregar los que faltan
-      const backendUrls = new Set(
-        this.personalTabs
-          .map(t => {
-            const url = t.url || t.bookmark_url;
-            return url ? this.normalizeUrl(url) : null;
-          })
-          .filter(Boolean)
-      );
-      
-      // Eliminar tabs de TabManager que no están en el backend (solo tabs personales)
-      const tabsToRemove = [];
-      tabManagerTabs.forEach(t => {
-        const tUrl = t.url || '';
-        if (tUrl === '/new' || tUrl === 'tabs://new' || t.spaceId) return; // No eliminar New Tab ni tabs de espacios
-        const normalizedUrl = this.normalizeUrl(tUrl);
-        if (!backendUrls.has(normalizedUrl)) {
-          tabsToRemove.push(t.id);
-        }
-      });
-      
-      // Cerrar tabs que no están en backend (en orden inverso para evitar problemas con índices)
-      tabsToRemove.reverse().forEach(id => {
-        if (window.tabManager.tabs.length > 1) {
-          window.tabManager.close(id);
-        }
-      });
-      
-      // Agregar tabs del backend que no están en TabManager
-      this.personalTabs.forEach(backendTab => {
-        const url = backendTab.url || backendTab.bookmark_url;
-        if (!url) return;
-        
-        const normalizedUrl = this.normalizeUrl(url);
-        const exists = tabManagerTabs.some(t => {
-          const tUrl = t.url || '';
-          if (!tUrl || tUrl === '/new' || tUrl === 'tabs://new') return false;
-          return this.normalizeUrl(tUrl) === normalizedUrl;
-        });
-        
-        if (!exists) {
-          const tab = {
-            id: window.tabManager.nextId++,
-            title: backendTab.title || 'Untitled',
-            url: url,
-            active: false,
-            justAdded: false,
-            // Include avatar info from backend
-            avatar_emoji: backendTab.avatar_emoji,
-            avatar_color: backendTab.avatar_color,
-            avatar_photo: backendTab.avatar_photo,
-            backendId: backendTab.id // Store backend ID for reference
-          };
-          window.tabManager.tabs.push(tab);
-        }
-      });
+    // Si no hay tab activo, activar el primero
+    let shouldActivateFirst = false;
+    let firstTabId = null;
+    if (newTabs.length > 0 && !newTabs.some(t => t.active)) {
+      newTabs[0].active = true;
+      shouldActivateFirst = true;
+      firstTabId = newTabs[0].id;
     }
-    // Si no hay tabs del backend, dejar el tab /new inicial como está
+    
+    // Reemplazar array completo
+    window.tabManager.tabs = newTabs;
+    
+    // Renderizar
+    if (window.tabManager.render) window.tabManager.render();
+    if (window.tabManager.createIframes) window.tabManager.createIframes();
+    if (window.tabManager.showActive) window.tabManager.showActive();
+    
+    // Si activamos el primer tab, llamar a activate() para cargar su URL automáticamente
+    if (shouldActivateFirst && firstTabId && window.tabManager && window.tabManager.activate) {
+      // Usar setTimeout para asegurar que createIframes haya terminado y el DOM esté listo
+      setTimeout(() => {
+        // Forzar la activación incluso si ya está marcado como activo
+        const tab = window.tabManager.tabs.find(t => t.id === firstTabId);
+        if (tab) {
+          // Asegurar que el tab esté activo
+          window.tabManager.tabs.forEach((t) => (t.active = t.id === firstTabId));
+          // Llamar a activate con forceLoad=true para asegurar que se carga la URL
+          window.tabManager.activate(firstTabId, true);
+        }
+      }, 200);
+    }
   }
 
   async loadProjects() {
@@ -516,14 +635,61 @@ class LunaIntegration {
       const { spaces } = await this.request('/api/spaces?category=project');
       this.projects = spaces || [];
       
-      
       this.renderProjects();
+      
+      // Crear tabs Dashboard faltantes para proyectos existentes
+      this.createMissingDashboardTabs();
     } catch (err) {
       console.error('Failed to load projects:', err);
       const container = document.getElementById('projects-cont');
       if (container) {
         container.innerHTML = '<div class="text-xs text-red-400 px-2 py-1">Error loading projects</div>';
       }
+    }
+  }
+
+  async createMissingDashboardTabs() {
+    if (!this.token) return;
+    
+    // Solo ejecutar una vez - usar localStorage para trackear
+    const hasRun = localStorage.getItem('dashboard_tabs_created');
+    if (hasRun) return; // Ya se ejecutó antes
+    
+    try {
+      // Para cada proyecto que tenga notion_page_url
+      for (const project of this.projects) {
+        if (!project.notion_page_url) continue;
+        
+        try {
+          // Verificar si ya tiene un tab Dashboard
+          const { tabs } = await this.request(`/api/spaces/${project.id}`);
+          const hasDashboard = tabs && tabs.some(t => 
+            t.title === 'Dashboard' && 
+            (t.url === project.notion_page_url || t.bookmark_url === project.notion_page_url)
+          );
+          
+          // Si no tiene Dashboard, crearlo
+          if (!hasDashboard) {
+            await this.request('/api/tabs', {
+              method: 'POST',
+              body: JSON.stringify({
+                url: project.notion_page_url,
+                title: 'Dashboard',
+                type: 'browser',
+                space_id: project.id
+              })
+            });
+          }
+        } catch (err) {
+          // Continuar con el siguiente proyecto si hay error
+          continue;
+        }
+      }
+      
+      // Marcar como ejecutado
+      localStorage.setItem('dashboard_tabs_created', 'true');
+    } catch (err) {
+      // Ignore errors
     }
   }
 
@@ -589,12 +755,10 @@ class LunaIntegration {
     if (existingTab) {
       // Tab existe - solo activarlo
       window.tabManager.activate(existingTab.id);
-    } else {
-      console.warn('Tab not found in TabManager:', url, 'This should not happen if tabs are synced');
     }
   }
 
-  async saveTabToBackend(tab, existingTabId) {
+  async saveTabToBackend() {
     // NO guardar tabs automáticamente en el backend
     // Los tabs solo se guardan cuando el usuario explícitamente los crea como bookmarks
     // Esto previene duplicados
@@ -624,10 +788,11 @@ class LunaIntegration {
     // Create modal HTML - exactly like luna-chat
     const modal = document.createElement('div');
     modal.id = 'new-tab-modal';
-    modal.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center';
+    modal.className = 'fixed inset-0 bg-[#000000]/30 flex items-center justify-center';
     modal.style.zIndex = '9999'; // Ensure it's on top of everything
+    modal.style.backdropFilter = 'blur(4px)';
     modal.innerHTML = `
-      <div class="bg-[#f5f7fa] border border-[#e8eaed] rounded-lg shadow-xl w-full max-w-md">
+      <div class="bg-white border border-[#e8eaed] rounded-xl shadow-2xl w-full max-w-md">
         <!-- Header -->
         <div class="flex items-center justify-between px-4 py-3 border-b border-[#e8eaed]">
           <h2 id="modal-title" class="text-lg font-semibold text-[#202124]">Create New Tab</h2>
@@ -660,7 +825,7 @@ class LunaIntegration {
       const modalTitle = modal.querySelector('#modal-title');
       
       if (!modalBody || !modalTitle) {
-        console.error('Modal elements not found');
+        // Modal elements not found - return silently
         return;
       }
 
@@ -771,8 +936,9 @@ class LunaIntegration {
           }
 
           createBtn.addEventListener('click', async () => {
-            if (!title.trim() || !url.trim()) return;
-            await this.createNewTab({ type: 'browser', title: title.trim(), url: url.trim() });
+            if (!url.trim()) return;
+            // Si title está vacío, enviar null (el backend usará la URL como título por defecto)
+            await this.createNewTab({ type: 'browser', title: title.trim() || null, url: url.trim() });
             this.closeModal(modal);
           });
         }
@@ -861,31 +1027,61 @@ class LunaIntegration {
 
   async createNewTab(tabData) {
     try {
+      // El space_id debe venir explícitamente en tabData
+      // Si no viene, es un tab personal (null)
+      const spaceId = tabData.space_id !== undefined ? tabData.space_id : null;
+      
+      // Preparar el request body
+      const requestBody = {
+        url: tabData.type === 'ai-dashboard' ? `doge://ai-dashboard/${Date.now()}` : tabData.url,
+        type: tabData.type || 'browser',
+        space_id: spaceId
+      };
+      
+      // Solo incluir title si tiene valor (si no, el backend usará URL como título)
+      if (tabData.title && tabData.title.trim()) {
+        requestBody.title = tabData.title.trim();
+      }
+      
       // Create tab in backend
       const { tab } = await this.request('/api/tabs', {
         method: 'POST',
-        body: JSON.stringify({
-          title: tabData.title,
-          url: tabData.type === 'ai-dashboard' ? `doge://ai-dashboard/${Date.now()}` : tabData.url,
-          type: tabData.type || 'browser'
-          // Note: metadata can be stored in a separate table later if needed
-          // For now, the prompt can be retrieved from the tab's metadata field if we add it to the schema
-        })
+        body: JSON.stringify(requestBody)
       });
 
-      // Reload personal tabs to include the new one
-      await this.loadPersonalTabs();
-      
-      // Open the new tab in TabManager
-      if (window.tabManager && this.personalTabs.length > 0) {
-        const newTab = this.personalTabs.find(t => t.id === tab.id);
-        if (newTab) {
-          await this.openTab(newTab);
+      // Recargar tabs según el contexto
+      if (this.activeSpace) {
+        // Si estamos en un espacio, recargar los tabs del espacio
+        const { tabs } = await this.request(`/api/spaces/${this.activeSpace.id}`);
+        this.spaceTabs = tabs || [];
+        this.renderTopBar();
+        // Abrir el nuevo tab
+        const spaceTab = this.spaceTabs.find(t => t.id === tab.id);
+        if (spaceTab) {
+          await this.selectSpaceTab(spaceTab);
+        }
+      } else {
+        // Reload personal tabs to include the new one
+        await this.loadPersonalTabs();
+        
+        // Open the new tab in TabManager
+        if (window.tabManager && this.personalTabs.length > 0) {
+          const newTab = this.personalTabs.find(t => t.id === tab.id);
+          if (newTab) {
+            await this.openTab(newTab);
+          }
         }
       }
     } catch (err) {
       console.error('Failed to create tab:', err);
-      alert('Failed to create tab');
+      
+      // Try to get more details from the error response
+      let errorMsg = err.message || 'Unknown error';
+      if (err.details) {
+        errorMsg += ': ' + err.details;
+      }
+      
+      alert('Failed to create tab: ' + errorMsg);
     }
   }
 
@@ -904,27 +1100,88 @@ class LunaIntegration {
   }
 
   async loadSpace(space) {
+    // NO cerrar tabs - los tabs se mantienen abiertos como en un browser normal
+    // Solo cambiar qué espacio está activo y qué se muestra en TopBar vs sidebar
+    
     this.activeSpace = space;
     this.renderProjects();
     this.renderUsers();
 
-    // Load tabs for this space - NO cambiar TabManager, solo mostrar en TopBar
-    try {
-      const { tabs } = await this.request(`/api/spaces/${space.id}`);
-      this.spaceTabs = tabs || [];
-      this.renderTopBar();
+      // Load tabs for this space - NO cambiar TabManager, solo mostrar en TopBar
+      try {
+        const { tabs } = await this.request(`/api/spaces/${space.id}`);
+        // Sort tabs by position to ensure correct order
+        this.spaceTabs = (tabs || []).sort((a, b) => (a.position || 0) - (b.position || 0));
+        this.renderTopBar();
       
       // Actualizar sidebar para filtrar tabs del espacio
       if (window.tabManager && window.tabManager.render) {
         window.tabManager.render();
       }
       
-      // Automáticamente abrir el primer tab del espacio
-      if (this.spaceTabs.length > 0) {
-        const firstTab = this.spaceTabs[0];
-        setTimeout(() => {
-          this.selectSpaceTab(firstTab);
-        }, 150);
+      // Cargar tabs del espacio en TabManager si no están ya cargados
+      // Esto asegura que cuando regresas a un proyecto, los tabs que creaste sigan ahí
+      if (this.spaceTabs && this.spaceTabs.length > 0 && window.tabManager) {
+        const spaceTabUrls = new Set(
+          this.spaceTabs.map(t => {
+            const url = t.url || t.bookmark_url;
+            return url ? this.normalizeUrl(url) : null;
+          }).filter(Boolean)
+        );
+        
+        // Cargar tabs del espacio que no están en TabManager
+        for (const spaceTab of this.spaceTabs) {
+          const url = spaceTab.url || spaceTab.bookmark_url;
+          if (!url) continue;
+          
+          const normalizedUrl = this.normalizeUrl(url);
+          const exists = window.tabManager.tabs.some(t => {
+            const tUrl = t.url || '';
+            if (!tUrl || tUrl === '/new' || tUrl === 'tabs://new') return false;
+            return this.normalizeUrl(tUrl) === normalizedUrl;
+          });
+          
+          if (!exists) {
+            // Tab no está en TabManager - agregarlo
+            const newTab = {
+              id: window.tabManager.nextId++,
+              url: url,
+              title: spaceTab.title || null,
+              active: false,
+              favicon: spaceTab.favicon || null,
+              backendId: spaceTab.id,
+              avatar_emoji: spaceTab.avatar_emoji || null,
+              avatar_color: spaceTab.avatar_color || null,
+              avatar_photo: spaceTab.avatar_photo || null,
+              cookie_container_id: spaceTab.cookie_container_id || 'default',
+              spaceId: space.id
+            };
+            window.tabManager.tabs.push(newTab);
+          }
+        }
+        
+        // Buscar si hay algún tab activo del espacio en TabManager
+        const activeSpaceTab = window.tabManager.tabs.find(t => {
+          if (!t.active) return false;
+          const tUrl = t.url || '';
+          if (!tUrl || tUrl === '/new' || tUrl === 'tabs://new') return false;
+          return spaceTabUrls.has(this.normalizeUrl(tUrl));
+        });
+        
+        if (activeSpaceTab) {
+          // Ya hay un tab activo del espacio - no hacer nada
+        } else {
+          // No hay tab activo - abrir el primer tab del espacio (según position)
+          const firstTab = this.spaceTabs[0];
+          if (firstTab) {
+            await this.selectSpaceTab(firstTab);
+          }
+        }
+        
+        // Renderizar para mostrar los tabs cargados
+        if (window.tabManager.render) {
+          window.tabManager.render();
+        }
       }
     } catch (err) {
       console.error('Failed to load space tabs:', err);
@@ -941,6 +1198,7 @@ class LunaIntegration {
     if (!this.activeSpace) {
       // Hide TopBar when no space is active
       topbarSpace.classList.add('hidden');
+      topbarSpace.style.display = 'none';
       return;
     }
 
@@ -955,110 +1213,194 @@ class LunaIntegration {
       return;
     }
 
-    const tabManagerTabs = window.tabManager?.tabs || [];
-    const activeTab = tabManagerTabs.find(t => t.active);
-
     topbarTabsCont.innerHTML = '';
+
+    // USAR EXACTAMENTE LOS MISMOS TABS DE TabManager - CÓDIGO ÚNICO
+    // Los tabs del TopBar son EXACTAMENTE los mismos que están en TabManager
+    // Solo filtramos los que pertenecen al espacio activo
+    const spaceTabUrls = new Set(
+      this.spaceTabs.map(t => {
+        const url = t.url || t.bookmark_url;
+        return url ? this.normalizeUrl(url) : null;
+      }).filter(Boolean)
+    );
+
+    // Filtrar tabs de TabManager que pertenecen a este espacio
+    let spaceTabsInTabManager = (window.tabManager?.tabs || []).filter(t => {
+      const tUrl = t.url || '';
+      if (!tUrl || tUrl === '/new' || tUrl === 'tabs://new') return false;
+      return spaceTabUrls.has(this.normalizeUrl(tUrl));
+    });
     
-    const showClose = this.spaceTabs.length > 1; // Mostrar X si hay más de 1 tab
+    // Ordenar según el orden del backend (position) - mapear cada tab de TabManager con su backend tab
+    spaceTabsInTabManager = spaceTabsInTabManager.sort((a, b) => {
+      const backendTabA = this.spaceTabs.find(t => {
+        const url = t.url || t.bookmark_url;
+        return url && this.normalizeUrl(url) === this.normalizeUrl(a.url || '');
+      });
+      const backendTabB = this.spaceTabs.find(t => {
+        const url = t.url || t.bookmark_url;
+        return url && this.normalizeUrl(url) === this.normalizeUrl(b.url || '');
+      });
+      
+      const positionA = backendTabA?.position || 0;
+      const positionB = backendTabB?.position || 0;
+      return positionA - positionB;
+    });
 
-    this.spaceTabs.forEach(tab => {
-      const tabUrl = tab.url || '';
-      const isChat = tabUrl.startsWith('luna://chat/') || tabUrl.startsWith('doge://chat/');
-      const isActive = activeTab && this.normalizeUrl(activeTab.url || '') === this.normalizeUrl(tabUrl);
-
-      // TopBar estilo LUNA - horizontal como tabs del navegador
-      const tabEl = document.createElement('div');
-      tabEl.className = `tab-item group relative flex items-center gap-2 px-3 py-1.5 rounded-t-md cursor-pointer transition-all shrink-0 border-b-2 ${
-        isActive
-          ? 'bg-white border-[#4285f4] text-[#4285f4] font-medium'
-          : 'bg-transparent border-transparent text-[#5f6368] hover:bg-[#f5f7fa] hover:text-[#202124]'
-      }`;
-      tabEl.dataset.spaceTabId = tab.id;
+    // USAR EXACTAMENTE EL MISMO tabTemplate - CÓDIGO ÚNICO
+    // Estos son los MISMOS objetos de TabManager, solo cambia isTopBar=true
+    spaceTabsInTabManager.forEach(tabManagerTab => {
+      // USAR EL OBJETO REAL DE TabManager - NO CREAR COPIA
+      const tabHtml = window.tabManager.tabTemplate(tabManagerTab, true, true); // showMenu=true, isTopBar=true
+      
+      const tabWrapper = document.createElement('div');
+      tabWrapper.innerHTML = tabHtml;
+      const tabEl = tabWrapper.firstElementChild;
+      
+      // Buscar el tab del backend correspondiente para los handlers
+      const backendTab = this.spaceTabs.find(t => {
+        const url = t.url || t.bookmark_url;
+        if (!url) return false;
+        return this.normalizeUrl(url) === this.normalizeUrl(tabManagerTab.url || '');
+      });
+      
+      // Agregar data-sortable-id para drag & drop (usar backendId)
+      if (backendTab && tabEl) {
+        tabEl.setAttribute('data-sortable-id', backendTab.id);
+      }
+      
+      // Event handlers
       tabEl.onclick = (e) => {
-        if (!e.target.closest('.close-space-tab')) {
-          this.selectSpaceTab(tab);
+        // Don't trigger tab selection if clicking menu button or menu itself
+        if (!e.target.closest('.tab-menu-btn') && !e.target.closest('.tab-menu-dropdown')) {
+          if (backendTab) {
+            this.selectSpaceTab(backendTab);
+          } else {
+            // Si no hay backendTab, activar directamente el tab de TabManager
+            window.tabManager?.activate(tabManagerTab.id);
+          }
         }
       };
 
-      // Icon/Avatar - EXACTAMENTE igual a tabs externos (mismo estilo)
-      let iconHtml = '';
-      let hasFavicon = false;
-      // Solo intentar obtener favicon para URLs válidas y normales
-      if (!isChat && tabUrl && !tabUrl.startsWith('luna://') && !tabUrl.startsWith('doge://') && !tabUrl.startsWith('tabs://')) {
-        try {
-          const urlObj = new URL(tabUrl);
-          // Solo obtener favicon si la URL es válida (http/https)
-          if (urlObj.protocol === 'http:' || urlObj.protocol === 'https:') {
-            iconHtml = `<img src="https://www.google.com/s2/favicons?domain=${urlObj.hostname}&sz=32" alt="" class="w-4 h-4 object-contain" onerror="this.style.display='none'; if(this.nextElementSibling) this.nextElementSibling.style.display='block';" />`;
-            hasFavicon = true;
-          }
-        } catch (e) {
-          // URL inválida, no intentar obtener favicon
-        }
-      }
-      
-      if (isChat) {
-        iconHtml = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0 text-[#4285f4]"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`;
-      } else if (!hasFavicon) {
-        if (tab.avatar_photo) {
-          iconHtml = `<img src="${tab.avatar_photo}" alt="" class="w-full h-full rounded-full object-cover" />`;
-        } else if (tab.avatar_emoji) {
-          iconHtml = `<span class="text-sm">${tab.avatar_emoji}</span>`;
-        } else {
-          iconHtml = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="flex-shrink-0"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="9" x2="15" y1="15" y2="15"/></svg>`;
-        }
-      }
-
-      // Contenedor de icono - estilo TopBar horizontal (más pequeño)
-      const iconContainer = document.createElement('div');
-      if (isChat) {
-        iconContainer.className = 'shrink-0';
-        iconContainer.innerHTML = iconHtml;
-      } else {
-        iconContainer.className = 'w-4 h-4 rounded-full flex items-center justify-center flex-shrink-0 border border-[#e8eaed]';
-        iconContainer.style.border = `1px solid ${tab.avatar_color || '#e8eaed'}`;
-        iconContainer.style.color = tab.avatar_color || '#6b7280';
-        iconContainer.innerHTML = iconHtml;
-      }
-
-      const titleSpan = document.createElement('span');
-      titleSpan.className = 'text-xs truncate max-w-[120px]';
-      titleSpan.textContent = tab.title;
-
-      tabEl.appendChild(iconContainer);
-      tabEl.appendChild(titleSpan);
-
-      // Close button - estilo TopBar (más pequeño)
-      if (showClose && !isChat) {
-        const closeBtn = document.createElement('button');
-        closeBtn.className = 'close-space-tab shrink-0 ml-1 w-4 h-4 flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-[#e8eaed] rounded transition-opacity';
-        closeBtn.dataset.spaceTabId = tab.id;
-        closeBtn.innerHTML = '<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>';
-        closeBtn.onclick = (e) => {
+      // Menu button handler (3 dots) - EXACTAMENTE EL MISMO CÓDIGO QUE SIDEBAR
+      // Usar el mismo handler que el sidebar para garantizar comportamiento idéntico
+      const menuBtn = tabEl.querySelector('.tab-menu-btn');
+      if (menuBtn) {
+        // Si tiene backendId, obtener datos actualizados del backend (igual que sidebar)
+        menuBtn.onclick = async (e) => {
           e.stopPropagation();
-          this.deleteSpaceTab(tab.id);
+          
+          // Si el tab tiene backendId, obtener datos actualizados del backend
+          if (tabManagerTab.backendId) {
+            try {
+              const response = await this.request(`/api/tabs/${tabManagerTab.backendId}`);
+              // Asegurar que el tab del backend tenga space_id correcto
+              if (!response.tab.space_id && this.activeSpace) {
+                response.tab.space_id = this.activeSpace.id;
+              }
+              this.showTabMenu(e, response.tab);
+            } catch {
+              // Si falla, usar datos del tab actual
+              // IMPORTANTE: Incluir space_id del backendTab o del activeSpace
+              const fallbackTab = {
+                id: tabManagerTab.backendId,
+                title: tabManagerTab.title,
+                url: tabManagerTab.url,
+                bookmark_url: tabManagerTab.url,
+                avatar_emoji: tabManagerTab.avatar_emoji,
+                avatar_color: tabManagerTab.avatar_color,
+                avatar_photo: tabManagerTab.avatar_photo,
+                cookie_container_id: tabManagerTab.cookie_container_id,
+                space_id: backendTab?.space_id || (this.activeSpace?.id || null) // CRÍTICO: Incluir space_id
+              };
+              this.showTabMenu(e, fallbackTab);
+            }
+          } else if (backendTab) {
+            // Si hay backendTab pero no backendId, usar backendTab directamente
+            this.showTabMenu(e, backendTab);
+          } else {
+            // Tab sin backendId (tab nuevo o local) - crear objeto temporal
+            const tempTab = {
+              id: null,
+              title: tabManagerTab.title,
+              url: tabManagerTab.url,
+              bookmark_url: tabManagerTab.url,
+              avatar_emoji: tabManagerTab.avatar_emoji,
+              avatar_color: tabManagerTab.avatar_color,
+              avatar_photo: tabManagerTab.avatar_photo,
+              cookie_container_id: tabManagerTab.cookie_container_id
+            };
+            this.showTabMenu(e, tempTab);
+          }
         };
-        tabEl.appendChild(closeBtn);
       }
 
       topbarTabsCont.appendChild(tabEl);
     });
 
-    // Add tab button - estilo TopBar
+    // Setup drag and drop for TopBar tabs
+    setTimeout(() => {
+      this.setupDragAndDrop('topbar-tabs-cont', this.spaceTabs, false, async ({ draggedId, targetId, position }) => {
+          try {
+            const oldIndex = this.spaceTabs.findIndex(t => t.id === draggedId);
+            const newIndex = this.spaceTabs.findIndex(t => t.id === targetId);
+            
+            // Calcular finalIndex ANTES de remover el elemento
+            let finalIndex = newIndex;
+            if (position === 'after') {
+              finalIndex = newIndex + 1;
+            }
+            
+            // OPTIMISTIC UI: Actualizar inmediatamente
+            const newTabs = [...this.spaceTabs];
+            const [dragged] = newTabs.splice(oldIndex, 1);
+            
+            // Ajustar finalIndex si removimos un elemento antes de la posición objetivo
+            if (oldIndex < finalIndex) {
+              finalIndex -= 1;
+            }
+            
+            newTabs.splice(finalIndex, 0, dragged);
+          
+          // Actualizar posiciones localmente
+          for (let index = 0; index < newTabs.length; index++) {
+            newTabs[index].position = index;
+          }
+          
+          // Actualizar estado y renderizar INMEDIATAMENTE
+          this.spaceTabs = newTabs;
+          this.renderTopBar();
+          
+          // Llamar al backend en segundo plano (sin await para no bloquear)
+          const updates = newTabs.map((tab, index) => ({ id: tab.id, position: index }));
+          
+          this.request('/api/tabs/reorder', {
+            method: 'POST',
+            body: JSON.stringify({ updates })
+          }).catch(err => {
+                  // Si falla, recargar desde el backend
+            this.request(`/api/spaces/${this.activeSpace.id}`).then(({ tabs }) => {
+              this.spaceTabs = (tabs || []).sort((a, b) => (a.position || 0) - (b.position || 0));
+              this.renderTopBar();
+            }).catch(() => {});
+          });
+        } catch {
+          // Ignore errors
+        }
+      });
+    }, 150);
+
+    // Add tab button - estilo TopBar (SVG directo para evitar problemas de lucide)
     const addBtn = document.createElement('button');
-    addBtn.className = 'ml-1 px-2 py-1 text-[#5f6368] hover:text-[#202124] hover:bg-[#e8eaed] rounded transition-colors shrink-0';
-    addBtn.innerHTML = '<i data-lucide="plus" class="w-3.5 h-3.5"></i>';
+    addBtn.className = 'ml-1 px-2 py-1 text-[#5f6368] hover:text-[#202124] hover:bg-[#e8eaed] rounded transition-colors shrink-0 flex items-center justify-center';
+    addBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>';
     addBtn.title = 'Add tab';
     addBtn.onclick = () => this.addSpaceTab();
     topbarTabsCont.appendChild(addBtn);
-    
-    // Setup close space button
-    const closeSpaceBtn = document.getElementById('close-space-btn');
-    if (closeSpaceBtn) {
-      closeSpaceBtn.onclick = () => this.clearActiveSpace();
-    }
   }
+
+  // Esta función ya no es necesaria - usamos tabTemplate de TabManager directamente
 
   selectSpaceTab(tab) {
     // Los tabs son los MISMOS - si ya existe uno con esta URL, activarlo (no crear duplicado)
@@ -1071,61 +1413,88 @@ class LunaIntegration {
     const tabManagerTabs = window.tabManager.tabs || [];
     
     // Buscar si el tab ya está abierto en TabManager (es el MISMO tab)
+    // IMPORTANTE: Excluir tabs con /new o tabs://new (estos son tabs "nuevos" no inicializados)
     const existingTab = tabManagerTabs.find(t => {
       const tUrl = t.url || '';
       if (!tUrl || tUrl === '/new' || tUrl === 'tabs://new') return false;
+      // Comparar URLs normalizadas
       return this.normalizeUrl(tUrl) === normalizedUrl;
     });
 
     if (existingTab) {
       // Tab ya existe - solo activarlo (es el MISMO tab)
       window.tabManager.activate(existingTab.id);
-      // Si es chat, asegurar que esté inicializado
-      if (this.isChatUrl(url) && window.lunaIntegration) {
+      // Si es chat, asegurar que esté inicializado INMEDIATAMENTE
+      if (this.isChatUrl(url)) {
         const spaceId = url.split('/').pop();
         const chatContainer = document.getElementById(`chat-${existingTab.id}`);
-        if (chatContainer && !chatContainer.querySelector('.chat-container')) {
-          window.lunaIntegration.initChat(existingTab.id, spaceId);
+        if (chatContainer) {
+          // Inicializar chat inmediatamente si no está inicializado
+          if (!chatContainer.querySelector('.chat-container')) {
+            this.initChat(existingTab.id, spaceId);
+          }
+        } else {
+          // Si el container no existe, crearlo e inicializar
+          window.tabManager.createIframes();
+          const newChatContainer = document.getElementById(`chat-${existingTab.id}`);
+          if (newChatContainer) {
+            this.initChat(existingTab.id, spaceId);
+          }
         }
       }
     } else {
-      // Tab no existe - agregarlo (es un tab nuevo)
-      window.tabManager.add();
-      setTimeout(() => {
-        const newTab = window.tabManager.tabs[window.tabManager.tabs.length - 1];
-        if (newTab) {
-          // Establecer URL y título directamente
-          newTab.url = url;
-          newTab.title = tab.title || 'Untitled';
-          // NO marcar con spaceId - son los mismos tabs
-          
-          // Crear contenedor apropiado (chat, dashboard, o iframe)
-          if (window.tabManager.isChatUrl && window.tabManager.isChatUrl(url)) {
-            // Chat - se creará automáticamente en createIframes
-            window.tabManager.createIframes();
-            const spaceId = url.split('/').pop();
-            setTimeout(() => {
-              if (window.lunaIntegration) {
-                window.lunaIntegration.initChat(newTab.id, spaceId);
-              }
-            }, 100);
-          } else if (window.tabManager.isSpecialUrl && window.tabManager.isSpecialUrl(url)) {
-            // Dashboard u otro tipo especial
-            window.tabManager.createIframes();
-          } else {
-            // URL normal - usar updateUrl
-            if (window.tabManager.updateUrl) {
-              window.tabManager.updateUrl(url);
-            }
-          }
-          
-          // Renderizar
-          if (window.tabManager.render) {
-            window.tabManager.render();
-          }
-          window.tabManager.showActive();
+      // Tab no existe - crear nuevo tab directamente con la URL correcta
+      // NO usar add() porque crea un tab con /new por defecto
+      // En su lugar, crear tab directamente en TabManager
+      const newTab = {
+        id: window.tabManager.nextId++,
+        url: url,
+        title: tab.title || null,
+        active: true,
+        favicon: tab.favicon || null,
+        backendId: tab.id, // Guardar el ID del backend para referencia
+        avatar_emoji: tab.avatar_emoji || null,
+        avatar_color: tab.avatar_color || null,
+        avatar_photo: tab.avatar_photo || null,
+        cookie_container_id: tab.cookie_container_id || 'default',
+        spaceId: tab.space_id || null // Guardar space_id para identificar tabs del espacio
+      };
+      
+      // Desactivar todos los tabs existentes
+      window.tabManager.tabs.forEach(t => t.active = false);
+      
+      window.tabManager.tabs.push(newTab);
+      
+      // Crear contenedor apropiado (chat, dashboard, o iframe)
+      if (window.tabManager.isChatUrl && window.tabManager.isChatUrl(url)) {
+        // Chat - crear e inicializar INMEDIATAMENTE sin delay
+        window.tabManager.createIframes();
+        const spaceId = url.split('/').pop();
+        // Inicializar inmediatamente sin setTimeout
+        const chatContainer = document.getElementById(`chat-${newTab.id}`);
+        if (chatContainer) {
+          this.initChat(newTab.id, spaceId);
         }
-      }, 100);
+      } else if (window.tabManager.isSpecialUrl && window.tabManager.isSpecialUrl(url)) {
+        // Dashboard u otro tipo especial
+        window.tabManager.createIframes();
+      } else {
+        // URL normal - usar navigate para cargar correctamente
+        if (window.tabManager.navigate) {
+          window.tabManager.navigate(url);
+        } else if (window.tabManager.updateUrl) {
+          window.tabManager.updateUrl(url);
+        }
+      }
+      
+      // Renderizar y mostrar
+      if (window.tabManager.render) {
+        window.tabManager.render();
+      }
+      window.tabManager.showActive();
+      if (window.tabManager.track) {
+        window.tabManager.track(newTab.id);
+      }
     }
 
     this.renderTopBar();
@@ -1135,24 +1504,705 @@ class LunaIntegration {
     return url && (url.startsWith('luna://chat/') || url.startsWith('doge://chat/'));
   }
 
-  async deleteSpaceTab(tabId) {
+  // Show 3-dots menu for TopBar tabs
+  showTabMenu(e, tab) {
+    // Close any existing menu
+    const existingMenu = document.querySelector('.tab-menu-dropdown');
+    if (existingMenu) {
+      existingMenu.remove();
+      // Remove existing listener
+      if (this.menuCloseListener) {
+        document.removeEventListener('click', this.menuCloseListener);
+        document.removeEventListener('mousedown', this.menuCloseListener);
+        window.removeEventListener('blur', this.menuCloseListener);
+      }
+    }
+
+    const isChat = tab.url?.startsWith('luna://chat/') || tab.url?.startsWith('doge://chat/');
+    const button = e.target.closest('.tab-menu-btn');
+    if (!button) return;
+
+    const rect = button.getBoundingClientRect();
+    const menu = document.createElement('div');
+    menu.className = 'tab-menu-dropdown absolute bg-white border border-[#e8eaed] rounded-lg shadow-lg py-1 z-50 min-w-[160px]';
+    menu.style.left = `${rect.left}px`;
+    menu.style.top = `${rect.bottom + 4}px`;
+
+    // Cookie containers list (hardcoded for now, can be made dynamic later)
+    const cookieContainers = [
+      { id: 'default', name: 'Default' },
+      { id: 'container1', name: 'Container 1' },
+      { id: 'container2', name: 'Container 2' },
+      { id: 'container3', name: 'Container 3' }
+    ];
+
+    menu.innerHTML = `
+      <button class="tab-menu-edit w-full flex items-center gap-2 px-3 py-2 text-sm text-[#202124] hover:bg-[#f5f7fa] transition-colors text-left" data-tab-id="${tab.id}">
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+        </svg>
+        <span>Edit</span>
+      </button>
+      <div class="relative">
+        <button class="tab-menu-container w-full flex items-center gap-2 px-3 py-2 text-sm text-[#202124] hover:bg-[#f5f7fa] transition-colors text-left" data-tab-id="${tab.id}">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+            <line x1="3" x2="21" y1="9" y2="9"></line>
+            <line x1="9" x2="9" y1="21" y2="9"></line>
+          </svg>
+          <span>Cookie Container</span>
+          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="ml-auto">
+            <polyline points="9 18 15 12 9 6"></polyline>
+          </svg>
+        </button>
+        <div class="tab-container-submenu hidden absolute left-full top-0 ml-1 bg-white border border-[#e8eaed] rounded-lg shadow-lg py-1 min-w-[140px]">
+          ${cookieContainers.map(container => `
+            <button class="tab-container-option w-full flex items-center gap-2 px-3 py-2 text-sm text-[#202124] hover:bg-[#f5f7fa] transition-colors text-left ${tab.cookie_container_id === container.id ? 'bg-[#4285f4]/10 text-[#4285f4]' : ''}" data-tab-id="${tab.id}" data-container-id="${container.id}">
+              <span>${this.escapeHTML(container.name)}</span>
+              ${tab.cookie_container_id === container.id ? '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="ml-auto"><polyline points="20 6 9 17 4 12"></polyline></svg>' : ''}
+            </button>
+          `).join('')}
+        </div>
+      </div>
+      ${!isChat ? `
+        <button class="tab-menu-close w-full flex items-center gap-2 px-3 py-2 text-sm text-[#ef4444] hover:bg-[#fef2f2] transition-colors text-left" data-tab-id="${tab.id}">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+          <span>Close</span>
+        </button>
+      ` : ''}
+    `;
+
+    document.body.appendChild(menu);
+
+      // Event handlers
+      const editBtn = menu.querySelector('.tab-menu-edit');
+      if (editBtn) {
+        editBtn.onclick = (e) => {
+          e.stopPropagation();
+        // Cerrar submenu si existe
+        if (menu._submenuCloseHandler) {
+          document.removeEventListener('click', menu._submenuCloseHandler, true);
+        }
+        // Remover listener del contenedor de iframes si existe
+        if (menu._fcnCloseHandler) {
+          const fcnContainer = document.getElementById('fcn');
+          if (fcnContainer) {
+            fcnContainer.removeEventListener('click', menu._fcnCloseHandler, true);
+          }
+        }
+        menu.remove();
+        // Remove listener when closing
+        if (this.menuCloseListener) {
+          document.removeEventListener('click', this.menuCloseListener, true);
+          document.removeEventListener('mousedown', this.menuCloseListener, true);
+          window.removeEventListener('blur', this.menuCloseListener);
+          this.menuCloseListener = null;
+        }
+        this.showEditTabModal(tab);
+        };
+      }
+
+    const containerBtn = menu.querySelector('.tab-menu-container');
+    if (containerBtn) {
+      containerBtn.onmouseenter = () => {
+        const submenu = menu.querySelector('.tab-container-submenu');
+        if (submenu) {
+          submenu.classList.remove('hidden');
+        }
+      };
+      menu.onmouseleave = () => {
+        const submenu = menu.querySelector('.tab-container-submenu');
+        if (submenu) {
+          submenu.classList.add('hidden');
+        }
+      };
+    }
+
+    const containerOptions = menu.querySelectorAll('.tab-container-option');
+    containerOptions.forEach(option => {
+      option.onclick = async (e) => {
+        e.stopPropagation();
+        const containerId = option.dataset.containerId;
+        // Cerrar submenu si existe
+        if (menu._submenuCloseHandler) {
+          document.removeEventListener('click', menu._submenuCloseHandler, true);
+        }
+        // Remover listener del contenedor de iframes si existe
+        if (menu._fcnCloseHandler) {
+          const fcnContainer = document.getElementById('fcn');
+          if (fcnContainer) {
+            fcnContainer.removeEventListener('click', menu._fcnCloseHandler, true);
+          }
+        }
+        menu.remove();
+        // Remove listener when closing
+        if (this.menuCloseListener) {
+          document.removeEventListener('click', this.menuCloseListener, true);
+          document.removeEventListener('mousedown', this.menuCloseListener, true);
+          window.removeEventListener('blur', this.menuCloseListener);
+          this.menuCloseListener = null;
+        }
+        await this.updateTabContainer(tab.id, containerId);
+      };
+    });
+
+    const closeBtn = menu.querySelector('.tab-menu-close');
+    if (closeBtn) {
+      closeBtn.onclick = async (e) => {
+        e.stopPropagation();
+        // Cerrar submenu si existe
+        if (menu._submenuCloseHandler) {
+          document.removeEventListener('click', menu._submenuCloseHandler, true);
+        }
+        // Remover listener del contenedor de iframes si existe
+        if (menu._fcnCloseHandler) {
+          const fcnContainer = document.getElementById('fcn');
+          if (fcnContainer) {
+            fcnContainer.removeEventListener('click', menu._fcnCloseHandler, true);
+          }
+        }
+        menu.remove();
+        // Remove listener when closing
+        if (this.menuCloseListener) {
+          document.removeEventListener('click', this.menuCloseListener, true);
+          document.removeEventListener('mousedown', this.menuCloseListener, true);
+          window.removeEventListener('blur', this.menuCloseListener);
+          this.menuCloseListener = null;
+        }
+        
+        // CERRAR TAB: Funciona igual para tabs personales Y tabs de espacios
+        // Usar el MISMO código para ambos casos
+        // IMPORTANTE: Verificar space_id del tab para determinar si es tab de espacio o personal
+        const hasSpaceId = tab.space_id !== null && tab.space_id !== undefined;
+        
+        if (hasSpaceId) {
+          // Tab de espacio: usar deleteSpaceTab
+          // Pasar el objeto tab completo para evitar problemas de sincronización
+          await this.deleteSpaceTab(tab.id, tab); // Pasar tab completo como segundo parámetro
+        } else {
+          // Tab personal: cerrar desde TabManager (que ya maneja el backend)
+          if (window.tabManager) {
+            // Buscar el tab en TabManager por backendId o URL
+            const tabUrl = tab.url || tab.bookmark_url;
+            const tabManagerTab = window.tabManager.tabs.find(t => {
+              if (tab.id && t.backendId === tab.id) return true;
+              if (tabUrl) {
+                const tUrl = t.url || '';
+                if (tUrl && tUrl !== '/new' && tUrl !== 'tabs://new') {
+                  return this.normalizeUrl(tUrl) === this.normalizeUrl(tabUrl);
+                }
+              }
+              return false;
+            });
+            
+            if (tabManagerTab) {
+              // Cerrar usando TabManager.close (que ya está interceptado para manejar el backend)
+              window.tabManager.close(tabManagerTab.id);
+            } else {
+              // Si no está en TabManager, eliminar directamente del backend
+              try {
+                await this.request(`/api/tabs/${tab.id}`, { method: 'DELETE' });
+                // Recargar tabs personales
+                await this.loadPersonalTabs();
+                await this.syncTabsToTabManager();
+              } catch (err) {
+                console.error('Failed to delete personal tab:', err);
+                alert('Failed to delete tab');
+              }
+            }
+          } else {
+            // Fallback: eliminar directamente del backend
+            try {
+              await this.request(`/api/tabs/${tab.id}`, { method: 'DELETE' });
+              await this.loadPersonalTabs();
+              await this.syncTabsToTabManager();
+            } catch (err) {
+              console.error('Failed to delete personal tab:', err);
+              alert('Failed to delete tab');
+            }
+          }
+        }
+      };
+    }
+
+    // Close menu when clicking outside - mejorado para detectar clics en iframe también
+    const closeMenu = (event) => {
+      // Verificar si el clic fue fuera del menú y del botón
+      const target = event.target;
+      const clickedInsideMenu = menu.contains(target);
+      const clickedOnButton = button && button.contains(target);
+      
+      // Si se hace clic en el iframe/webview o su contenedor, también cerrar
+      const fcnContainer = document.getElementById('fcn');
+      const clickedOnIframeContainer = fcnContainer && (fcnContainer.contains(target) || target === fcnContainer);
+      const clickedOnIframe = target.tagName === 'IFRAME' || target.closest('iframe');
+      
+      // Si no se hizo clic dentro del menú ni en el botón, cerrar
+      if (!clickedInsideMenu && !clickedOnButton) {
+        // Si se hizo clic en el contenedor de iframes o en un iframe, también cerrar
+        if (clickedOnIframeContainer || clickedOnIframe) {
+          // Cerrar submenu si existe
+          if (menu._submenuCloseHandler) {
+            document.removeEventListener('click', menu._submenuCloseHandler, true);
+          }
+          menu.remove();
+          document.removeEventListener('click', closeMenu, true);
+          document.removeEventListener('mousedown', closeMenu, true);
+          window.removeEventListener('blur', closeMenu);
+          if (this.menuCloseListener) {
+            this.menuCloseListener = null;
+          }
+          return;
+        }
+        
+        // Cerrar si se hizo clic en cualquier otro lugar
+        // Cerrar submenu si existe
+        if (menu._submenuCloseHandler) {
+          document.removeEventListener('click', menu._submenuCloseHandler, true);
+        }
+        menu.remove();
+        document.removeEventListener('click', closeMenu, true);
+        document.removeEventListener('mousedown', closeMenu, true);
+        window.removeEventListener('blur', closeMenu);
+        if (this.menuCloseListener) {
+          this.menuCloseListener = null;
+        }
+      }
+    };
+    
+    // Guardar referencia para poder removerla después
+    this.menuCloseListener = closeMenu;
+    
+    // Usar múltiples eventos para mejor detección
+    // Capture phase para interceptar antes de que llegue al iframe
+    setTimeout(() => {
+      document.addEventListener('click', closeMenu, true); // Capture phase - intercepta antes del iframe
+      document.addEventListener('mousedown', closeMenu, true); // También mousedown
+      // También agregar listener al contenedor de iframes directamente
+      const fcnContainer = document.getElementById('fcn');
+      if (fcnContainer) {
+        const fcnCloseHandler = (e) => {
+          // Si se hace clic en el contenedor, cerrar el menú
+          if (menu && menu.parentNode) {
+            closeMenu(e);
+          }
+        };
+        fcnContainer.addEventListener('click', fcnCloseHandler, true);
+        menu._fcnCloseHandler = fcnCloseHandler;
+      }
+    }, 0);
+  }
+
+  // Show Edit Tab Modal (Luna style - allows editing name, URL, and icon)
+  showEditTabModal(tab, isNewTab = false) {
+    // Remove existing modal if any
+    const existingModal = document.getElementById('edit-tab-modal');
+    if (existingModal) {
+      existingModal.remove();
+    }
+
+    const modal = document.createElement('div');
+    modal.id = 'edit-tab-modal';
+    modal.className = 'fixed inset-0 bg-[#000000]/30 flex items-center justify-center z-[10000]';
+    modal.style.backdropFilter = 'blur(4px)';
+
+    const COLORS = [
+      null,
+      '#4285f4',
+      '#9333ea',
+      '#10b981',
+      '#059669',
+      '#84cc16',
+      '#f59e0b',
+      '#ef4444',
+      '#ec4899',
+    ];
+
+    // Initialize form data
+    let formData = {
+      title: tab.title || '',
+      url: tab.url || tab.bookmark_url || '',
+      emoji: tab.avatar_emoji || '',
+      color: tab.avatar_color || null,
+      photo: tab.avatar_photo || null
+    };
+
+    const updatePreview = () => {
+      const preview = modal.querySelector('#icon-preview');
+      if (!preview) return;
+      
+      if (formData.photo) {
+        preview.innerHTML = `<img src="${formData.photo}" alt="Avatar" class="w-full h-full rounded-full object-cover" />`;
+      } else if (formData.emoji) {
+        preview.innerHTML = `<span class="text-3xl">${formData.emoji}</span>`;
+      } else {
+        preview.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="9" x2="15" y1="15" y2="15"/></svg>`;
+      }
+    };
+
+    modal.innerHTML = `
+      <div class="bg-white rounded-xl shadow-2xl w-full max-w-md" onclick="event.stopPropagation()">
+        <div class="flex items-center justify-between px-4 py-3 border-b border-[#e8eaed]">
+          <h2 class="text-base font-semibold text-[#202124]">${isNewTab ? 'Create New Tab' : 'Edit Tab'}</h2>
+          <button id="edit-modal-close" class="p-1 hover:bg-[#e8eaed] rounded-full transition-colors">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-[#5f6368]">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
+        </div>
+
+        <div class="p-4 space-y-4">
+          <!-- Icon Preview -->
+          <div class="flex justify-center relative">
+            <div
+              id="icon-preview"
+              class="w-16 h-16 rounded-full flex items-center justify-center border-4"
+              style="border-color: ${formData.color || '#e8eaed'}; color: ${formData.color || '#6b7280'}; background-color: transparent"
+            ></div>
+            <label class="absolute bottom-0 right-0 w-6 h-6 bg-[#4285f4] rounded-full flex items-center justify-center cursor-pointer hover:bg-[#3367d6] transition-colors" style="transform: translate(25%, 25%);">
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="17 8 12 3 7 8"></polyline>
+                <line x1="12" y1="3" x2="12" y2="15"></line>
+              </svg>
+              <input type="file" accept="image/*" class="hidden" id="photo-upload" />
+            </label>
+          </div>
+
+          <!-- Title -->
+          <div>
+            <label class="block text-xs font-medium text-[#202124] mb-1.5">Tab Name</label>
+            <input
+              type="text"
+              id="edit-tab-title"
+              value="${this.escapeHTML(formData.title)}"
+              class="w-full px-3 py-2 border border-[#e8eaed] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#4285f4] focus:border-transparent"
+              placeholder="Enter tab name"
+            />
+          </div>
+
+          <!-- URL -->
+          <div>
+            <label class="block text-xs font-medium text-[#202124] mb-1.5">URL</label>
+            <input
+              type="text"
+              id="edit-tab-url"
+              value="${this.escapeHTML(formData.url)}"
+              class="w-full px-3 py-2 border border-[#e8eaed] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#4285f4] focus:border-transparent"
+              placeholder="https://example.com"
+            />
+          </div>
+
+          <!-- Emoji -->
+          <div>
+            <label class="block text-xs font-medium text-[#202124] mb-1.5">Emoji or Text (optional)</label>
+            <input
+              type="text"
+              id="edit-tab-emoji"
+              value="${this.escapeHTML(formData.emoji)}"
+              maxlength="2"
+              class="w-full px-3 py-2 border border-[#e8eaed] rounded-lg text-center text-lg focus:outline-none focus:ring-2 focus:ring-[#4285f4] focus:border-transparent"
+              placeholder="😀 or A"
+            />
+          </div>
+
+          <!-- Color -->
+          <div>
+            <label class="block text-xs font-medium text-[#202124] mb-2">Select Color</label>
+            <div class="flex gap-2 justify-center flex-wrap">
+              ${COLORS.map(c => `
+                <button
+                  class="color-option w-8 h-8 rounded-full transition-all ${formData.color === c ? 'ring-2 ring-offset-1 ring-[#4285f4] scale-110' : 'hover:scale-105'}"
+                  style="background-color: ${c || '#f3f4f6'}; border: ${c ? 'none' : '2px solid #e5e7eb'}"
+                  data-color="${c || 'null'}"
+                  title="${c ? '' : 'No color'}"
+                >
+                  ${!c ? '<span class="text-[#9aa0a6] text-[10px]">∅</span>' : ''}
+                </button>
+              `).join('')}
+            </div>
+          </div>
+        </div>
+
+        <div class="flex items-center justify-end gap-2 px-4 py-3 border-t border-[#e8eaed]">
+          <button id="edit-modal-cancel" class="px-3 py-1.5 text-sm text-[#5f6368] hover:bg-[#f5f7fa] rounded-lg transition-colors">
+            Cancel
+          </button>
+          <button id="edit-modal-save" class="px-3 py-1.5 text-sm bg-[#4285f4] text-white rounded-lg hover:bg-[#3367d6] transition-colors">
+            ${isNewTab ? 'Create' : 'Save'}
+          </button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(modal);
+    updatePreview();
+
+    // Event handlers
+    const titleInput = modal.querySelector('#edit-tab-title');
+    const urlInput = modal.querySelector('#edit-tab-url');
+    const emojiInput = modal.querySelector('#edit-tab-emoji');
+    const photoUpload = modal.querySelector('#photo-upload');
+    const colorOptions = modal.querySelectorAll('.color-option');
+    const closeBtn = modal.querySelector('#edit-modal-close');
+    const cancelBtn = modal.querySelector('#edit-modal-cancel');
+    const saveBtn = modal.querySelector('#edit-modal-save');
+
+    titleInput.addEventListener('input', (e) => {
+      formData.title = e.target.value;
+    });
+
+    urlInput.addEventListener('input', (e) => {
+      formData.url = e.target.value;
+    });
+
+    emojiInput.addEventListener('input', (e) => {
+      formData.emoji = e.target.value.slice(0, 2);
+      updatePreview();
+    });
+
+    photoUpload.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file) {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          formData.photo = reader.result;
+          updatePreview();
+        };
+        reader.readAsDataURL(file);
+      }
+    });
+
+    colorOptions.forEach(option => {
+      option.addEventListener('click', () => {
+        const color = option.dataset.color === 'null' ? null : option.dataset.color;
+        formData.color = color;
+        const preview = modal.querySelector('#icon-preview');
+        if (preview) {
+          preview.style.borderColor = color || '#e8eaed';
+          preview.style.color = color || '#6b7280';
+        }
+        colorOptions.forEach(opt => {
+          if (opt.dataset.color === option.dataset.color) {
+            opt.classList.add('ring-2', 'ring-offset-1', 'ring-[#4285f4]', 'scale-110');
+          } else {
+            opt.classList.remove('ring-2', 'ring-offset-1', 'ring-[#4285f4]', 'scale-110');
+          }
+        });
+      });
+    });
+
+    const closeModal = () => {
+      modal.remove();
+    };
+
+    closeBtn.addEventListener('click', closeModal);
+    cancelBtn.addEventListener('click', closeModal);
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) closeModal();
+    });
+
+    saveBtn.addEventListener('click', async () => {
+      try {
+        let createdTab = null;
+        
+        if (isNewTab) {
+          // Create new tab
+          // Usar el space_id del objeto tab (que viene del contexto donde se abrió el modal)
+          // Si se abrió desde el sidebar, tab.space_id será null (tab personal)
+          // Si se abrió desde el TopBar, tab.space_id será el id del espacio (tab del proyecto)
+          const spaceId = tab?.space_id !== undefined ? tab.space_id : null;
+          // Si title está vacío, no enviarlo (el backend usará URL como título por defecto)
+          // Si title tiene valor, enviarlo (será fijo)
+          const requestBody = {
+            url: formData.url.trim(),
+            space_id: spaceId,
+            type: 'browser',
+            avatar_emoji: formData.emoji || null,
+            avatar_color: formData.color,
+            avatar_photo: formData.photo
+          };
+          
+          // Solo incluir title si tiene valor
+          if (formData.title.trim()) {
+            requestBody.title = formData.title.trim();
+          }
+          
+          const response = await this.request('/api/tabs', {
+            method: 'POST',
+            body: JSON.stringify(requestBody)
+          });
+          createdTab = response.tab;
+        } else {
+          // Update existing tab
+          await this.updateTab(tab.id, {
+            title: formData.title.trim(),
+            url: formData.url.trim(),
+            avatar_emoji: formData.emoji || null,
+            avatar_color: formData.color,
+            avatar_photo: formData.photo
+          });
+        }
+        closeModal();
+        
+        // Recargar tabs según el contexto
+        if (this.activeSpace) {
+          // Si estamos en un espacio, recargar los tabs del espacio
+          const { tabs } = await this.request(`/api/spaces/${this.activeSpace.id}`);
+          this.spaceTabs = tabs || [];
+          this.renderTopBar();
+          
+          // Si es un tab nuevo, abrirlo
+          if (isNewTab && createdTab) {
+            const spaceTab = this.spaceTabs.find(t => t.id === createdTab.id);
+            if (spaceTab) {
+              await this.selectSpaceTab(spaceTab);
+            }
+          }
+        } else {
+          // Si es un tab personal, recargar tabs personales
+          await this.loadPersonalTabs();
+          await this.syncTabsToTabManager();
+          
+          // NO activar el nuevo tab automáticamente - debe aparecer al final sin activarse
+          // El tab ya está en el backend con la posición correcta (al final)
+          // syncTabsToTabManager lo agregará al final de TabManager sin activarlo
+        }
+        
+        // Sincronizar cambios con TabManager (los tabs son los mismos)
+        if (window.tabManager) {
+          // Código duplicado eliminado - ya se hizo arriba
+          if (this.activeSpace) {
+            // Si es un tab de espacio, solo actualizar TabManager si no es un tab nuevo
+            // Para tabs nuevos, ya se recargaron los tabs del espacio arriba
+            if (!isNewTab && tab.id) {
+              try {
+                const updatedTab = await this.request(`/api/tabs/${tab.id}`);
+                const tabUrl = updatedTab.tab.url || updatedTab.tab.bookmark_url;
+                if (tabUrl && window.tabManager.tabs) {
+                  const tabManagerTab = window.tabManager.tabs.find(t => {
+                    const tUrl = t.url || '';
+                    if (!tUrl || tUrl === '/new' || tUrl === 'tabs://new') return false;
+                    return this.normalizeUrl(tUrl) === this.normalizeUrl(tabUrl);
+                  });
+                  if (tabManagerTab) {
+                    tabManagerTab.title = updatedTab.tab.title;
+                    tabManagerTab.avatar_emoji = updatedTab.tab.avatar_emoji;
+                    tabManagerTab.avatar_color = updatedTab.tab.avatar_color;
+                    tabManagerTab.avatar_photo = updatedTab.tab.avatar_photo;
+                  }
+                }
+              } catch (err) {
+                // Si falla la actualización, no es crítico - los tabs ya se recargaron arriba
+                // Ignore update errors
+              }
+            }
+          }
+          if (window.tabManager.render) {
+            window.tabManager.render();
+          }
+        }
+      } catch (err) {
+        console.error('Failed to save tab:', err);
+        alert(`Failed to ${isNewTab ? 'create' : 'update'} tab`);
+      }
+    });
+  }
+
+  async updateTab(tabId, data) {
+    return this.request(`/api/tabs/${tabId}`, {
+      method: 'PUT',
+      body: JSON.stringify(data)
+    });
+  }
+
+  async updateTabContainer(tabId, containerId) {
+    try {
+      await this.updateTab(tabId, { cookie_container_id: containerId });
+      // Reload space tabs
+      if (this.activeSpace) {
+        const { tabs } = await this.request(`/api/spaces/${this.activeSpace.id}`);
+        this.spaceTabs = tabs || [];
+        this.renderTopBar();
+      }
+      // Sincronizar cambios con TabManager
+      if (window.tabManager) {
+        // Actualizar el tab en TabManager si existe
+        const updatedTab = await this.request(`/api/tabs/${tabId}`);
+        const tabUrl = updatedTab.tab.url || updatedTab.tab.bookmark_url;
+        if (tabUrl && window.tabManager.tabs) {
+          const tabManagerTab = window.tabManager.tabs.find(t => {
+            const tUrl = t.url || '';
+            if (!tUrl || tUrl === '/new' || tUrl === 'tabs://new') return false;
+            return this.normalizeUrl(tUrl) === this.normalizeUrl(tabUrl);
+          });
+          if (tabManagerTab) {
+            tabManagerTab.cookie_container_id = containerId;
+          }
+        }
+        if (window.tabManager.render) {
+          window.tabManager.render();
+        }
+      }
+    } catch (err) {
+      console.error('Failed to update tab container:', err);
+      alert('Failed to update cookie container');
+    }
+  }
+
+  async deleteSpaceTab(tabId, tabData = null) {
     if (!this.activeSpace) return;
 
+    // Usar tabData si se proporciona (evita problemas de sincronización)
+    let tab = tabData;
+    
+    // Si no se proporciona tabData, buscar en spaceTabs
+    if (!tab) {
+      tab = this.spaceTabs.find(t => t.id === tabId);
+    }
+    
+    // Si todavía no está, obtenerlo del backend
+    if (!tab) {
+      try {
+        const response = await this.request(`/api/tabs/${tabId}`);
+        tab = response.tab;
+        if (!tab) {
+          // Remover de spaceTabs por si acaso y actualizar UI
+          this.spaceTabs = this.spaceTabs.filter(t => t.id !== tabId);
+          this.renderTopBar();
+          return;
+        }
+      } catch (err) {
+        // Si el tab ya no existe (404), asumir que ya fue eliminado
+        if (err.message && (err.message.includes('404') || err.message?.includes('Not Found'))) {
+          // Remover de spaceTabs por si acaso
+          this.spaceTabs = this.spaceTabs.filter(t => t.id !== tabId);
+          this.renderTopBar();
+          return;
+        }
+        return;
+      }
+    }
+    
     // No permitir eliminar Chat tab
-    const tab = this.spaceTabs.find(t => t.id === tabId);
-    if (tab && (tab.url?.startsWith('luna://chat/') || tab.url?.startsWith('doge://chat/'))) {
+    if (tab.url?.startsWith('luna://chat/') || tab.url?.startsWith('doge://chat/')) {
       return;
     }
 
     try {
+      // Eliminar del backend - usar el MISMO endpoint que tabs personales
       await this.request(`/api/tabs/${tabId}`, { method: 'DELETE' });
       
-      // Reload space tabs
-      const { tabs } = await this.request(`/api/spaces/${this.activeSpace.id}`);
-      this.spaceTabs = tabs || [];
-      this.renderTopBar();
+      // OPTIMISTIC UI: Remover inmediatamente del array local
+      this.spaceTabs = this.spaceTabs.filter(t => t.id !== tabId);
+      this.renderTopBar(); // Actualizar UI inmediatamente
       
-      // Si el tab estaba abierto en TabManager, cerrarlo también
+      // Cerrar en TabManager (si estaba abierto)
       if (window.tabManager) {
         const tabUrl = tab?.url || tab?.bookmark_url;
         if (tabUrl) {
@@ -1163,61 +2213,81 @@ class LunaIntegration {
             return this.normalizeUrl(tUrl) === normalizedUrl;
           });
           
-          if (tabToClose && window.tabManager.tabs.length > 1) {
-            window.tabManager.close(tabToClose.id);
+          if (tabToClose) {
+            // Eliminar directamente del array de TabManager (no usar close porque ya está eliminado del backend)
+            const index = window.tabManager.tabs.indexOf(tabToClose);
+            if (index > -1) {
+              window.tabManager.tabs.splice(index, 1);
+              // Si era el tab activo, activar otro
+              if (tabToClose.active && window.tabManager.tabs.length > 0) {
+                window.tabManager.tabs[0].active = true;
+              }
+              window.tabManager.render();
+              if (window.tabManager.createIframes) {
+                window.tabManager.createIframes();
+              }
+              if (window.tabManager.showActive) {
+                window.tabManager.showActive();
+              }
+            }
           }
         }
       }
+      
+      // Recargar space tabs desde el backend para verificar sincronización (en segundo plano)
+      try {
+        const { tabs } = await this.request(`/api/spaces/${this.activeSpace.id}`);
+        const reloadedTabs = (tabs || []).sort((a, b) => (a.position || 0) - (b.position || 0));
+        
+        // Verificar que el tab eliminado NO esté en la respuesta
+        const deletedTabStillExists = reloadedTabs.some(t => t.id === tabId);
+        if (deletedTabStillExists) {
+          // Eliminar de nuevo como fallback
+          await this.request(`/api/tabs/${tabId}`, { method: 'DELETE' });
+        }
+        
+        this.spaceTabs = reloadedTabs;
+        this.renderTopBar();
+      } catch (reloadErr) {
+        // No alertar al usuario - el UI ya está actualizado optimísticamente
+      }
+      
     } catch (err) {
-      console.error('Failed to delete space tab:', err);
-      alert('Failed to delete tab');
+      alert('Failed to delete tab: ' + (err.message || 'Unknown error'));
     }
   }
 
   async addSpaceTab() {
-    const title = prompt('Tab title:');
-    if (!title) return;
-    const url = prompt('Tab URL:');
-    if (!url) return;
-
     if (!this.activeSpace) return;
 
-    try {
-      const { tab } = await this.request('/api/tabs', {
-        method: 'POST',
-        body: JSON.stringify({
-          title: title.trim(),
-          url: url.trim(),
-          space_id: this.activeSpace.id,
-          type: 'browser'
-        })
-      });
-      
-      // Reload space tabs
-      const { tabs } = await this.request(`/api/spaces/${this.activeSpace.id}`);
-      this.spaceTabs = tabs || [];
-      this.renderTopBar();
-    } catch (err) {
-      console.error('Failed to add tab:', err);
-      alert('Failed to add tab');
-    }
+    // USAR EL MISMO MODAL QUE EL BOTÓN DE AFUERA - solo cambia el contexto (space_id)
+    // Mostrar el modal de edición en modo creación
+    this.showEditTabModal({
+      id: null,
+      title: '',
+      url: '',
+      bookmark_url: '',
+      avatar_emoji: null,
+      avatar_color: null,
+      avatar_photo: null,
+      space_id: this.activeSpace.id
+    }, true); // true = isNewTab
   }
 
   // Clear active space (go back to personal tabs)
   clearActiveSpace() {
+    // NO cerrar tabs - los tabs se mantienen abiertos como en un browser normal
+    // Solo cambiar la vista: ocultar TopBar y mostrar tabs personales en sidebar
     this.activeSpace = null;
     this.spaceTabs = [];
     this.renderProjects();
     this.renderUsers();
-    this.renderTopBar();
+    this.renderTopBar(); // Esto oculta el TopBar
     
-    // Actualizar sidebar para mostrar todos los tabs nuevamente
+    // Actualizar sidebar para mostrar solo tabs personales (el filtrado ya está en tabs.js)
     if (window.tabManager && window.tabManager.render) {
       window.tabManager.render();
     }
-    
-    // NO cerrar tabs - los tabs son los mismos, solo cambiamos la vista
-    // El TopBar se oculta y los tabs siguen ahí
   }
 
 
@@ -1276,7 +2346,7 @@ class LunaIntegration {
       wrapperEl.setAttribute('data-sortable-id', project.id);
       
       const projectEl = document.createElement('div');
-      projectEl.className = `group flex items-center gap-2 px-3 py-2.5 rounded-lg transition-all ${
+      projectEl.className = `project-item group flex items-center gap-2 px-3 py-2.5 rounded-lg transition-all ${
         isActive ? 'bg-[#4285f4]/10 text-[#4285f4] font-medium shadow-sm' : 'text-[#202124] hover:bg-[#e8eaed]'
       }`;
       projectEl.style.cursor = 'pointer';
@@ -1326,6 +2396,20 @@ class LunaIntegration {
         
         // Don't trigger click if clicking on drag indicator or archive button
         if (!e.target.closest('.drop-indicator') && !e.target.closest('.project-archive-btn')) {
+          // DESACTIVAR TODOS LOS PROYECTOS/USUARIOS PRIMERO - solo uno activo
+          document.querySelectorAll('.project-item').forEach(el => {
+            el.classList.remove('bg-[#4285f4]/10', 'text-[#4285f4]', 'font-medium', 'shadow-sm');
+            el.classList.add('hover:bg-[#f5f7fa]');
+          });
+          document.querySelectorAll('.user-item').forEach(el => {
+            el.classList.remove('bg-[#4285f4]/10', 'text-[#4285f4]', 'font-medium', 'shadow-sm');
+            el.classList.add('hover:bg-[#e8eaed]');
+          });
+          
+          // Activar este proyecto
+          projectEl.classList.add('bg-[#4285f4]/10', 'text-[#4285f4]', 'font-medium', 'shadow-sm');
+          projectEl.classList.remove('hover:bg-[#f5f7fa]');
+          
           this.selectProject(project.id);
         }
       });
@@ -1447,7 +2531,7 @@ class LunaIntegration {
       const initial = displayName[0]?.toUpperCase() || 'U';
       
       const userEl = document.createElement('div');
-      userEl.className = `flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-all relative ${
+      userEl.className = `user-item flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-all relative ${
         isActive ? 'bg-[#4285f4]/10 text-[#4285f4] font-medium shadow-sm' : 'text-[#202124] hover:bg-[#e8eaed]'
       }`;
       userEl.setAttribute('data-sortable-id', user.id);
@@ -1462,6 +2546,20 @@ class LunaIntegration {
       // Set event listener AFTER setting innerHTML
       userEl.addEventListener('click', (e) => {
         if (!e.target.closest('.drop-indicator')) {
+          // DESACTIVAR TODOS LOS PROYECTOS/USUARIOS PRIMERO - solo uno activo
+          document.querySelectorAll('.project-item').forEach(el => {
+            el.classList.remove('bg-[#4285f4]/10', 'text-[#4285f4]', 'font-medium', 'shadow-sm');
+            el.classList.add('hover:bg-[#f5f7fa]');
+          });
+          document.querySelectorAll('.user-item').forEach(el => {
+            el.classList.remove('bg-[#4285f4]/10', 'text-[#4285f4]', 'font-medium', 'shadow-sm');
+            el.classList.add('hover:bg-[#e8eaed]');
+          });
+          
+          // Activar este usuario
+          userEl.classList.add('bg-[#4285f4]/10', 'text-[#4285f4]', 'font-medium', 'shadow-sm');
+          userEl.classList.remove('hover:bg-[#e8eaed]');
+          
           this.selectUser(user.id);
         }
       });
@@ -1474,6 +2572,7 @@ class LunaIntegration {
       try {
         const oldIndex = this.users.findIndex(u => u.id === draggedId);
         const newIndex = this.users.findIndex(u => u.id === targetId);
+        
         let finalIndex = newIndex;
         if (position === 'after') {
           finalIndex = newIndex + 1;
@@ -1482,6 +2581,12 @@ class LunaIntegration {
         const updates = [];
         const newUsers = [...this.users];
         const [dragged] = newUsers.splice(oldIndex, 1);
+        
+        // Ajustar finalIndex si removimos un elemento antes de la posición objetivo
+        if (oldIndex < finalIndex) {
+          finalIndex -= 1;
+        }
+        
         newUsers.splice(finalIndex, 0, dragged);
         
         newUsers.forEach((user, index) => {
@@ -1513,6 +2618,39 @@ class LunaIntegration {
       });
       this.projects.push(space);
       this.renderProjects();
+      
+      // Seleccionar automáticamente el proyecto recién creado
+      await this.selectProject(space.id);
+      
+      // Crear automáticamente un tab de Notion "Dashboard" si el proyecto tiene notion_page_url
+      if (space.notion_page_url) {
+        try {
+          // Crear el tab directamente en el backend
+          const { tab } = await this.request('/api/tabs', {
+            method: 'POST',
+            body: JSON.stringify({
+              url: space.notion_page_url,
+              title: 'Dashboard',
+              type: 'browser',
+              space_id: space.id
+            })
+          });
+          
+          // Recargar los tabs del espacio para incluir el nuevo tab
+          const { tabs } = await this.request(`/api/spaces/${space.id}`);
+          this.spaceTabs = (tabs || []).sort((a, b) => (a.position || 0) - (b.position || 0));
+          this.renderTopBar();
+          
+          // Buscar el tab de Dashboard y abrirlo
+          const dashboardTab = this.spaceTabs.find(t => t.id === tab.id);
+          if (dashboardTab) {
+            // Cargar el tab en TabManager si no está
+            await this.selectSpaceTab(dashboardTab);
+          }
+        } catch {
+          // No mostrar error al usuario - el proyecto se creó exitosamente
+        }
+      }
     } catch (err) {
       console.error('Failed to create project:', err);
       alert('Failed to create project');
@@ -1619,17 +2757,71 @@ class LunaIntegration {
     const chatContainer = document.getElementById(`chat-${tabId}`);
     if (!chatContainer || !spaceId) return;
 
+    const wrapper = chatContainer.querySelector('.chat-wrapper');
+    if (!wrapper) return;
+
+    // Renderizar UI básica inmediatamente (sin esperar API)
+    // Esto evita mostrar una pantalla de carga
+    if (!wrapper.querySelector('.chat-container')) {
+      wrapper.innerHTML = `
+        <div class="chat-container" style="display: flex; flex-direction: column; height: 100%;">
+          <div class="chat-messages" style="flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; background: #ffffff;" data-chat-id="">
+            <!-- Messages will be rendered here -->
+          </div>
+          <div class="chat-input-container" style="border-top: 1px solid #e8eaed; padding: 12px 16px; background: #ffffff;">
+            <form class="chat-form" style="display: flex; gap: 8px;">
+              <input 
+                type="text" 
+                class="chat-input" 
+                placeholder="Type a message..." 
+                style="flex: 1; padding: 10px 14px; border: 1px solid #e8eaed; border-radius: 20px; outline: none; font-size: 14px; font-family: 'Geist', sans-serif; background: #f5f7fa;"
+                autocomplete="off"
+              />
+              <button 
+                type="submit"
+                style="padding: 10px 20px; background: #4285f4; color: white; border: none; border-radius: 20px; cursor: pointer; font-size: 14px; font-weight: 500; font-family: 'Geist', sans-serif;"
+              >
+                Send
+              </button>
+            </form>
+          </div>
+        </div>
+      `;
+
+      // Attach send handler inmediatamente
+      const form = wrapper.querySelector('.chat-form');
+      if (form) {
+        form.addEventListener('submit', (e) => {
+          e.preventDefault();
+          const input = wrapper.querySelector('.chat-input');
+          const message = input?.value?.trim();
+          if (message && this.currentChatId) {
+            this.sendChatMessage(this.currentChatId, message);
+            input.value = '';
+          }
+        });
+      }
+    }
+
+    // Cargar chat y mensajes en background
     try {
-      const { chat, participants } = await this.request(`/api/chat/space/${spaceId}`);
+      const { chat } = await this.request(`/api/chat/space/${spaceId}`);
       if (!chat) return;
 
-      this.renderChat(chatContainer, chat.id, participants);
-      this.loadChatMessages(chatContainer, chat.id);
+      // Actualizar chat-id en el contenedor de mensajes
+      const messagesContainer = wrapper.querySelector('.chat-messages');
+      if (messagesContainer) {
+        messagesContainer.setAttribute('data-chat-id', chat.id);
+        this.currentChatId = chat.id; // Guardar para el handler de submit
+      }
+
+      // Cargar mensajes
+      this.loadChatMessages(wrapper, chat.id);
     } catch (err) {
-      console.error('Failed to init chat:', err);
-      const wrapper = chatContainer.querySelector('.chat-wrapper');
-      if (wrapper) {
-        wrapper.innerHTML = `
+      // Solo mostrar error si no se ha renderizado nada todavía
+      const messagesContainer = wrapper.querySelector('.chat-messages');
+      if (messagesContainer && !messagesContainer.hasAttribute('data-chat-id')) {
+        messagesContainer.innerHTML = `
           <div style="padding: 20px; text-align: center; color: #5f6368;">
             Failed to load chat
           </div>
@@ -1638,7 +2830,7 @@ class LunaIntegration {
     }
   }
 
-  renderChat(container, chatId, participants) {
+  renderChat(container, chatId) {
     const wrapper = container.querySelector('.chat-wrapper');
     if (!wrapper) return;
 
@@ -1747,76 +2939,144 @@ class LunaIntegration {
     const container = document.getElementById(containerId);
     if (!container) return;
 
+    // Determinar si es horizontal (TopBar) o vertical (sidebar)
+    const isHorizontal = containerId === 'topbar-tabs-cont';
+
     let draggedElement = null;
     let draggedId = null;
     let dropIndicator = null;
-    let mouseY = 0;
     let activationDistance = 5; // Same as luna-chat
     let dragStartY = 0;
+    let dragStartX = 0;
     let isDragging = false;
+    let isReordering = false; // Flag para prevenir múltiples llamadas
 
-    // Track mouse Y position
+    // Track mouse position
     const handleMouseMove = (e) => {
-      mouseY = e.clientY;
       this.mouseY = e.clientY;
       if (isDragging && draggedElement) {
         this.handleDragMove(e, container, items, allowHierarchy, (indicator) => {
           dropIndicator = indicator;
-          this.updateDropIndicators(containerId, indicator);
-        });
+          this.updateDropIndicators(containerId, indicator, isHorizontal);
+        }, isHorizontal);
       }
     };
 
     window.addEventListener('mousemove', handleMouseMove, { passive: true });
 
     container.addEventListener('mousedown', (e) => {
+      // No permitir drag si se hace click en el botón del menú o en el menú dropdown
+      if (e.target.closest('.tab-menu-btn') || e.target.closest('.tab-menu-dropdown')) {
+        return;
+      }
+      
       const itemElement = e.target.closest('[data-sortable-id]');
       if (!itemElement) return;
 
       draggedId = itemElement.dataset.sortableId;
       draggedElement = itemElement;
       dragStartY = e.clientY;
+      dragStartX = e.clientX;
       isDragging = false;
+      isReordering = false; // Resetear flag al iniciar nuevo drag
 
       const handleMouseMoveDrag = (e) => {
-        const distance = Math.abs(e.clientY - dragStartY);
-        if (distance >= activationDistance && !isDragging) {
+        // Para horizontal, usar distancia X; para vertical, usar Y
+        const distance = isHorizontal 
+          ? Math.abs(e.clientX - dragStartX)
+          : Math.abs(e.clientY - dragStartY);
+        if (distance >= activationDistance && !isDragging && draggedElement) {
           isDragging = true;
-          draggedElement.style.opacity = '0.3';
+          
+          // Congelar el hover: agregar clase para mantener estilo hover + mostrar menú
+          draggedElement.classList.add('dragging-item');
+          container.classList.add('dragging-active');
+          
+          // Opacidad reducida para indicar que está siendo arrastrado
+          draggedElement.style.opacity = '0.7';
           this.handleDragStart(draggedElement);
         }
       };
 
       const handleMouseUp = async (e) => {
+        // CRÍTICO: Detener todos los listeners inmediatamente
         window.removeEventListener('mousemove', handleMouseMoveDrag);
         window.removeEventListener('mouseup', handleMouseUp);
+        
+        // Limpiar indicadores SIEMPRE al soltar
+        this.clearDropIndicators(containerId, isHorizontal);
+        const finalDropIndicator = dropIndicator;
+        dropIndicator = null;
 
-        if (isDragging && draggedElement) {
-          draggedElement.style.opacity = '1';
-          
-          const overElement = document.elementFromPoint(e.clientX, e.clientY)?.closest('[data-sortable-id]');
-          if (overElement && overElement !== draggedElement) {
-            const targetId = overElement.dataset.sortableId;
-            await this.handleDragEnd(draggedId, targetId, items, allowHierarchy, dropIndicator, onReorder);
-            
-            // Reload to show new order
-            if (containerId === 'tabs-cont') {
-              await this.loadPersonalTabs();
-            } else if (containerId === 'projects-cont') {
-              await this.loadProjects();
-            } else if (containerId === 'users-cont') {
-              await this.loadUsers();
-            }
+        // Remover clases de drag
+        container.classList.remove('dragging-active');
+        
+        if (isDragging && draggedElement && !isReordering) {
+          if (draggedElement && draggedElement.style) {
+            // Restaurar estilos del elemento arrastrado
+            draggedElement.style.opacity = '';
+            draggedElement.style.cursor = '';
+            draggedElement.classList.remove('dragging-item');
           }
           
-          this.clearDropIndicators(containerId);
-          dropIndicator = null;
+          const overElement = document.elementFromPoint(e.clientX, e.clientY)?.closest('[data-sortable-id]');
+          if (overElement && overElement !== draggedElement && onReorder) {
+            const targetId = overElement.dataset.sortableId;
+            
+            // Prevenir múltiples llamadas
+            isReordering = true;
+            
+            // OPTIMISTIC UI: Actualizar inmediatamente antes de la llamada al backend
+            try {
+              await onReorder({ 
+                draggedId, 
+                targetId, 
+                position: finalDropIndicator?.position || 'after' 
+              });
+            } catch (err) {
+              console.error('Reorder failed:', err);
+            } finally {
+              // Resetear flag después de un delay para permitir re-drag
+              setTimeout(() => {
+                isReordering = false;
+              }, 100);
+            }
+          }
         }
         
+        // Resetear estado completamente
         draggedElement = null;
         draggedId = null;
         isDragging = false;
+        dragStartX = null;
+        dragStartY = null;
       };
+      
+      // NO usar mouseleave del contenedor - permite arrastrar fuera del contenedor
+      
+      // Limpiar también si se pierde el foco de la ventana
+      // Limpiar solo si la ventana pierde el foco (no cuando sale del contenedor)
+      const handleBlur = () => {
+        if (isDragging) {
+          window.removeEventListener('mousemove', handleMouseMoveDrag);
+          window.removeEventListener('mouseup', handleMouseUp);
+          
+          container.classList.remove('dragging-active');
+          
+          if (draggedElement) {
+            draggedElement.style.opacity = '';
+            draggedElement.style.cursor = '';
+            draggedElement.classList.remove('dragging-item');
+          }
+          this.clearDropIndicators(containerId, isHorizontal);
+          dropIndicator = null;
+          isDragging = false;
+          draggedElement = null;
+          draggedId = null;
+        }
+      };
+      
+      window.addEventListener('blur', handleBlur);
 
       window.addEventListener('mousemove', handleMouseMoveDrag);
       window.addEventListener('mouseup', handleMouseUp);
@@ -1827,7 +3087,7 @@ class LunaIntegration {
     element.style.cursor = 'grabbing';
   }
 
-  handleDragMove(e, container, items, allowHierarchy, setDropIndicator) {
+  handleDragMove(e, container, items, allowHierarchy, setDropIndicator, isHorizontal = false) {
     const overElement = document.elementFromPoint(e.clientX, e.clientY)?.closest('[data-sortable-id]');
     if (!overElement) {
       setDropIndicator(null);
@@ -1842,35 +3102,44 @@ class LunaIntegration {
     }
 
     const overRect = overElement.getBoundingClientRect();
-    const relativeY = this.mouseY - overRect.top;
-    const percentage = (relativeY / overRect.height) * 100;
+    
+    // Si es horizontal (TopBar), usar coordenadas X, si no (sidebar), usar Y
+    // Usar e.clientY directamente para evitar problemas con this.mouseY no actualizado
+    const relativePos = isHorizontal ? (e.clientX - overRect.left) : (e.clientY - overRect.top);
+    const size = isHorizontal ? overRect.width : overRect.height;
+    const percentage = (relativePos / size) * 100;
 
     let position;
 
     if (allowHierarchy) {
       if (targetItem?.parent_id) {
-        if (percentage < 50) {
+        // Para elementos con parent, usar 50% como punto de corte
+        if (percentage <= 50) {
           position = 'before';
         } else {
           position = 'after';
         }
       } else {
-        if (percentage < 33) {
+        // Para elementos sin parent, usar zonas más amplias para evitar 'inside'
+        if (percentage < 40) {
           position = 'before';
-        } else if (percentage > 67) {
-          position = 'after';
         } else {
-          position = 'inside';
+          position = 'after';
         }
       }
     } else {
-      if (percentage < 50) {
+      // Para drag simple (tabs), siempre usar 'before' o 'after', nunca 'inside'
+      // Usar un umbral claro con un pequeño margen para evitar parpadeo en el punto medio exacto
+      // <= 50% = 'before', > 50% = 'after'
+      // Esto asegura que siempre haya una posición definida
+      if (percentage < 50.5) {
         position = 'before';
       } else {
         position = 'after';
       }
     }
 
+    // SIEMPRE establecer un indicador - nunca null para evitar que desaparezca la línea
     setDropIndicator({ targetId: overId, position });
   }
 
@@ -1897,41 +3166,129 @@ class LunaIntegration {
     });
   }
 
-  updateDropIndicators(containerId, indicator) {
+  updateDropIndicators(containerId, indicator, isHorizontal = false) {
     const container = document.getElementById(containerId);
     if (!container) return;
 
-    // Remove all existing indicators
+    // Remove all existing indicators FIRST - asegurar que solo hay uno
     container.querySelectorAll('.drop-indicator').forEach(el => el.remove());
     container.querySelectorAll('[data-sortable-id]').forEach(el => {
       el.classList.remove('drop-inside');
+      el.style.backgroundColor = '';
+      el.style.position = ''; // Reset position
     });
 
     if (!indicator) return;
 
     const targetElement = container.querySelector(`[data-sortable-id="${indicator.targetId}"]`);
     if (!targetElement) return;
+    
+    // Asegurar que solo mostramos UN indicador
+    // Si es 'before', mostrar antes del elemento
+    // Si es 'after', mostrar después del elemento
+    // NO mostrar ambos
 
     const indicatorLine = document.createElement('div');
     indicatorLine.className = 'drop-indicator';
-    indicatorLine.style.cssText = `
-      position: absolute;
-      left: 0;
-      right: 0;
-      height: 2px;
-      background-color: #4285f4;
-      z-index: 20;
-      pointer-events: none;
-    `;
-
+    
+    // Asegurar que el contenedor tenga position: relative para que el indicador se posicione correctamente
+    const containerStyle = window.getComputedStyle(container);
+    if (containerStyle.position === 'static') {
+      container.style.position = 'relative';
+    }
+    
+    // Calcular posición - SIEMPRE mostrar la línea en el borde entre elementos
+    // Para 'before': línea a la izquierda/arriba del elemento target
+    // Para 'after': línea a la derecha/abajo del elemento target
+    // Pero si 'after' y el siguiente elemento tiene la misma posición, NO duplicar
+    const targetRect = targetElement.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    
+    container.appendChild(indicatorLine);
+    
+    // Usar la misma posición para 'before' y 'after' cuando son contiguos
+    // 'before' del elemento B = 'after' del elemento A (si A está antes de B)
+    // Mostrar siempre en el borde izquierda/arriba del elemento target
     if (indicator.position === 'before') {
-      indicatorLine.style.top = '0';
-      targetElement.style.position = 'relative';
-      targetElement.insertBefore(indicatorLine, targetElement.firstChild);
+      if (isHorizontal) {
+        indicatorLine.style.cssText = `
+          position: absolute;
+          top: 0;
+          bottom: 0;
+          left: ${targetRect.left - containerRect.left}px;
+          width: 2px;
+          background-color: #4285f4;
+          z-index: 1000;
+          pointer-events: none;
+        `;
+      } else {
+        indicatorLine.style.cssText = `
+          position: absolute;
+          left: 0;
+          right: 0;
+          top: ${targetRect.top - containerRect.top}px;
+          height: 2px;
+          background-color: #4285f4;
+          z-index: 1000;
+          pointer-events: none;
+        `;
+      }
     } else if (indicator.position === 'after') {
-      indicatorLine.style.bottom = '0';
-      targetElement.style.position = 'relative';
-      targetElement.appendChild(indicatorLine);
+      // Para 'after', mostrar después del elemento (pero usar el siguiente elemento si existe)
+      // Si no hay siguiente, mostrar al final
+      const nextSibling = targetElement.nextElementSibling;
+      if (nextSibling && nextSibling.hasAttribute('data-sortable-id')) {
+        // Hay un siguiente elemento: mostrar antes de él (misma posición que 'before' del siguiente)
+        const nextRect = nextSibling.getBoundingClientRect();
+        if (isHorizontal) {
+          indicatorLine.style.cssText = `
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            left: ${nextRect.left - containerRect.left}px;
+            width: 2px;
+            background-color: #4285f4;
+            z-index: 1000;
+            pointer-events: none;
+          `;
+        } else {
+          indicatorLine.style.cssText = `
+            position: absolute;
+            left: 0;
+            right: 0;
+            top: ${nextRect.top - containerRect.top}px;
+            height: 2px;
+            background-color: #4285f4;
+            z-index: 1000;
+            pointer-events: none;
+          `;
+        }
+      } else {
+        // No hay siguiente elemento: mostrar al final
+        if (isHorizontal) {
+          indicatorLine.style.cssText = `
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            left: ${targetRect.right - containerRect.left}px;
+            width: 2px;
+            background-color: #4285f4;
+            z-index: 1000;
+            pointer-events: none;
+          `;
+        } else {
+          indicatorLine.style.cssText = `
+            position: absolute;
+            left: 0;
+            right: 0;
+            top: ${targetRect.bottom - containerRect.top}px;
+            height: 2px;
+            background-color: #4285f4;
+            z-index: 1000;
+            pointer-events: none;
+          `;
+        }
+      }
     } else if (indicator.position === 'inside') {
       targetElement.classList.add('drop-inside');
       targetElement.style.backgroundColor = '#4285f425';
@@ -1951,7 +3308,7 @@ class LunaIntegration {
 
   async sendChatMessage(chatId, message) {
     try {
-      const { message: newMsg } = await this.request(`/api/chat/${chatId}/messages`, {
+      await this.request(`/api/chat/${chatId}/messages`, {
         method: 'POST',
         body: JSON.stringify({ message })
       });
@@ -1980,8 +3337,7 @@ const initLunaIntegration = () => {
         lunaIntegration = new LunaIntegration();
         window.lunaIntegration = lunaIntegration;
       } catch (err) {
-        console.error('❌ Error creating LunaIntegration:', err);
-        console.error('Error stack:', err.stack);
+        console.error('Error creating LunaIntegration:', err);
       }
     } else {
       // Check again in 50ms (faster polling)

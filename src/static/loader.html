@@ -104,6 +104,24 @@
         user-select: none;
       }
       
+      /* Congelar hover durante drag: mantener estilo hover en elemento arrastrado */
+      .dragging-item {
+        background-color: #e8eaed !important;
+      }
+      
+      .dragging-item .tab-menu-btn {
+        opacity: 1 !important;
+      }
+      
+      /* Prevenir hovers en otros elementos durante drag */
+      .dragging-active .tab-item:not(.dragging-item):hover {
+        background-color: transparent !important;
+      }
+      
+      .dragging-active .tab-item:not(.dragging-item) .tab-menu-btn {
+        opacity: 0 !important;
+      }
+      
       #sidebar {
         min-width: 200px;
         max-width: 300px;
@@ -204,9 +222,22 @@
             <div class="py-1">
               <div class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold text-[#5f6368] uppercase tracking-wide">
                 <span>Tabs</span>
-                <button id="tab-btn" class="p-1 hover:bg-[#e8eaed] rounded transition-colors" title="New Tab">
-                  <i data-lucide="plus" class="w-3.5 h-3.5"></i>
-                </button>
+                <div class="relative">
+                  <button id="tab-btn" class="p-1 hover:bg-[#e8eaed] rounded transition-colors" title="New Tab" type="button">
+                    <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+                  </button>
+                  <!-- Submenu dropdown -->
+                  <div id="tab-submenu" class="hidden absolute right-0 top-full mt-1 bg-white border border-[#e8eaed] rounded-lg shadow-lg py-1 z-50 min-w-[160px]">
+                    <button class="tab-submenu-browser w-full flex items-center gap-2 px-3 py-2 text-sm text-[#202124] hover:bg-[#f5f7fa] transition-colors text-left">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="18" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
+                      <span>Browser Tab</span>
+                    </button>
+                    <button class="tab-submenu-ai w-full flex items-center gap-2 px-3 py-2 text-sm text-[#202124] hover:bg-[#f5f7fa] transition-colors text-left">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path><circle cx="12" cy="12" r="5"></circle></svg>
+                      <span>AI Dashboard</span>
+                    </button>
+                  </div>
+                </div>
               </div>
               <div id="tabs-cont" class="px-2 space-y-0.5"></div>
               <div id="personal-tabs-cont" style="display: none;"></div>
@@ -264,10 +295,6 @@
           <div id="topbar-tabs-cont" class="flex items-center gap-0.5 flex-1 overflow-x-auto">
             <!-- Tabs will be rendered here by luna-integration.js -->
           </div>
-          <!-- Close space button -->
-          <button id="close-space-btn" class="ml-auto px-2 py-1 text-[#5f6368] hover:text-[#202124] hover:bg-[#e8eaed] rounded transition-colors shrink-0" title="Close space">
-            <i data-lucide="x" class="w-4 h-4"></i>
-          </button>
         </div>
       </div>
       

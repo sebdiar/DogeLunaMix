@@ -33,9 +33,14 @@ router.post('/', async (req, res) => {
   try {
     const { title, url, favicon, space_id, cookie_container_id, parent_id, position, avatar_emoji, avatar_color, avatar_photo, type } = req.body;
     
-    if (!title || !url) {
-      return res.status(400).json({ error: 'Title and URL required' });
+    if (!url) {
+      return res.status(400).json({ error: 'URL required' });
     }
+    
+    // Si no hay título o está vacío, usar la URL como título por defecto (se actualizará dinámicamente después)
+    // Si hay título, guardarlo (será fijo y no se actualizará)
+    // NOTA: La BD puede requerir title NOT NULL, así que usamos URL como fallback
+    const finalTitle = (title && title.trim()) ? title.trim() : url;
     
     // If space_id provided, verify access
     if (space_id) {
@@ -54,21 +59,67 @@ router.post('/', async (req, res) => {
       }
     }
     
+    // Calcular posición: si no se especifica, usar la última posición + 1 (agregar al final)
+    let finalPosition = position;
+    if (position === undefined) {
+      // Obtener TODOS los tabs para calcular la máxima posición
+      let query = supabase
+        .from('tabs')
+        .select('position')
+        .eq('user_id', req.userId);
+      
+      if (space_id) {
+        query = query.eq('space_id', space_id);
+      } else {
+        query = query.is('space_id', null);
+      }
+      
+      const { data: allTabs, error: queryError } = await query;
+      
+      if (queryError) {
+        console.error('Error querying tabs for position:', queryError);
+        // Fallback: usar 0 si hay error
+        finalPosition = 0;
+      } else {
+        // Calcular la máxima posición (tratando null/undefined como -1)
+        let maxPosition = -1;
+        if (allTabs && allTabs.length > 0) {
+          for (const tab of allTabs) {
+            const pos = tab.position;
+            // Solo considerar posiciones numéricas válidas (>= 0)
+            if (pos != null && pos !== undefined && typeof pos === 'number' && pos >= 0 && pos > maxPosition) {
+              maxPosition = pos;
+            }
+          }
+        }
+        
+        // La nueva posición es la máxima + 1 (si maxPosition es -1, será 0)
+        finalPosition = maxPosition + 1;
+      }
+    }
+    
     // Build insert object, only including fields that exist
+    // Si title es igual a la URL, se actualizará dinámicamente
+    // Si title es diferente de la URL, será fijo y no se actualizará
+    // Guardamos también si el título fue especificado por el usuario (para saber si es fijo)
+    const userSpecifiedTitle = title?.trim() || false;
     const insertData = {
       user_id: req.userId,
       space_id: space_id || null,
-      title,
-      url,
+      title: finalTitle, // URL = dinámico, otro valor = fijo
       bookmark_url: url,
+      url,
       favicon: favicon || null,
       cookie_container_id: cookie_container_id || 'default',
       parent_id: parent_id || null,
-      position: position !== undefined ? position : 0,
+      position: finalPosition,
       is_expanded: true,
       avatar_emoji: avatar_emoji || null,
       avatar_color: avatar_color !== undefined ? avatar_color : null,
-      avatar_photo: avatar_photo || null
+      avatar_photo: avatar_photo || null,
+      // Guardar metadata para saber si el título es fijo (si el usuario lo especificó)
+      // Si user_specified_title es false, el título se actualiza dinámicamente
+      // Usamos JSONB metadata si existe, sino solo guardamos title y comparamos después
     };
     
     // Only add type if it's provided and column exists (graceful degradation)
@@ -100,13 +151,15 @@ router.post('/', async (req, res) => {
         }
         return res.json({ tab: retryTab });
       }
-      return res.status(500).json({ error: 'Failed to create tab', details: error.message || error });
+      // Return more detailed error
+      return res.status(500).json({ error: 'Failed to create tab', details: error.message || error, code: error.code });
     }
     
     res.json({ tab });
   } catch (error) {
     console.error('Create tab error:', error);
-    res.status(500).json({ error: 'Failed to create tab' });
+    console.error('Error stack:', error.stack);
+    res.status(500).json({ error: 'Failed to create tab', details: error.message || 'Unknown error' });
   }
 });
 
