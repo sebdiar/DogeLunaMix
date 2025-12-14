@@ -54,5 +54,78 @@ router.get('/search', async (req, res) => {
   }
 });
 
+// Get user preferences (for tabs in "More" dropdown)
+router.get('/preferences', async (req, res) => {
+  try {
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('metadata')
+      .eq('id', req.userId)
+      .single();
+    
+    if (error) {
+      console.error('Error fetching user preferences:', error);
+      return res.status(500).json({ error: 'Failed to fetch preferences' });
+    }
+    
+    const metadata = user?.metadata || {};
+    const preferences = {
+      desktop_more_tab_ids: metadata.desktop_more_tab_ids || [],
+      mobile_more_tab_ids: metadata.mobile_more_tab_ids || []
+    };
+    
+    res.json({ preferences });
+  } catch (error) {
+    console.error('Get preferences error:', error);
+    res.status(500).json({ error: 'Failed to get preferences' });
+  }
+});
+
+// Update user preferences
+router.put('/preferences', async (req, res) => {
+  try {
+    const { desktop_more_tab_ids, mobile_more_tab_ids } = req.body;
+    
+    // Get current metadata
+    const { data: user, error: fetchError } = await supabase
+      .from('users')
+      .select('metadata')
+      .eq('id', req.userId)
+      .single();
+    
+    if (fetchError) {
+      console.error('Error fetching user for preferences update:', fetchError);
+      return res.status(500).json({ error: 'Failed to update preferences' });
+    }
+    
+    const currentMetadata = user?.metadata || {};
+    const updatedMetadata = {
+      ...currentMetadata,
+      ...(desktop_more_tab_ids !== undefined && { desktop_more_tab_ids }),
+      ...(mobile_more_tab_ids !== undefined && { mobile_more_tab_ids })
+    };
+    
+    const { error: updateError } = await supabase
+      .from('users')
+      .update({ metadata: updatedMetadata })
+      .eq('id', req.userId);
+    
+    if (updateError) {
+      console.error('Error updating user preferences:', updateError);
+      return res.status(500).json({ error: 'Failed to update preferences' });
+    }
+    
+    res.json({ 
+      preferences: {
+        desktop_more_tab_ids: updatedMetadata.desktop_more_tab_ids || [],
+        mobile_more_tab_ids: updatedMetadata.mobile_more_tab_ids || []
+      }
+    });
+  } catch (error) {
+    console.error('Update preferences error:', error);
+    res.status(500).json({ error: 'Failed to update preferences' });
+  }
+});
+
 export default router;
 

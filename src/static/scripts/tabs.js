@@ -106,7 +106,7 @@ class TabManager {
       maxTabs: 9999, // Effectively unlimited
       minW: 50,
       maxW: 200,
-      urlInterval: 1000,
+      urlInterval: 2000, // Reduced frequency for better performance
       maxOpenTabs: 5, // Maximum tabs with loaded content (for memory management)
       inactiveTimeout: 15 * 60 * 1000, // 15 minutes in milliseconds
     });
@@ -465,7 +465,6 @@ class TabManager {
 
     const hist = this.history.get(activeTab.id);
     if (!hist || hist.position <= 0) {
-      console.info('[info] back(): no history to go back');
       return;
     }
 
@@ -476,7 +475,6 @@ class TabManager {
       const iframe = document.getElementById(`iframe-${activeTab.id}`);
       handler.navigate(decodedUrl, this, activeTab, iframe);
       if (this.ui) this.ui.value = decodedUrl;
-      console.log('[info] back(): navigated to', decodedUrl);
       this.emitNewFrame();
     }
   };
@@ -487,7 +485,6 @@ class TabManager {
 
     const hist = this.history.get(activeTab.id);
     if (!hist || hist.position >= hist.urls.length - 1) {
-      console.info('[info] forward(): no history to go forward');
       return;
     }
 
@@ -498,7 +495,6 @@ class TabManager {
       const iframe = document.getElementById(`iframe-${activeTab.id}`);
       handler.navigate(decodedUrl, this, activeTab, iframe);
       if (this.ui) this.ui.value = decodedUrl;
-      console.log('[info] forward(): navigated to', decodedUrl);
       this.emitNewFrame();
     }
   };
@@ -510,8 +506,8 @@ class TabManager {
     if (!iframe) return;
     try {
       iframe.contentWindow.location.reload();
-    } catch (err) {
-      console.warn('[err] reload():', err);
+    } catch {
+      // Silent fail - reload errors are usually not actionable
     }
   };
 
@@ -907,11 +903,11 @@ class TabManager {
       const borderColor = t.avatar_color || '#e8eaed';
       const iconColor = t.avatar_color || '#6b7280';
       
-      // Tamaños adaptativos: TopBar más pequeño, sidebar normal
-      const iconSize = isTopBar ? 'w-5 h-5' : 'w-7 h-7';
-      const textSize = isTopBar ? 'text-xs' : 'text-sm';
-      const padding = isTopBar ? 'px-2.5 py-1.5' : 'px-3 py-2.5';
-      const gap = isTopBar ? 'gap-2' : 'gap-3';
+      // Tamaños adaptativos: TopBar más pequeño, sidebar compacto con círculo un poco más grande
+      const iconSize = isTopBar ? 'w-5 h-5' : 'w-6 h-6'; // Compacto: w-6 h-6 para dar más espacio al círculo
+      const textSize = isTopBar ? 'text-xs' : 'text-xs'; // Compacto: text-xs en lugar de text-sm
+      const padding = isTopBar ? 'px-2.5 py-1.5' : 'px-2 py-1.5'; // Compacto: px-2 py-1.5 en lugar de px-3 py-2.5
+      const gap = isTopBar ? 'gap-2' : 'gap-2'; // Compacto: gap-2 en lugar de gap-3
       const maxWidth = isTopBar ? 'max-w-[100px]' : '';
       
       // Menu button (3 dots) - siempre disponible cuando showMenu es true
@@ -943,8 +939,12 @@ class TabManager {
     };
 
   render = (() => {
+    // Debounce mechanism to prevent excessive DOM updates
+    let renderTimeout = null;
+    let lastRenderTime = 0;
+    const RENDER_DEBOUNCE_MS = 16; // ~60fps max
 
-    return function () {
+    const doRender = () => {
       // Filtrar tabs: si hay un espacio activo, NO mostrar los tabs del espacio en el sidebar
       // (solo se muestran en el TopBar para evitar duplicados visuales)
       // TAMBIÉN: NUNCA mostrar tabs de chat en el sidebar externo (solo en TopBar)
@@ -990,9 +990,30 @@ class TabManager {
         });
       }
       
+      // Excluir tabs que están en "More" dropdown (desktop)
+      // Usar localStorage para persistencia
+      let visibleTabs = tabsToShow;
+      if (window.lunaIntegration && window.lunaIntegration.getDesktopMoreTabIdsSync) {
+        const moreTabIds = window.lunaIntegration.getDesktopMoreTabIdsSync();
+        console.log('[Render] moreTabIds from localStorage:', Array.from(moreTabIds));
+        if (moreTabIds.size > 0) {
+          const beforeCount = tabsToShow.length;
+          visibleTabs = tabsToShow.filter(t => {
+            // Normalize to string for consistent comparison
+            const tabId = String(t.backendId || t.id);
+            const shouldShow = !moreTabIds.has(tabId);
+            if (!shouldShow) {
+              console.log('[Render] Hiding tab:', tabId, 'because it is in More');
+            }
+            return shouldShow;
+          });
+          console.log('[Render] Filtered tabs: before=', beforeCount, 'after=', visibleTabs.length);
+        }
+      }
+
       // USAR EL MISMO template unificado (showMenu=true para sidebar, isTopBar=false)
       // Este es el ÚNICO código que genera tabs - usado en sidebar Y TopBar
-      this.tc.innerHTML = tabsToShow.map((t) => this.tabTemplate(t, true, false)).join('');
+      this.tc.innerHTML = visibleTabs.map((t) => this.tabTemplate(t, true, false)).join('');
 
       // Setup menu handlers para sidebar tabs
       this.tc.querySelectorAll('.tab-menu-btn').forEach(btn => {
@@ -1039,6 +1060,33 @@ class TabManager {
       });
 
       this.tabs.forEach((t) => delete t.justAdded);
+      
+      // Update mobile bottom bar if on mobile (debounced to avoid excessive updates)
+      if (window.mobileUI && window.mobileUI.isMobile && window.mobileUI.isMobile()) {
+        if (window.lunaIntegration && window.lunaIntegration.renderMobileBottomBar) {
+          window.lunaIntegration.renderMobileBottomBar();
+        }
+      }
+    };
+
+    // Return debounced render function
+    return function () {
+      const now = Date.now();
+      if (renderTimeout) {
+        clearTimeout(renderTimeout);
+      }
+      
+      // If enough time has passed, render immediately
+      if (now - lastRenderTime >= RENDER_DEBOUNCE_MS) {
+        lastRenderTime = now;
+        doRender.call(this);
+      } else {
+        // Otherwise, schedule a render
+        renderTimeout = setTimeout(() => {
+          lastRenderTime = Date.now();
+          doRender.call(this);
+        }, RENDER_DEBOUNCE_MS);
+      }
     };
   })();
 }

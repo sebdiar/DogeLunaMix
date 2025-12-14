@@ -5,23 +5,20 @@ declare global {
 }
 
 const urlBar = document.getElementById('d-url');
-const sidebar = document.getElementById('sidebar');
+const tabBar = document.getElementById('tb');
 
 const addTab = (): void => {
-  if (urlBar) {
-    const tabBtn = document.getElementById('tab-btn');
-    if (tabBtn) tabBtn.click();
-  }
+  if (urlBar) document.getElementById('tab-btn')?.click();
 
-  // Sidebar is always visible now, no need to toggle
+  if (tabBar && tabBar.classList.contains('hidden')) document.getElementById('tabs-btn')?.click();
 };
 
 const clearTabs = (): void => {
   const urlInput = document.getElementById('url') as HTMLInputElement | null;
-  const sidebarEl = document.getElementById('sidebar');
+  const tabBarEl = document.getElementById('tb');
   const urlBarEl = document.getElementById('d-url');
 
-  if (!urlBarEl || !sidebarEl) return;
+  if (!urlBarEl || !tabBarEl) return;
 
   let btn: Element | null;
   while ((btn = document.querySelector('button.close-tab'))) {
@@ -177,7 +174,7 @@ export function setupHotkeys(): void {
       { id: 'rm-bar', action: () => hideBar() },
       {
         id: 'return',
-        action: () => window.parent.postMessage({ action: 'navigate', to: '/indev' }, '*'),
+        action: () => window.parent.postMessage({ action: 'navigate', to: '/' }, '*'),
       },
       { id: 't-dev', action: () => devTools() },
     ];

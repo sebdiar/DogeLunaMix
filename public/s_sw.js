@@ -11,10 +11,148 @@ importScripts('/scram/scramjet.all.js');
 const { ScramjetServiceWorker } = $scramjetLoadWorker();
 const scramjet = new ScramjetServiceWorker();
 
+// Notion CSS Injection (exact same from Kasimir-Browser - optimized for performance)
+const NOTION_CSS = `
+  .fullWidth .notion-frame div.notion-scroller.vertical div.layout.layout-wide,
+  .fullWidth .notion-frame .notion-scroller.vertical .layout.layout-wide,
+  div.layout.layout-wide,
+  .fullWidth div.layout.layout-wide {
+    --margin-width: 60px !important;
+  }
+  
+  .notion-selectable {
+    max-width: 2500px !important;
+  }
+  
+  [class*="timeline"] .notion-selectable,
+  [class*="gantt"] .notion-selectable {
+    max-width: none !important;
+  }
+  
+  .notion-record-icon.notranslate:has(.pageEmpty),
+  .pageEmpty,
+  .notion-record-icon.notranslate button:has(.pageEmpty) {
+    display: none !important;
+    visibility: hidden !important;
+    height: 0 !important;
+    width: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+  }
+  
+  .notion-page-controls {
+    padding-top: 10px !important;
+  }
+`;
+
+const NOTION_JS = `
+  (function() {
+    const apply = () => {
+      document.querySelectorAll('.layout.layout-wide, .fullWidth .layout.layout-wide').forEach(el => {
+        el.style.setProperty('--margin-width', '60px', 'important');
+      });
+      document.querySelectorAll('.notion-page-controls').forEach(el => {
+        el.style.setProperty('padding-top', '10px', 'important');
+      });
+      document.querySelectorAll('.notion-record-icon.notranslate').forEach(icon => {
+        if (icon.querySelector('.pageEmpty')) {
+          icon.style.cssText = 'display:none!important;visibility:hidden!important;height:0!important;width:0!important;margin:0!important;padding:0!important;overflow:hidden!important';
+        }
+      });
+      document.querySelectorAll('[class*="timeline"], [class*="gantt"]').forEach(container => {
+        container.querySelectorAll('.notion-selectable').forEach(el => {
+          el.style.setProperty('max-width', 'none', 'important');
+        });
+      });
+      const layoutContent = document.querySelector('div.layout-content');
+      if (layoutContent) {
+        for (const pseudoSel of layoutContent.querySelectorAll('div.pseudoSelection')) {
+          const icon = pseudoSel.querySelector('.notion-record-icon.notranslate');
+          if (icon && !pseudoSel.closest('.notion-list-view, .notion-table-view, .notion-board-view, .notion-gallery-view, [class*="collection"]') && !icon.querySelector('.pageEmpty')) {
+            icon.style.setProperty('margin-top', '50px', 'important');
+            icon.style.setProperty('height', '50px', 'important');
+            break;
+          }
+        }
+      }
+    };
+    apply();
+    setTimeout(apply, 1000);
+    new MutationObserver(apply).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+  })();
+`;
+
 async function handleRequest(event) {
   await scramjet.loadConfig();
+  
+  // Check if it's a Notion URL
+  const url = event.request.url;
+  const isNotion = url.includes('notion.so') || url.includes('notion.com');
+  
   if (scramjet.route(event)) {
-    return scramjet.fetch(event);
+    const response = await scramjet.fetch(event);
+    
+    // Intercept HTML responses for Notion
+    if (isNotion && response) {
+      const contentType = response.headers.get('content-type') || '';
+      if (contentType.includes('text/html')) {
+        try {
+          const html = await response.clone().text();
+          
+          // Inject CSS before </head>
+          let modifiedHtml = html.replace('</head>', `<style id="kasimir-notion-css">${NOTION_CSS}</style></head>`);
+          
+          // Inject JS before </body> or </html>
+          if (modifiedHtml.includes('</body>')) {
+            modifiedHtml = modifiedHtml.replace('</body>', `<script id="kasimir-notion-js">${NOTION_JS}</script></body>`);
+          } else {
+            modifiedHtml = modifiedHtml.replace('</html>', `<script id="kasimir-notion-js">${NOTION_JS}</script></html>`);
+          }
+          
+          // Return modified response
+          return new Response(modifiedHtml, {
+            status: response.status,
+            statusText: response.statusText,
+            headers: response.headers
+          });
+        } catch (error) {
+          console.error('Error injecting Notion CSS:', error);
+          return response; // Return original if injection fails
+        }
+      }
+    }
+    
+    return response;
+  }
+
+  // For non-Scramjet requests, also check for Notion
+  if (isNotion) {
+    try {
+      const response = await fetch(event.request);
+      const contentType = response.headers.get('content-type') || '';
+      
+      if (contentType.includes('text/html')) {
+        const html = await response.clone().text();
+        let modifiedHtml = html.replace('</head>', `<style id="kasimir-notion-css">${NOTION_CSS}</style></head>`);
+        
+        if (modifiedHtml.includes('</body>')) {
+          modifiedHtml = modifiedHtml.replace('</body>', `<script id="kasimir-notion-js">${NOTION_JS}</script></body>`);
+        } else {
+          modifiedHtml = modifiedHtml.replace('</html>', `<script id="kasimir-notion-js">${NOTION_JS}</script></html>`);
+        }
+        
+        return new Response(modifiedHtml, {
+          status: response.status,
+          statusText: response.statusText,
+          headers: response.headers
+        });
+      }
+      
+      return response;
+    } catch (error) {
+      return fetch(event.request);
+    }
   }
 
   return fetch(event.request);
