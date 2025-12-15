@@ -67,7 +67,7 @@ class LunaIntegration {
 
     try {
       // Register notification service worker
-      const registration = await navigator.serviceWorker.register('/notifications-sw.js', {
+      await navigator.serviceWorker.register('/notifications-sw.js', {
         scope: '/'
       });
       
@@ -901,7 +901,7 @@ class LunaIntegration {
               })
             });
           }
-        } catch (err) {
+        } catch {
           // Continuar con el siguiente proyecto si hay error
           continue;
         }
@@ -909,7 +909,7 @@ class LunaIntegration {
       
       // Marcar como ejecutado
       localStorage.setItem('dashboard_tabs_created', 'true');
-    } catch (err) {
+    } catch {
       // Ignore errors
     }
   }
@@ -921,126 +921,1183 @@ class LunaIntegration {
       
       // Render mobile bottom bar tabs
       this.renderMobileBottomBar();
-    } catch (err) {
+    } catch {
       // Silently fail if mobile UI is not available
-      console.error('Error initializing mobile views:', err);
     }
   }
 
-  renderMobileBottomBar() {
+  // Centralized function to setup fixed button listeners (Projects, Users, More)
+  // This should be called whenever these buttons might have lost their listeners
+  // setupFixedButtonListeners() ELIMINADO - ahora se maneja en renderMobileBottomBar()
+
+  renderMobileBottomBar(isEditingParam = null) {
     try {
       if (!window.tabManager || !window.mobileUI || typeof window.mobileUI.isMobile !== 'function' || !window.mobileUI.isMobile()) return;
 
     const container = document.getElementById('mobile-tabs-container');
-    if (!container) return;
+      const bottomBar = document.getElementById('mobile-bottom-bar');
+      if (!container || !bottomBar) return;
 
+      const isEditing = isEditingParam !== null ? isEditingParam : (bottomBar.classList.contains('editing') || false);
+      
+      // Obtener orden guardado ANTES de limpiar
+      const savedOrder = this.getMobileBottomBarOrderSync() || [];
+      
+      // Obtener tabs disponibles ANTES de limpiar
     const tabs = window.tabManager.tabs || [];
     const personalTabs = tabs.filter(t => {
       const url = t.url || '';
       return url && url !== '/new' && url !== 'tabs://new' && !t.spaceId && !this.isChatUrl(url);
     });
 
-    // Calcular cuántos tabs pueden mostrarse (6 totales menos Proyectos, Messenger, More = 3 slots)
-    const fixedButtons = 3; // Proyectos, Messenger, More
-    const maxTabsVisible = 6 - fixedButtons; // Máximo 3 tabs visibles
-    
-    // Si hay más tabs, los excedentes van a "More"
-    const visibleTabs = personalTabs.slice(0, maxTabsVisible);
-    const moreTabs = personalTabs.slice(maxTabsVisible);
+      // Obtener tabs que están en More
+      const moreTabIds = this.getMobileMoreTabIdsSync();
+      const bottomBarTabs = personalTabs.filter(t => {
+        const tId = String(t.backendId || t.id);
+        return !moreTabIds.has(tId);
+      });
 
+      // Crear mapa de tabs por ID para búsqueda rápida
+      const tabsMap = new Map();
+      bottomBarTabs.forEach(tab => {
+        const tabId = String(tab.backendId || tab.id);
+        tabsMap.set(tabId, tab);
+      });
+
+      // Obtener fixed buttons del HTML (ya existen)
+      const projectsBtn = document.getElementById('mobile-nav-projects');
+      const usersBtn = document.getElementById('mobile-nav-messenger');
+      const moreBtn = document.getElementById('mobile-nav-more');
+
+      // Siempre re-renderizar completamente para asegurar que los tres puntos se muestren/oculten correctamente
+      // Limpiar contenedor de tabs completamente
     container.innerHTML = '';
 
-    // Render visible tabs usando el MISMO template del sidebar (tabTemplate)
+      // Remover tres puntos de tabs existentes antes de re-renderizar
+      const existingTabsWithDots = bottomBar.querySelectorAll('.mobile-tab-menu-btn');
+      existingTabsWithDots.forEach(btn => btn.remove());
+
+      // Si no hay orden guardado, crear orden por defecto
+      let orderToRender = savedOrder.length > 0 ? savedOrder : [];
+      if (orderToRender.length === 0) {
+        // Orden por defecto: tabs visibles (máx 3) + Projects + Users + More
+        const visibleTabs = bottomBarTabs.slice(0, 3);
     visibleTabs.forEach(tab => {
+          const tabId = String(tab.backendId || tab.id);
+          orderToRender.push({ type: 'tab', id: tabId });
+        });
+        orderToRender.push({ type: 'fixed', id: 'projects' });
+        orderToRender.push({ type: 'fixed', id: 'users' });
+        orderToRender.push({ type: 'fixed', id: 'more' });
+      }
+
+      // Limpiar listeners previos de fixed buttons (sin clonar)
+      // Los listeners se agregarán de nuevo más abajo si es necesario
+      if (projectsBtn) {
+        projectsBtn.dataset.listenerAdded = 'false';
+      }
+      if (usersBtn) {
+        usersBtn.dataset.listenerAdded = 'false';
+      }
+      if (moreBtn) {
+        moreBtn.dataset.listenerAdded = 'false';
+      }
+
+      // Limpiar listeners previos de todos los elementos antes de renderizar
+      // Esto previene duplicaciones cuando se llama renderMobileBottomBar múltiples veces
+      const allExistingItems = bottomBar.querySelectorAll('.bottom-nav-item');
+      allExistingItems.forEach(item => {
+        item.dataset.listenerAdded = 'false';
+        item.dataset.dragListener = 'false';
+      });
+
+      // Renderizar elementos en el orden especificado
+      orderToRender.forEach((orderItem, index) => {
+        if (orderItem.type === 'tab') {
+          const tab = tabsMap.get(String(orderItem.id));
+          if (!tab) return; // Tab no encontrado, saltar
+
+          // Crear elemento de tab desde cero (sin clonar)
       const tabItem = document.createElement('div');
       tabItem.className = 'bottom-nav-item';
+          tabItem.style.position = 'relative';
+          tabItem.dataset.tabId = tab.id;
+          tabItem.dataset.index = index;
       if (tab.active) tabItem.classList.add('active');
       
-      // USAR EL TEMPLATE EXISTENTE para obtener icono
-      const tabHtml = window.tabManager.tabTemplate(tab, false, false);
+          // Limpiar cualquier listener previo o flag de drag
+          tabItem.dataset.dragListener = 'false';
+          tabItem.onclick = null;
+          // Remover todos los event listeners previos clonando el elemento (sin listeners)
+          // Pero mejor: simplemente no agregar listeners de drag si no está editando
+      
+          // Usar template del sidebar
+          const tabHtml = window.tabManager.tabTemplate(tab, !isEditing, false);
       const tabWrapper = document.createElement('div');
       tabWrapper.innerHTML = tabHtml;
       const originalTabEl = tabWrapper.firstElementChild;
       
       if (originalTabEl) {
-        // Extraer icono del template
-        const iconContainer = originalTabEl.querySelector('.w-7, .w-5, [class*="w-"]');
-        let iconHtml = '';
-        if (iconContainer) {
-          iconHtml = iconContainer.outerHTML;
-        }
+            // Extraer el círculo del icono
+            const iconCircle = originalTabEl.querySelector('.rounded-full');
         
         // Crear estructura bottom bar
         const iconDiv = document.createElement('div');
         iconDiv.className = 'icon';
-        if (iconContainer) {
-          iconDiv.innerHTML = iconContainer.innerHTML;
-        }
-        
-        const labelSpan = document.createElement('span');
-        labelSpan.className = 'label';
-        labelSpan.textContent = tab.title || 'Tab';
+            if (iconCircle) {
+              // Crear nuevo elemento en lugar de clonar
+              const iconDivInner = document.createElement('div');
+              iconDivInner.style.cssText = iconCircle.style.cssText;
+              iconDivInner.className = iconCircle.className;
+              iconDivInner.style.width = '36px';
+              iconDivInner.style.height = '36px';
+              // Copiar contenido sin clonar
+              iconDivInner.innerHTML = iconCircle.innerHTML;
+              iconDiv.appendChild(iconDivInner);
+        } else {
+              // Fallback
+              iconDiv.innerHTML = `<div style="width: 36px; height: 36px; border-radius: 50%; border: 1px solid #e8eaed; display: flex; align-items: center; justify-content: center;">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="3" y="3" width="18" height="18" rx="2"></rect>
+                </svg>
+              </div>`;
+            }
+            
+            const labelDiv = document.createElement('span');
+            labelDiv.className = 'label';
+            labelDiv.textContent = tab.title || 'Tab';
         
         tabItem.appendChild(iconDiv);
-        tabItem.appendChild(labelSpan);
-        
-        tabItem.addEventListener('click', () => {
-          if (window.tabManager) {
-            window.tabManager.activate(tab.id);
-            if (window.mobileUI && window.mobileUI.hideAll) {
-              window.mobileUI.hideAll();
+            tabItem.appendChild(labelDiv);
+            
+            // Three dots button si está editando
+            if (isEditing) {
+              const threeDotsBtn = document.createElement('button');
+              threeDotsBtn.className = 'mobile-tab-menu-btn';
+              threeDotsBtn.style.cssText = 'position: absolute; top: 4px; right: 4px; padding: 2px; opacity: 0.7; z-index: 1000; background: rgba(255, 255, 255, 0.9); border-radius: 50%; border: 1px solid rgba(0,0,0,0.1); cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 1px 2px rgba(0,0,0,0.1); pointer-events: auto; width: 20px; height: 20px;';
+              threeDotsBtn.dataset.tabId = tab.id;
+              if (tab.backendId) threeDotsBtn.dataset.backendId = tab.backendId;
+              threeDotsBtn.innerHTML = `
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="color: #5f6368;">
+                  <circle cx="12" cy="12" r="1"></circle>
+                  <circle cx="12" cy="5" r="1"></circle>
+                  <circle cx="12" cy="19" r="1"></circle>
+                </svg>
+              `;
+              
+              threeDotsBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+                e.preventDefault();
+                
+                const tabData = {
+                  id: tab.backendId || tab.id,
+                  title: tab.title,
+                  url: tab.url || tab.bookmark_url,
+                  bookmark_url: tab.bookmark_url,
+                  avatar_emoji: tab.avatar_emoji,
+                  avatar_color: tab.avatar_color,
+                  avatar_photo: tab.avatar_photo,
+                  cookie_container_id: tab.cookie_container_id,
+                  space_id: tab.space_id
+                };
+                
+                if (tab.backendId) {
+                  try {
+                    const response = await this.request(`/api/tabs/${tab.backendId}`);
+                    if (response?.tab) {
+                      this.showTabMenu(e, response.tab);
+                      return;
+                    }
+                  } catch {
+                    // Error handled silently
+                  }
+                }
+                
+                this.showTabMenu(e, tabData);
+              }, true);
+              
+              tabItem.appendChild(threeDotsBtn);
+              
+              // Prevenir clicks cuando está editando
+              tabItem.addEventListener('click', (e) => {
+                if (!e.target.closest('.mobile-tab-menu-btn')) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                }
+              }, true);
+              
+              // IMPORTANTE: Agregar el tabItem al container cuando está editando
+              container.appendChild(tabItem);
+            } else {
+              // Click handler cuando NO está editando - USAR EXACTAMENTE EL MISMO ENFOQUE QUE FIXED BUTTONS
+              // IMPORTANTE: Buscar el elemento existente en el DOM (puede haber sido movido durante drag & drop)
+              // y clonarlo para remover TODOS los listeners previos
+              let existingTabItem = container.querySelector(`[data-tab-id="${tab.id}"]`);
+              if (!existingTabItem) {
+                // Si no existe en el container, buscar en todo el bottom bar
+                existingTabItem = bottomBar.querySelector(`[data-tab-id="${tab.id}"]`);
+              }
+              
+              // Si existe en el DOM, clonarlo y reemplazarlo; si no, usar el nuevo tabItem
+              if (existingTabItem) {
+                // Clonar el elemento existente para remover todos los listeners
+                const cleanTabItem = existingTabItem.cloneNode(true);
+                
+                // Asegurar que NO hay tres puntos cuando NO está editando
+                const existingThreeDots = cleanTabItem.querySelector('.mobile-tab-menu-btn');
+                if (existingThreeDots) {
+                  existingThreeDots.remove();
+                }
+                
+                // Asegurar que NO tiene listeners de drag
+                cleanTabItem.dataset.dragListener = 'false';
+                cleanTabItem.style.touchAction = '';
+                cleanTabItem.style.userSelect = '';
+                cleanTabItem.style.webkitUserSelect = '';
+                
+                // Agregar listener de click limpio (igual que fixed buttons)
+                cleanTabItem.addEventListener('click', () => {
+                  if (window.tabManager) {
+                    window.tabManager.activate(tab.id);
+                    if (window.mobileUI && window.mobileUI.hideAll) {
+                      window.mobileUI.hideAll();
+                    }
+                  }
+                });
+                
+                // IMPORTANTE: Determinar dónde debe ir el tab según el orden guardado
+                // Buscar el elemento anterior en el orden para insertar después de él
+                let insertAfter = null;
+                if (index > 0) {
+                  const prevOrderItem = orderToRender[index - 1];
+                  if (prevOrderItem.type === 'tab') {
+                    // Buscar el tab anterior en el DOM
+                    const prevTab = tabsMap.get(String(prevOrderItem.id));
+                    if (prevTab) {
+                      const prevTabItem = bottomBar.querySelector(`[data-tab-id="${prevTab.id}"]`);
+                      if (prevTabItem) {
+                        insertAfter = prevTabItem;
+                      }
+                    }
+                  } else if (prevOrderItem.type === 'fixed') {
+                    // Buscar el fixed button anterior
+                    let prevFixedBtn = null;
+                    if (prevOrderItem.id === 'projects') {
+                      prevFixedBtn = document.getElementById('mobile-nav-projects');
+                    } else if (prevOrderItem.id === 'users') {
+                      prevFixedBtn = document.getElementById('mobile-nav-messenger');
+                    } else if (prevOrderItem.id === 'more') {
+                      prevFixedBtn = document.getElementById('mobile-nav-more');
+                    }
+                    if (prevFixedBtn) {
+                      insertAfter = prevFixedBtn;
+                    }
+                  }
+                }
+                
+                // Reemplazar el elemento existente con el clonado limpio
+                if (existingTabItem.parentNode) {
+                  const oldParent = existingTabItem.parentNode;
+                  oldParent.replaceChild(cleanTabItem, existingTabItem);
+                  
+                  // Mover al lugar correcto según el orden guardado
+                  // Determinar el contenedor correcto basado en insertAfter
+                  let targetContainer = container;
+                  if (insertAfter) {
+                    // Si el elemento anterior está en el bottomBar, el tab también debería estar ahí
+                    if (insertAfter.parentNode === bottomBar) {
+                      targetContainer = bottomBar;
+                    }
+                  }
+                  
+                  // Verificar si necesita moverse
+                  const needsMove = cleanTabItem.parentNode !== targetContainer || 
+                                   (insertAfter && cleanTabItem.previousSibling !== insertAfter);
+                  
+                  if (needsMove) {
+                    // Remover del lugar actual
+                    cleanTabItem.remove();
+                    
+                    // Insertar en el lugar correcto
+                    if (insertAfter) {
+                      const insertParent = insertAfter.parentNode;
+                      insertParent.insertBefore(cleanTabItem, insertAfter.nextSibling);
+                    } else {
+                      // Si no hay elemento anterior, insertar al principio del targetContainer
+                      targetContainer.insertBefore(cleanTabItem, targetContainer.firstChild);
+                    }
+                  }
+                } else {
+                  // Si no tiene parent, agregarlo en el lugar correcto
+                  if (insertAfter) {
+                    const insertParent = insertAfter.parentNode;
+                    insertParent.insertBefore(cleanTabItem, insertAfter.nextSibling);
+                  } else {
+                    container.appendChild(cleanTabItem);
+                  }
+                }
+              } else {
+                // Si no existe en el DOM, usar el nuevo tabItem (primera vez que se renderiza)
+                // Asegurar que NO hay tres puntos cuando NO está editando
+                const existingThreeDots = tabItem.querySelector('.mobile-tab-menu-btn');
+                if (existingThreeDots) {
+                  existingThreeDots.remove();
+                }
+                
+                // Asegurar que NO tiene listeners de drag
+                tabItem.dataset.dragListener = 'false';
+                tabItem.style.touchAction = '';
+                tabItem.style.userSelect = '';
+                tabItem.style.webkitUserSelect = '';
+                
+                // Agregar listener de click limpio
+                tabItem.addEventListener('click', () => {
+                  if (window.tabManager) {
+                    window.tabManager.activate(tab.id);
+                    if (window.mobileUI && window.mobileUI.hideAll) {
+                      window.mobileUI.hideAll();
+                    }
+                  }
+                });
+                
+                // IMPORTANTE: Determinar dónde debe ir el tab según el orden guardado
+                // Buscar el elemento anterior en el orden para insertar después de él
+                let insertAfter = null;
+                if (index > 0) {
+                  const prevOrderItem = orderToRender[index - 1];
+                  if (prevOrderItem.type === 'tab') {
+                    // Buscar el tab anterior en el DOM
+                    const prevTab = tabsMap.get(String(prevOrderItem.id));
+                    if (prevTab) {
+                      const prevTabItem = bottomBar.querySelector(`[data-tab-id="${prevTab.id}"]`);
+                      if (prevTabItem) {
+                        insertAfter = prevTabItem;
+                      }
+                    }
+                  } else if (prevOrderItem.type === 'fixed') {
+                    // Buscar el fixed button anterior
+                    let prevFixedBtn = null;
+                    if (prevOrderItem.id === 'projects') {
+                      prevFixedBtn = document.getElementById('mobile-nav-projects');
+                    } else if (prevOrderItem.id === 'users') {
+                      prevFixedBtn = document.getElementById('mobile-nav-messenger');
+                    } else if (prevOrderItem.id === 'more') {
+                      prevFixedBtn = document.getElementById('mobile-nav-more');
+                    }
+                    if (prevFixedBtn) {
+                      insertAfter = prevFixedBtn;
+                    }
+                  }
+                }
+                
+                // Insertar en el lugar correcto
+                if (insertAfter) {
+                  if (insertAfter.parentNode === bottomBar) {
+                    bottomBar.insertBefore(tabItem, insertAfter.nextSibling);
+                  } else {
+                    container.insertBefore(tabItem, insertAfter.nextSibling);
+                  }
+                } else {
+                  container.appendChild(tabItem);
+                }
+              }
             }
+          } else {
+            // Si no hay originalTabEl, aún así agregar el tabItem básico
+            container.appendChild(tabItem);
           }
-        });
-        
-        container.appendChild(tabItem);
-      }
-    });
+        } else if (orderItem.type === 'fixed') {
+          // Fixed buttons ya están en el HTML, solo agregar listeners y asegurar posición
+          let fixedBtn = null;
+          if (orderItem.id === 'projects') {
+            fixedBtn = document.getElementById('mobile-nav-projects');
+          } else if (orderItem.id === 'users') {
+            fixedBtn = document.getElementById('mobile-nav-messenger');
+          } else if (orderItem.id === 'more') {
+            fixedBtn = document.getElementById('mobile-nav-more');
+          }
 
-    // Store more tabs for "More" view
-    this.mobileMoreTabs = moreTabs;
-    
-    // Setup event listeners for mobile bottom nav items
-    try {
-      const bottomNav = document.querySelector('#mobile-tabs-container')?.parentElement;
-      if (bottomNav) {
-        bottomNav.addEventListener('click', (e) => {
-          try {
-            const clickedItem = e.target.closest('.bottom-nav-item');
-            if (!clickedItem) return;
+          if (fixedBtn) {
+            // Asegurar que el fixed button esté en el bottom bar, no en otro lugar
+            if (fixedBtn.parentNode !== bottomBar) {
+              bottomBar.appendChild(fixedBtn);
+            }
             
-            const label = clickedItem.querySelector('.label')?.textContent?.trim();
+            fixedBtn.dataset.index = index;
             
-            if (label === 'Proyectos' || label?.includes('Proyectos')) {
-              if (window.mobileUI && typeof window.mobileUI.show === 'function') {
-                window.mobileUI.show('mobile-projects-view');
-                setTimeout(() => {
-                  this.renderMobileProjects();
-                }, 50);
-              }
-            } else if (label === 'Messenger' || label?.includes('Messenger')) {
-              if (window.mobileUI && typeof window.mobileUI.show === 'function') {
-                window.mobileUI.show('mobile-messenger-view');
-                setTimeout(() => {
-                  this.renderMobileMessenger();
-                }, 50);
+            if (isEditing) {
+              // Cuando está editando, solo asegurar que tiene el listener
+              // Remover listener previo si existe (limpiar onclick)
+              fixedBtn.onclick = null;
+              
+              // Agregar listener directamente (sin clonar)
+              fixedBtn.dataset.listenerAdded = 'true';
+              fixedBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                
+                // Check if in editing mode - if so, don't open
+                if (bottomBar && bottomBar.classList.contains('editing')) {
+                  return;
+                }
+                
+                // Use showMobileView function
+                if (window.mobileUI && typeof window.mobileUI.showView === 'function') {
+                  let viewName = orderItem.id;
+                  if (viewName === 'users') viewName = 'messenger';
+                  
+                  window.mobileUI.showView(viewName);
+                  setTimeout(() => {
+                    if (viewName === 'projects' && this.renderMobileProjects) {
+                    this.renderMobileProjects();
+                    } else if (viewName === 'messenger' && this.renderMobileMessenger) {
+                      this.renderMobileMessenger();
+                    } else if (viewName === 'more' && this.renderMore) {
+                      this.renderMore(false, 'mobile');
+                    }
+                  }, 50);
+                }
+              });
+            } else {
+              // Cuando NO está editando, CLONAR el elemento para remover TODOS los listeners previos
+              // (igual que hacemos con los tabs y como se hace en More)
+              const cleanFixedBtn = fixedBtn.cloneNode(true);
+              
+              // Asegurar que NO tiene listeners de drag
+              cleanFixedBtn.dataset.dragListener = 'false';
+              cleanFixedBtn.style.touchAction = '';
+              cleanFixedBtn.style.userSelect = '';
+              cleanFixedBtn.style.webkitUserSelect = '';
+              
+              // Agregar listener de click limpio
+              cleanFixedBtn.addEventListener('click', () => {
+                // Use showMobileView function
+                if (window.mobileUI && typeof window.mobileUI.showView === 'function') {
+                  let viewName = orderItem.id;
+                  if (viewName === 'users') viewName = 'messenger';
+                  
+                  window.mobileUI.showView(viewName);
+                  setTimeout(() => {
+                    if (viewName === 'projects' && this.renderMobileProjects) {
+                    this.renderMobileProjects();
+                    } else if (viewName === 'messenger' && this.renderMobileMessenger) {
+                      this.renderMobileMessenger();
+                    } else if (viewName === 'more' && this.renderMore) {
+                      this.renderMore(false, 'mobile');
+                    }
+                  }, 50);
+                }
+              });
+              
+              // Reemplazar el elemento original con el clonado limpio
+              if (fixedBtn.parentNode) {
+                fixedBtn.parentNode.replaceChild(cleanFixedBtn, fixedBtn);
+              } else {
+                bottomBar.appendChild(cleanFixedBtn);
               }
             }
-          } catch (err) {
-            console.error('Error handling mobile nav click:', err);
           }
+        }
+      });
+
+      // Store more tabs for More view
+      this.mobileMoreTabs = personalTabs.filter(t => {
+        const tId = String(t.backendId || t.id);
+        return moreTabIds.has(tId);
+      });
+
+      // Asegurar que los tres puntos se muestren/oculten correctamente
+      // Si NO está editando, remover todos los tres puntos inmediatamente
+      if (!isEditing) {
+        const allThreeDots = bottomBar.querySelectorAll('.mobile-tab-menu-btn');
+        allThreeDots.forEach(btn => btn.remove());
+      }
+
+      // Setup drag & drop SOLO si está editando
+      if (isEditing) {
+        this.setupMobileBottomBarDragAndDropLikeMore();
+      } else {
+        // Si NO está editando, ASEGURAR que NO hay listeners de drag activos
+        // Esto es CRÍTICO - remover cualquier listener de drag que pueda estar activo
+        // Remover de TODOS los items del bottom bar (tabs Y fixed buttons)
+        const allItems = bottomBar.querySelectorAll('.bottom-nav-item');
+        allItems.forEach(item => {
+          // Remover listeners de drag si existen
+          if (item._dragHandlers) {
+            item.removeEventListener('touchstart', item._dragHandlers.touchstart);
+            item.removeEventListener('touchmove', item._dragHandlers.touchmove);
+            item.removeEventListener('touchend', item._dragHandlers.touchend);
+            delete item._dragHandlers;
+          }
+          item.dataset.dragListener = 'false';
+          item.style.touchAction = '';
+          item.style.userSelect = '';
+          item.style.webkitUserSelect = '';
         });
       }
-    } catch (err) {
-      console.error('Error setting up mobile nav listeners:', err);
-    }
     } catch (err) {
       console.error('Error rendering mobile bottom bar:', err);
     }
   }
 
+  // Setup drag & drop for mobile bottom bar (sin clonar elementos)
+  setupMobileBottomBarDragAndDropLikeMore() {
+    const bottomBar = document.getElementById('mobile-bottom-bar');
+    if (!bottomBar) return;
+    
+    // CRÍTICO: Solo configurar drag & drop si estamos en modo de edición
+    // Si NO está editando, SALIR INMEDIATAMENTE sin hacer nada
+    if (!bottomBar.classList.contains('editing')) {
+      return;
+    }
+
+    // Limpiar banderas de drag listeners previos para permitir re-agregar
+    const allItems = bottomBar.querySelectorAll('.bottom-nav-item');
+    allItems.forEach(item => {
+      // Remover listeners previos si existen
+      if (item._dragHandlers) {
+        item.removeEventListener('touchstart', item._dragHandlers.touchstart);
+        item.removeEventListener('touchmove', item._dragHandlers.touchmove);
+        item.removeEventListener('touchend', item._dragHandlers.touchend);
+        delete item._dragHandlers;
+      }
+      
+      item.dataset.dragListener = 'false';
+      // Aplicar estilos de drag solo cuando estamos en modo de edición
+      item.style.touchAction = 'none';
+      item.style.userSelect = 'none';
+      item.style.webkitUserSelect = 'none';
+    });
+
+    let draggedElement = null;
+
+    allItems.forEach((item) => {
+      // IMPORTANTE: Verificar que todavía estamos en modo de edición ANTES de agregar listeners
+      if (!bottomBar.classList.contains('editing')) {
+        // Ya no estamos editando, NO agregar listeners de drag
+        item.dataset.dragListener = 'false';
+        item.style.touchAction = '';
+        item.style.userSelect = '';
+        item.style.webkitUserSelect = '';
+        return;
+      }
+      
+      // Verificar bandera para evitar agregar listeners múltiples veces
+      if (item.dataset.dragListener === 'true') {
+        // Ya tiene listeners, saltar
+        return;
+      }
+      item.dataset.dragListener = 'true';
+      
+      // Get tab data (only for tabs, not for fixed buttons)
+      const tabId = item.dataset.tabId;
+      const tabs = window.tabManager?.tabs || [];
+      const tab = tabId ? tabs.find(t => String(t.id) === String(tabId)) : null;
+      
+      // Set index for all items (tabs and fixed buttons)
+      const allItemsArray = Array.from(bottomBar.querySelectorAll('.bottom-nav-item'));
+      const itemIndex = allItemsArray.indexOf(item);
+      item.dataset.index = itemIndex;
+      
+      // Ensure item is draggable ONLY when in editing mode
+      // We'll set these styles dynamically based on editing mode
+      // Don't set them here to allow normal clicks when not editing
+      
+      // Crear handlers y guardarlos para poder removerlos después
+      const touchStartHandler = (e) => {
+        // Don't start drag if clicking on three dots button - same as More
+        if (e.target.closest('.mobile-tab-menu-btn')) return;
+        
+        e.preventDefault();
+        e.stopPropagation();
+        draggedElement = item;
+        item.classList.add('dragging');
+        item.style.opacity = '0.5';
+        item.style.zIndex = '1000';
+      };
+      
+      const touchMoveHandler = (e) => {
+        if (!draggedElement) return;
+        e.preventDefault();
+        e.stopPropagation();
+        
+        const touch = e.touches[0];
+        const elementBelow = document.elementFromPoint(touch.clientX, touch.clientY);
+        
+        // Check if dropping on More container - same as More
+        const moreContainer = elementBelow?.closest('#mobile-more-content');
+        if (moreContainer) {
+          moreContainer.style.opacity = '0.7';
+          return;
+        }
+        
+        // Check if dropping on another item - same logic as More
+        let targetItem = elementBelow?.closest('.bottom-nav-item');
+        
+        if (!targetItem && elementBelow?.closest('.mobile-tab-menu-btn')) {
+          targetItem = elementBelow.closest('.mobile-tab-menu-btn')?.closest('.bottom-nav-item');
+        }
+        
+        if (targetItem && targetItem !== draggedElement) {
+          // Calculate indices based on position in bottom bar (all items)
+          const allItemsArray = Array.from(bottomBar.querySelectorAll('.bottom-nav-item'));
+          const currentDraggedIndex = allItemsArray.indexOf(draggedElement);
+          const targetIndex = allItemsArray.indexOf(targetItem);
+          
+          if (currentDraggedIndex !== -1 && targetIndex !== -1 && currentDraggedIndex !== targetIndex) {
+            // Get target's parent (could be mobile-tabs-container or mobile-bottom-bar)
+            const targetParent = targetItem.parentNode;
+            
+            // Move element to new position
+            if (currentDraggedIndex < targetIndex) {
+              // Moving forward - insert after target
+              if (targetItem.nextSibling) {
+                targetParent.insertBefore(draggedElement, targetItem.nextSibling);
+              } else {
+                targetParent.appendChild(draggedElement);
+              }
+            } else {
+              // Moving backward - insert before target
+              targetParent.insertBefore(draggedElement, targetItem);
+            }
+            
+            // Update indices for all items
+            Array.from(bottomBar.querySelectorAll('.bottom-nav-item')).forEach((item, idx) => {
+              item.dataset.index = idx;
+            });
+            
+            draggedElement.dataset.index = targetIndex;
+          }
+        }
+      };
+      
+      const touchEndHandler = (e) => {
+        // Solo procesar si estamos en modo de edición
+        if (!bottomBar.classList.contains('editing')) {
+          draggedElement = null;
+          // NO prevenir comportamiento si no estamos editando - permitir clicks normales
+          return;
+        }
+        
+        if (!draggedElement) return;
+        e.preventDefault();
+        e.stopPropagation();
+        
+        const touch = e.changedTouches[0];
+        const elementBelow = document.elementFromPoint(touch.clientX, touch.clientY);
+        const moreContainer = elementBelow?.closest('#mobile-more-content');
+        
+        // Reset More container opacity
+        if (moreContainer) {
+          moreContainer.style.opacity = '';
+        }
+        
+        // Reset styles
+        draggedElement.classList.remove('dragging');
+        draggedElement.style.opacity = '';
+        draggedElement.style.zIndex = '';
+        
+        // Check if dropped on More - same as More (only for tabs, not fixed buttons)
+        if (moreContainer && tab && !item.dataset.fixedButton) {
+          // Move tab from bottom bar to More
+          this.moveTabToMobileMore(tab).then(() => {
+            this.renderMobileBottomBar(true);
+            this.renderMore(false, 'mobile');
+          });
+        } else {
+          // Asegurar que los fixed buttons estén en el bottomBar, no en el container
+          const container = document.getElementById('mobile-tabs-container');
+          if (bottomBar && container) {
+            const fixedButtons = bottomBar.querySelectorAll('.bottom-nav-item[data-fixed-button]');
+            fixedButtons.forEach(btn => {
+              // Si el fixed button está en el container, moverlo al bottomBar
+              if (btn.parentNode === container) {
+                bottomBar.appendChild(btn);
+              }
+            });
+          }
+          
+          // Save new order - same as More (for all items including fixed buttons)
+          this.saveMobileBottomBarOrder();
+        }
+        
+        draggedElement = null;
+      };
+      
+      // Agregar listeners y guardarlos para poder removerlos después
+      item.addEventListener('touchstart', touchStartHandler, { passive: false, capture: false });
+      item.addEventListener('touchmove', touchMoveHandler, { passive: false, capture: false });
+      item.addEventListener('touchend', touchEndHandler, { passive: false, capture: false });
+      
+      // Guardar referencias para poder removerlos después
+      item._dragHandlers = {
+        touchstart: touchStartHandler,
+        touchmove: touchMoveHandler,
+        touchend: touchEndHandler
+      };
+    });
+  }
+
+  // OLD CODE REMOVED - using new unified approach above
+
+  setupMobileBottomBarDragAndDrop() {
+    // Esta función está obsoleta - usar setupMobileBottomBarDragAndDropLikeMore() en su lugar
+    // Redirigir a la nueva función
+    return this.setupMobileBottomBarDragAndDropLikeMore();
+  }
+
+  // FUNCIÓN OBSOLETA - mantener por compatibilidad pero redirige a setupMobileBottomBarDragAndDropLikeMore
+  setupMobileBottomBarDragAndDrop_OLD() {
+    // Use simple bottom bar drag & drop if available
+    if (this.simpleMobileBottomBar) {
+      this.simpleMobileBottomBar.setupDragAndDrop();
+      return;
+    }
+    
+    // Fallback to old code if simple version not available
+    const bottomBar = document.getElementById('mobile-bottom-bar');
+    if (!bottomBar || !bottomBar.classList.contains('editing')) {
+      if (bottomBar) {
+        bottomBar.dataset.dragSetup = 'false';
+        bottomBar.querySelectorAll('.bottom-nav-item').forEach(item => {
+          item.dataset.dragListener = 'false';
+        });
+      }
+      return;
+    }
+
+    // Check if already set up to prevent duplicate listeners
+    if (bottomBar.dataset.dragSetup === 'true') {
+      return;
+    }
+    bottomBar.dataset.dragSetup = 'true';
+
+    // Get ALL items in bottom bar (tabs + fixed buttons)
+    const allItems = Array.from(bottomBar.querySelectorAll('.bottom-nav-item'));
+    let draggedElement = null;
+    let draggedIndex = null;
+    let draggedData = null; // Can be tab or fixed button
+
+    allItems.forEach((item, index) => {
+      // Only clone if item doesn't already have drag listener
+      if (item.dataset.dragListener === 'true') {
+        return; // Skip, already has listener
+      }
+      
+      // OBSOLETO - NO CLONAR - usar setupMobileBottomBarDragAndDropLikeMore() en su lugar
+      const newItem = item.cloneNode(true);
+      item.parentNode.replaceChild(newItem, item);
+      newItem.dataset.dragListener = 'true';
+      
+      // Store index and identify type
+      newItem.dataset.index = index;
+      const isFixedButton = newItem.dataset.fixedButton;
+      const tabId = newItem.querySelector('.mobile-tab-menu-btn')?.dataset.tabId || 
+                    newItem.dataset.tabId;
+      
+      // Store data
+      if (isFixedButton) {
+        newItem.dataset.itemType = 'fixed';
+        newItem.dataset.itemId = isFixedButton;
+        
+        // Re-attach click listeners for fixed buttons using centralized function
+        // This ensures consistency across all code paths
+        if (isFixedButton) {
+          // Use the centralized handler
+          const handler = (viewName, renderFn) => (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            
+            const bottomBar = document.getElementById('mobile-bottom-bar');
+            if (bottomBar && bottomBar.classList.contains('editing')) {
+              return;
+            }
+            
+            if (window.mobileUI && typeof window.mobileUI.showView === 'function') {
+              window.mobileUI.showView(viewName);
+                setTimeout(() => {
+                if (this[renderFn]) {
+                  this[renderFn]();
+                }
+                }, 50);
+              }
+          };
+          
+          if (isFixedButton === 'projects') {
+            newItem.onclick = handler('projects', 'renderMobileProjects');
+          } else if (isFixedButton === 'users') {
+            newItem.onclick = handler('messenger', 'renderMobileMessenger');
+          } else if (isFixedButton === 'more') {
+            newItem.onclick = (e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              
+              const bottomBar = document.getElementById('mobile-bottom-bar');
+              if (bottomBar && bottomBar.classList.contains('editing')) {
+                return;
+              }
+              
+              if (window.mobileUI && typeof window.mobileUI.showView === 'function') {
+                window.mobileUI.showView('more');
+                setTimeout(() => {
+                  this.renderMore(false, 'mobile');
+                }, 50);
+              }
+            };
+          }
+        }
+      } else if (tabId) {
+        newItem.dataset.itemType = 'tab';
+        newItem.dataset.tabId = tabId;
+      } else {
+        return; // Skip if can't identify
+      }
+      
+      newItem.addEventListener('touchstart', (e) => {
+        // Check if still in editing mode before allowing drag
+        const bottomBarCheck = document.getElementById('mobile-bottom-bar');
+        if (!bottomBarCheck || !bottomBarCheck.classList.contains('editing')) {
+          return; // Not in editing mode, don't allow drag
+        }
+        
+        // Don't start drag if clicking on three dots button
+        if (e.target.closest('.mobile-tab-menu-btn')) return;
+        
+        e.preventDefault();
+        draggedElement = newItem;
+        draggedIndex = index;
+        
+        if (isFixedButton) {
+          draggedData = { type: 'fixed', id: isFixedButton };
+        } else if (tabId) {
+          const tabs = window.tabManager?.tabs || [];
+          const tab = tabs.find(t => String(t.id) === String(tabId));
+          draggedData = { type: 'tab', tab: tab };
+        }
+        
+        newItem.classList.add('dragging');
+        newItem.style.opacity = '0.5';
+      }, { passive: false });
+
+      newItem.addEventListener('touchmove', (e) => {
+        // Check if still in editing mode
+        const bottomBarCheck = document.getElementById('mobile-bottom-bar');
+        if (!bottomBarCheck || !bottomBarCheck.classList.contains('editing')) {
+          if (draggedElement) {
+            draggedElement.classList.remove('dragging');
+            draggedElement.style.opacity = '';
+            draggedElement = null;
+            draggedIndex = null;
+            draggedData = null;
+          }
+          return; // Not in editing mode, cancel drag
+        }
+        
+        if (!draggedElement) return;
+        e.preventDefault();
+        
+        const touch = e.touches[0];
+        const elementBelow = document.elementFromPoint(touch.clientX, touch.clientY);
+        
+        // Check if dropping on More button (only for tabs, not fixed buttons)
+        const moreBtn = elementBelow?.closest('#mobile-nav-more');
+        if (moreBtn && draggedData?.type === 'tab') {
+          moreBtn.style.opacity = '0.7';
+          return;
+        }
+        
+        // Check if dropping on another item in bottom bar
+        const targetItem = elementBelow?.closest('.bottom-nav-item');
+        
+        if (targetItem && targetItem !== draggedElement) {
+          // Get all items in current order
+          const allItems = Array.from(bottomBar.querySelectorAll('.bottom-nav-item'));
+          const targetIndex = allItems.indexOf(targetItem);
+          
+          if (targetIndex !== -1 && targetIndex !== draggedIndex) {
+            // Get both parent containers
+            const draggedParent = draggedElement.parentElement;
+            const targetParent = targetItem.parentElement;
+            
+            // If same parent, just reorder
+            if (draggedParent === targetParent) {
+              if (draggedIndex < targetIndex) {
+                draggedParent.insertBefore(draggedElement, targetItem.nextSibling);
+              } else {
+                draggedParent.insertBefore(draggedElement, targetItem);
+              }
+            } else {
+              // Different parents - move between containers
+              if (draggedIndex < targetIndex) {
+                targetParent.insertBefore(draggedElement, targetItem.nextSibling);
+              } else {
+                targetParent.insertBefore(draggedElement, targetItem);
+              }
+            }
+            
+            // Update indices for all items
+            const updatedItems = Array.from(bottomBar.querySelectorAll('.bottom-nav-item'));
+            updatedItems.forEach((item, idx) => {
+              item.dataset.index = idx;
+            });
+            
+            draggedIndex = targetIndex;
+            
+            // Force reflow to ensure flexbox recalculates
+            bottomBar.offsetHeight;
+          }
+        }
+      }, { passive: false });
+
+      newItem.addEventListener('touchend', (e) => {
+        if (!draggedElement) return;
+        e.preventDefault();
+        
+        const touch = e.changedTouches[0];
+        const elementBelow = document.elementFromPoint(touch.clientX, touch.clientY);
+        const moreBtn = elementBelow?.closest('#mobile-nav-more');
+        
+        // Reset More button opacity
+        if (moreBtn) {
+          moreBtn.style.opacity = '';
+        }
+        
+        // Check if dropped on More button (only for tabs)
+        if (moreBtn && draggedData?.type === 'tab' && draggedData?.tab) {
+          // Move tab to More - need to re-render
+          this.moveTabToMobileMore(draggedData.tab).then(() => {
+            // Only re-render if we actually moved the tab
+            this.renderMobileBottomBar();
+            this.renderMore(false, 'mobile');
+          });
+        } else {
+          // Just reordering within bottom bar - don't re-render, just save order
+          // Re-rendering causes duplication
+          this.saveMobileBottomBarOrder();
+        }
+        
+        // Ensure all items are visible after drag
+        bottomBar.querySelectorAll('.bottom-nav-item').forEach(item => {
+          item.style.display = 'flex';
+          item.style.visibility = 'visible';
+          item.style.opacity = '';
+        });
+        
+        draggedElement.classList.remove('dragging');
+        draggedElement.style.opacity = '';
+        
+        // Don't re-render immediately - just save order
+        // Re-render will happen naturally when needed
+        draggedElement = null;
+        draggedData = null;
+      }, { passive: false });
+    });
+  }
+
+  async saveMobileBottomBarOrder() {
+    const bottomBar = document.getElementById('mobile-bottom-bar');
+    const container = document.getElementById('mobile-tabs-container');
+    if (!bottomBar) return;
+    
+    // Get current order from DOM (tabs from container + fixed buttons from bottomBar)
+    // IMPORTANTE: Los tabs pueden estar en el container O en el bottomBar (si se movieron después de fixed buttons)
+    const order = [];
+    
+    // Obtener TODOS los items del bottomBar en orden (tabs Y fixed buttons)
+    // Esto captura el orden real en el DOM, sin importar dónde estén
+    const allBottomBarItems = Array.from(bottomBar.querySelectorAll('.bottom-nav-item'));
+    
+    // Ordenar por posición en el DOM (usando compareDocumentPosition o índice)
+    allBottomBarItems.sort((a, b) => {
+      const position = a.compareDocumentPosition(b);
+      if (position & Node.DOCUMENT_POSITION_FOLLOWING) {
+        return -1; // a viene antes de b
+      } else if (position & Node.DOCUMENT_POSITION_PRECEDING) {
+        return 1; // a viene después de b
+      }
+      return 0;
+    });
+    
+    // Procesar cada item en orden
+    allBottomBarItems.forEach(item => {
+      // Verificar si es un tab
+      const tabId = item.dataset.tabId;
+      if (tabId) {
+        // Use backendId if available, otherwise use id
+        const tab = window.tabManager?.tabs?.find(t => String(t.id) === String(tabId));
+        if (tab) {
+          const tabIdToSave = String(tab.backendId || tab.id);
+          order.push({ type: 'tab', id: tabIdToSave });
+        }
+      } else {
+        // Verificar si es un fixed button
+        const fixedButton = item.dataset.fixedButton;
+        if (fixedButton) {
+          order.push({ type: 'fixed', id: fixedButton });
+        }
+      }
+    });
+    
+    // También obtener tabs del container que puedan no estar en el bottomBar aún
+    // (por si acaso hay algún tab que no se haya movido al bottomBar)
+    if (container) {
+      const containerTabItems = Array.from(container.querySelectorAll('.bottom-nav-item[data-tab-id]'));
+      containerTabItems.forEach(item => {
+        const tabId = item.dataset.tabId;
+        if (tabId) {
+          // Verificar si ya está en el orden
+          const tab = window.tabManager?.tabs?.find(t => String(t.id) === String(tabId));
+          if (tab) {
+            const tabIdToSave = String(tab.backendId || tab.id);
+            const alreadyInOrder = order.some(o => o.type === 'tab' && o.id === tabIdToSave);
+            if (!alreadyInOrder) {
+              // Si no está en el orden, agregarlo (probablemente al final)
+              order.push({ type: 'tab', id: tabIdToSave });
+            }
+          }
+        }
+      });
+    }
+    
+    // Save order to preferences (with error handling)
+    try {
+      await this.savePreferences({ mobile_bottom_bar_order: order });
+    } catch (err) {
+      console.error('Failed to save mobile bottom bar order:', err);
+      // Don't throw - just log the error, order is still preserved in DOM
+    }
+    
+    // Also save tabs order if there are tabs
+    const tabs = window.tabManager?.tabs || [];
+    const personalTabs = tabs.filter(t => {
+      const url = t.url || '';
+      return url && url !== '/new' && url !== 'tabs://new' && !t.spaceId && !this.isChatUrl(url);
+    });
+    
+    // Get tabs in bottom bar (not in More)
+    const moreTabIds = this.getMobileMoreTabIdsSync();
+    const bottomBarTabs = personalTabs.filter(t => {
+      const tId = String(t.backendId || t.id);
+      return !moreTabIds.has(tId);
+    });
+    
+    // Reorder bottomBarTabs based on DOM order
+    const reorderedBottomBarTabs = [];
+    for (const item of order) {
+      if (item.type === 'tab') {
+        // Try to find by backendId first, then by id
+        const tab = bottomBarTabs.find(t => 
+          String(t.backendId || t.id) === String(item.id) || 
+          String(t.id) === String(item.id)
+        );
+        if (tab) {
+          reorderedBottomBarTabs.push(tab);
+        }
+      }
+    }
+    
+    // Add remaining tabs
+    for (const tab of bottomBarTabs) {
+      if (!reorderedBottomBarTabs.find(t => String(t.id) === String(tab.id))) {
+        reorderedBottomBarTabs.push(tab);
+      }
+    }
+    
+    // Update TabManager order
+    const moreTabs = personalTabs.filter(t => {
+      const tId = String(t.backendId || t.id);
+      return moreTabIds.has(tId);
+    });
+    
+    const allPersonalTabs = [...reorderedBottomBarTabs, ...moreTabs];
+    const allTabs = window.tabManager?.tabs || [];
+    const reorderedTabs = [];
+    for (const personalTab of allPersonalTabs) {
+      const tabManagerTab = allTabs.find(t => String(t.id) === String(personalTab.id));
+      if (tabManagerTab) {
+        reorderedTabs.push(tabManagerTab);
+      }
+    }
+    
+    // Add non-personal tabs
+    const nonPersonalTabs = allTabs.filter(t => {
+      const url = t.url || '';
+      return url === '/new' || url === 'tabs://new' || t.spaceId || this.isChatUrl(url);
+    });
+    
+    window.tabManager.tabs = [...reorderedTabs, ...nonPersonalTabs];
+    
+    // Save tabs order to backend
+    const updates = allPersonalTabs.map((tab, index) => {
+      if (tab.backendId) {
+        return { id: tab.backendId, position: index };
+      }
+      return null;
+    }).filter(Boolean);
+    
+    if (updates.length > 0) {
+      try {
+        await this.request('/api/tabs/reorder', {
+          method: 'POST',
+          body: JSON.stringify({ updates })
+        });
+    } catch (err) {
+        console.error('Failed to save tabs order:', err);
+      }
+    }
+  }
+
+  async moveTabToMobileMore(tab) {
+    const tabId = String(tab.backendId || tab.id);
+    const moreTabIds = await this.getMobileMoreTabIds();
+    moreTabIds.add(tabId);
+    await this.setMobileMoreTabIds(moreTabIds);
+    
+    // Update mobile more tabs
+    const tabs = window.tabManager?.tabs || [];
+    const personalTabs = tabs.filter(t => {
+      const url = t.url || '';
+      return url && url !== '/new' && url !== 'tabs://new' && !t.spaceId && !this.isChatUrl(url);
+    });
+    
+    const moreTabs = personalTabs.filter(t => {
+      const tId = String(t.backendId || t.id);
+      return moreTabIds.has(tId);
+    });
+    
+    this.mobileMoreTabs = moreTabs;
+    
+    // Re-render
+    this.renderMobileBottomBar();
+  }
+
+  async moveTabFromMobileMore(tab) {
+    const tabId = String(tab.backendId || tab.id);
+    const moreTabIds = await this.getMobileMoreTabIds();
+    moreTabIds.delete(tabId);
+    await this.setMobileMoreTabIds(moreTabIds);
+    
+    // Update mobile more tabs
+    const tabs = window.tabManager?.tabs || [];
+    const personalTabs = tabs.filter(t => {
+      const url = t.url || '';
+      return url && url !== '/new' && url !== 'tabs://new' && !t.spaceId && !this.isChatUrl(url);
+    });
+    
+    const moreTabs = personalTabs.filter(t => {
+      const tId = String(t.backendId || t.id);
+      return moreTabIds.has(tId);
+    });
+    
+    this.mobileMoreTabs = moreTabs;
+    
+    // Re-render
+    this.renderMobileBottomBar();
+  }
+
   renderMobileProjects() {
-    // REUTILIZAR CÓDIGO EXISTENTE: Clonar TODA la sección del sidebar (incluyendo header con botón "+")
+    // CÓDIGO BASE ÚNICO: Clonar TODA la sección del sidebar (incluyendo header con botón "+")
     const projectsCont = document.getElementById('projects-cont');
     const mobileContainer = document.getElementById('mobile-projects-content');
     if (!projectsCont || !mobileContainer) return;
@@ -1049,13 +2106,12 @@ class LunaIntegration {
     const fullSection = projectsCont.parentElement;
     if (!fullSection) return;
     
-    // Clonar TODA la sección (header + contenido)
+    // Clonar TODA la sección (header + contenido) - CÓDIGO BASE ÚNICO
     const cloned = fullSection.cloneNode(true);
     mobileContainer.innerHTML = '';
     mobileContainer.appendChild(cloned);
     
-    // Re-attach event listeners for mobile
-    // 1. Botón "+" para crear proyectos
+    // Re-attach event listeners for mobile - usar el mismo botón del sidebar clonado
     const projectBtn = cloned.querySelector('#project-btn');
     if (projectBtn) {
       projectBtn.addEventListener('click', () => {
@@ -1099,7 +2155,7 @@ class LunaIntegration {
   }
 
   renderMobileMessenger() {
-    // REUTILIZAR CÓDIGO EXISTENTE: Clonar TODA la sección del sidebar (incluyendo header con botón "+")
+    // CÓDIGO BASE ÚNICO: Clonar TODA la sección del sidebar (incluyendo header con botón "+")
     const usersCont = document.getElementById('users-cont');
     const mobileContainer = document.getElementById('mobile-messenger-content');
     if (!usersCont || !mobileContainer) return;
@@ -1108,13 +2164,12 @@ class LunaIntegration {
     const fullSection = usersCont.parentElement;
     if (!fullSection) return;
     
-    // Clonar TODA la sección (header + contenido)
+    // Clonar TODA la sección (header + contenido) - CÓDIGO BASE ÚNICO
     const cloned = fullSection.cloneNode(true);
     mobileContainer.innerHTML = '';
     mobileContainer.appendChild(cloned);
     
-    // Re-attach event listeners for mobile
-    // 1. Botón "+" para crear mensajes
+    // Re-attach event listeners for mobile - usar el mismo botón del sidebar clonado
     const dmBtn = cloned.querySelector('#dm-btn');
     if (dmBtn) {
       dmBtn.addEventListener('click', () => {
@@ -1159,32 +2214,109 @@ class LunaIntegration {
       moreTabs.forEach((tab, index) => {
         const tabItem = document.createElement('div');
         tabItem.className = 'mobile-more-item';
+        tabItem.style.position = 'relative';
         tabItem.dataset.tabId = tab.id;
         tabItem.dataset.index = index;
         
-        const tabHtml = window.tabManager.tabTemplate(tab, false, false);
+        // USAR EL MISMO TEMPLATE DEL SIDEBAR - CÓDIGO BASE ÚNICO
+        const tabHtml = window.tabManager.tabTemplate(tab, !isEditing, false);
         const tabWrapper = document.createElement('div');
         tabWrapper.innerHTML = tabHtml;
-        const iconContainer = tabWrapper.querySelector('.w-7, .w-5');
+        const originalTabEl = tabWrapper.firstElementChild;
         
-        let iconHtml = '';
-        if (iconContainer) {
-          iconHtml = iconContainer.innerHTML;
-        }
-        
-        let scaledIconHtml = iconHtml;
-        if (iconContainer) {
-          scaledIconHtml = `<div style="width: 24px; height: 24px; display: flex; align-items: center; justify-content: center;">${iconContainer.innerHTML}</div>`;
-        }
-        
-        tabItem.innerHTML = `
-          <div class="mobile-more-item-icon" style="border: 1px solid ${tab.avatar_color || '#e8eaed'}; color: ${tab.avatar_color || '#6b7280'}; background-color: ${tab.avatar_color ? `${tab.avatar_color}15` : 'transparent'}">
-            ${scaledIconHtml}
-          </div>
-          <div class="mobile-more-item-label">${this.escapeHTML(tab.title || 'Tab')}</div>
-        `;
-
-        if (!isEditing) {
+        if (originalTabEl) {
+          // Extraer el círculo del icono (el div con rounded-full)
+          const iconCircle = originalTabEl.querySelector('.rounded-full');
+          
+          // Crear estructura mobile more adaptada
+          const iconDiv = document.createElement('div');
+          iconDiv.className = 'mobile-more-item-icon';
+          if (iconCircle) {
+            const iconClone = iconCircle.cloneNode(true);
+            // Mantener el círculo pero ajustar tamaño para mobile more (más grande: 36px)
+            iconClone.style.width = '36px';
+            iconClone.style.height = '36px';
+            iconDiv.appendChild(iconClone);
+          } else {
+            // Fallback
+            iconDiv.innerHTML = `<div style="width: 36px; height: 36px; border-radius: 50%; border: 1px solid #e8eaed; display: flex; align-items: center; justify-content: center;">
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="3" width="18" height="18" rx="2"></rect>
+              </svg>
+            </div>`;
+          }
+          
+          const labelDiv = document.createElement('div');
+          labelDiv.className = 'mobile-more-item-label';
+          labelDiv.textContent = tab.title || 'Tab';
+          labelDiv.title = tab.title || 'Tab'; // Tooltip con texto completo
+          
+          tabItem.appendChild(iconDiv);
+          tabItem.appendChild(labelDiv);
+          
+          if (isEditing) {
+            // Create three dots button - CÓDIGO ÚNICO (igual que bottom bar y desktop)
+            const threeDotsBtn = document.createElement('button');
+            threeDotsBtn.className = 'mobile-tab-menu-btn';
+            threeDotsBtn.style.cssText = 'position: absolute; top: 4px; right: 4px; padding: 2px; opacity: 0.7; z-index: 1000; background: rgba(255, 255, 255, 0.9); border-radius: 50%; border: 1px solid rgba(0,0,0,0.1); cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 1px 2px rgba(0,0,0,0.1); pointer-events: auto; width: 20px; height: 20px;';
+            threeDotsBtn.dataset.tabId = tab.id;
+            if (tab.backendId) threeDotsBtn.dataset.backendId = tab.backendId;
+            threeDotsBtn.title = 'Menu';
+            
+            threeDotsBtn.innerHTML = `
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="color: #5f6368;">
+                <circle cx="12" cy="12" r="1"></circle>
+                <circle cx="12" cy="5" r="1"></circle>
+                <circle cx="12" cy="19" r="1"></circle>
+              </svg>
+            `;
+            
+            // CÓDIGO ÚNICO - mismo handler que desktop y bottom bar
+            threeDotsBtn.addEventListener('click', async (e) => {
+              e.stopPropagation();
+              e.stopImmediatePropagation();
+              e.preventDefault();
+              
+              // Construir tab object directamente (código único - mismo que desktop y bottom bar)
+              const tabData = {
+                id: tab.backendId || tab.id,
+                title: tab.title,
+                url: tab.url || tab.bookmark_url,
+                bookmark_url: tab.bookmark_url,
+                avatar_emoji: tab.avatar_emoji,
+                avatar_color: tab.avatar_color,
+                avatar_photo: tab.avatar_photo,
+                cookie_container_id: tab.cookie_container_id,
+                space_id: tab.space_id
+              };
+              
+              // Intentar obtener datos completos del backend solo si hay backendId
+              if (tab.backendId) {
+                try {
+                  const response = await this.request(`/api/tabs/${tab.backendId}`);
+                  if (response && response.tab) {
+                    this.showTabMenu(e, response.tab);
+                    return;
+                  }
+                } catch {
+                  // Silently fall back to tab data
+                }
+              }
+              
+              // Usar datos del tab actual (fallback o si no hay backendId)
+              this.showTabMenu(e, tabData);
+            }, true); // Capture phase
+            
+            tabItem.appendChild(threeDotsBtn);
+            
+            // Prevenir clicks en el tab item cuando está editando
+            tabItem.addEventListener('click', (e) => {
+              if (!e.target.closest('.mobile-tab-menu-btn')) {
+                e.preventDefault();
+                e.stopPropagation();
+              }
+            }, true); // Capture phase
+        } else {
           tabItem.addEventListener('click', () => {
             if (window.tabManager) {
               window.tabManager.activate(tab.id);
@@ -1196,6 +2328,7 @@ class LunaIntegration {
         }
 
         container.appendChild(tabItem);
+        }
       });
     } else {
       // Desktop: render using the SAME template as sidebar tabs (with circles and three dots)
@@ -1287,17 +2420,23 @@ class LunaIntegration {
 
     const items = container.querySelectorAll('.mobile-more-item');
     let draggedElement = null;
-    let draggedIndex = null;
 
-    items.forEach((item, index) => {
+    items.forEach((item) => {
       // Remove existing listeners by cloning
       const newItem = item.cloneNode(true);
       item.parentNode.replaceChild(newItem, item);
       
+      // Get tab data
+      const tabId = newItem.dataset.tabId;
+      const tabs = window.tabManager?.tabs || [];
+      const tab = tabs.find(t => String(t.id) === String(tabId));
+      
       newItem.addEventListener('touchstart', (e) => {
+        // Don't start drag if clicking on three dots button
+        if (e.target.closest('.mobile-tab-menu-btn')) return;
+        
         e.preventDefault();
         draggedElement = newItem;
-        draggedIndex = parseInt(newItem.dataset.index);
         newItem.classList.add('dragging');
         newItem.style.opacity = '0.5';
       }, { passive: false });
@@ -1308,30 +2447,67 @@ class LunaIntegration {
         
         const touch = e.touches[0];
         const elementBelow = document.elementFromPoint(touch.clientX, touch.clientY);
-        const targetItem = elementBelow?.closest('.mobile-more-item');
+        
+        // Check if dropping on bottom bar (tabs container, bottom bar itself, or any bottom nav item)
+        const bottomBarContainer = elementBelow?.closest('#mobile-tabs-container');
+        const bottomBar = elementBelow?.closest('#mobile-bottom-bar');
+        const bottomNavItem = elementBelow?.closest('.bottom-nav-item');
+        
+        if (bottomBarContainer || bottomBar || bottomNavItem) {
+          // Visual feedback - highlight the bottom bar
+          const targetBar = bottomBar || document.getElementById('mobile-bottom-bar');
+          if (targetBar) {
+            targetBar.style.opacity = '0.7';
+            targetBar.style.backgroundColor = 'rgba(66, 133, 244, 0.1)';
+          }
+          return;
+        }
+        
+        // Reset bottom bar opacity if not over it
+        const bottomBarEl = document.getElementById('mobile-bottom-bar');
+        if (bottomBarEl) {
+          bottomBarEl.style.opacity = '';
+          bottomBarEl.style.backgroundColor = '';
+        }
+        
+        // Check if dropping on another item in More (but not the three dots button)
+        let targetItem = elementBelow?.closest('.mobile-more-item');
+        
+        // If clicked on three dots button, find the parent item
+        if (!targetItem && elementBelow?.closest('.mobile-tab-menu-btn')) {
+          targetItem = elementBelow.closest('.mobile-tab-menu-btn')?.closest('.mobile-more-item');
+        }
         
         if (targetItem && targetItem !== draggedElement) {
           const targetIndex = parseInt(targetItem.dataset.index);
-          if (targetIndex !== draggedIndex) {
+          const currentDraggedIndex = parseInt(draggedElement.dataset.index);
+          
+          if (!isNaN(targetIndex) && !isNaN(currentDraggedIndex) && targetIndex !== currentDraggedIndex) {
             // Swap elements
-            if (draggedIndex < targetIndex) {
+            if (currentDraggedIndex < targetIndex) {
               container.insertBefore(draggedElement, targetItem.nextSibling);
             } else {
               container.insertBefore(draggedElement, targetItem);
             }
             
-            // Update indices
+            // Update indices for all items
             Array.from(container.children).forEach((item, idx) => {
+              if (item.classList.contains('mobile-more-item')) {
               item.dataset.index = idx;
+              }
             });
             
-            draggedIndex = targetIndex;
+            draggedElement.dataset.index = targetIndex;
             
             // Reorder tabs array - use the current draggedIndex before update
             const moreTabs = this.mobileMoreTabs || [];
-            const [draggedTab] = moreTabs.splice(draggedIndex, 1);
+            if (moreTabs.length > 0 && currentDraggedIndex >= 0 && currentDraggedIndex < moreTabs.length) {
+              const [draggedTab] = moreTabs.splice(currentDraggedIndex, 1);
+              if (targetIndex >= 0 && targetIndex <= moreTabs.length) {
             moreTabs.splice(targetIndex, 0, draggedTab);
             this.mobileMoreTabs = moreTabs;
+              }
+            }
           }
         }
       }, { passive: false });
@@ -1340,14 +2516,59 @@ class LunaIntegration {
         if (!draggedElement) return;
         e.preventDefault();
         
+        const touch = e.changedTouches[0];
+        const elementBelow = document.elementFromPoint(touch.clientX, touch.clientY);
+        
+        // Check if dropping on bottom bar (tabs container, bottom bar itself, or any bottom nav item)
+        const bottomBarContainer = elementBelow?.closest('#mobile-tabs-container');
+        const bottomBar = elementBelow?.closest('#mobile-bottom-bar');
+        const bottomNavItem = elementBelow?.closest('.bottom-nav-item');
+        
+        // Reset bottom bar opacity and background
+        const bottomBarEl = document.getElementById('mobile-bottom-bar');
+        if (bottomBarEl) {
+          bottomBarEl.style.opacity = '';
+          bottomBarEl.style.backgroundColor = '';
+        }
+        
+        // Check if dropped on bottom bar (any of the valid targets)
+        // Also check if dropped anywhere on the bottom bar area (even if not directly on an element)
+        const isOverBottomBar = bottomBarContainer || bottomBar || bottomNavItem;
+        
+        // Additional check: if touch point is within bottom bar bounds
+        let isWithinBottomBarBounds = false;
+        if (!isOverBottomBar && bottomBarEl) {
+          const rect = bottomBarEl.getBoundingClientRect();
+          const touchX = touch.clientX;
+          const touchY = touch.clientY;
+          isWithinBottomBarBounds = (
+            touchX >= rect.left &&
+            touchX <= rect.right &&
+            touchY >= rect.top &&
+            touchY <= rect.bottom
+          );
+        }
+        
+        if ((isOverBottomBar || isWithinBottomBarBounds) && tab) {
+          // Move tab from More to bottom bar
+          // moveTabFromMobileMore already calls renderMobileBottomBar(), so we just need to re-render More
+          this.moveTabFromMobileMore(tab).then(() => {
+            // Re-render More to reflect the change (tab removed from More)
+            this.renderMore(false, 'mobile');
+          }).catch(err => {
+            console.error('Error moving tab from More to bottom bar:', err);
+            // Save new order within More as fallback
+            this.saveMobileTabsOrder();
+          });
+        } else {
+          // Save new order within More
+        this.saveMobileTabsOrder();
+        }
+        
         draggedElement.classList.remove('dragging');
         draggedElement.style.opacity = '';
         
-        // Save new order to backend
-        this.saveMobileTabsOrder();
-        
         draggedElement = null;
-        draggedIndex = null;
       }, { passive: false });
     });
   }
@@ -1477,6 +2698,13 @@ class LunaIntegration {
     return new Set();
   }
 
+  getMobileBottomBarOrderSync() {
+    if (this._preferencesCache) {
+      return this._preferencesCache.mobile_bottom_bar_order || null;
+    }
+    return null;
+  }
+
   async setMobileMoreTabIds(tabIds) {
     const tabIdsArray = Array.from(tabIds);
     await this.savePreferences({ mobile_more_tab_ids: tabIdsArray });
@@ -1589,24 +2817,50 @@ class LunaIntegration {
   }
 
   async saveMobileTabsOrder() {
-    // Combine visible tabs and more tabs to get full order
+    // Get current order from DOM (bottom bar tabs)
+    const container = document.getElementById('mobile-tabs-container');
+    const bottomBarTabIds = [];
+    if (container) {
+      Array.from(container.children).forEach(item => {
+        const tabId = item.dataset.tabId;
+        if (tabId) bottomBarTabIds.push(tabId);
+      });
+    }
+    
+    // Get all personal tabs
     const tabs = window.tabManager.tabs || [];
     const personalTabs = tabs.filter(t => {
       const url = t.url || '';
       return url && url !== '/new' && url !== 'tabs://new' && !t.spaceId && !this.isChatUrl(url);
     });
 
-    const fixedButtons = 3;
-    const maxTabsVisible = 6 - fixedButtons;
-    const visibleTabs = personalTabs.slice(0, maxTabsVisible);
+    // Get tabs in More
     const moreTabs = this.mobileMoreTabs || [];
+    const moreTabIds = new Set((moreTabs || []).map(t => String(t.backendId || t.id)).filter(Boolean));
 
     // Save which tabs are in "More" to backend
-    const mobileMoreTabIds = new Set((moreTabs || []).map(t => t.backendId || t.id).filter(Boolean));
-    await this.setMobileMoreTabIds(mobileMoreTabIds);
+    await this.setMobileMoreTabIds(moreTabIds);
 
-    // Combine in correct order
-    const allTabs = [...visibleTabs, ...moreTabs];
+    // Get bottom bar tabs in DOM order
+    const bottomBarTabs = [];
+    for (const tabId of bottomBarTabIds) {
+      const tab = personalTabs.find(t => String(t.id) === String(tabId));
+      if (tab) bottomBarTabs.push(tab);
+    }
+    
+    // Add remaining bottom bar tabs that weren't in DOM
+    const allBottomBarTabs = personalTabs.filter(t => {
+      const tId = String(t.backendId || t.id);
+      return !moreTabIds.has(tId);
+    });
+    for (const tab of allBottomBarTabs) {
+      if (!bottomBarTabs.find(t => String(t.id) === String(tab.id))) {
+        bottomBarTabs.push(tab);
+      }
+    }
+
+    // Combine in correct order: bottom bar tabs first, then more tabs
+    const allTabs = [...bottomBarTabs, ...moreTabs];
     
     // Update positions
     const updates = allTabs.map((tab, index) => {
@@ -2334,7 +3588,7 @@ class LunaIntegration {
           this.request('/api/tabs/reorder', {
             method: 'POST',
             body: JSON.stringify({ updates })
-          }).catch(err => {
+          }).catch(() => {
                   // Si falla, recargar desde el backend
             this.request(`/api/spaces/${this.activeSpace.id}`).then(({ tabs }) => {
               this.spaceTabs = (tabs || []).sort((a, b) => (a.position || 0) - (b.position || 0));
@@ -3039,7 +4293,7 @@ class LunaIntegration {
                     tabManagerTab.avatar_photo = updatedTab.tab.avatar_photo;
                   }
                 }
-              } catch (err) {
+              } catch {
                 // Si falla la actualización, no es crítico - los tabs ya se recargaron arriba
                 // Ignore update errors
               }
@@ -3190,7 +4444,7 @@ class LunaIntegration {
         
         this.spaceTabs = reloadedTabs;
         this.renderTopBar();
-      } catch (reloadErr) {
+      } catch {
         // No alertar al usuario - el UI ya está actualizado optimísticamente
       }
       
@@ -3760,7 +5014,9 @@ class LunaIntegration {
             }
 
             // Close modal
-            handleClose();
+            if (modal && modal.parentNode) {
+              modal.parentNode.removeChild(modal);
+            }
           } catch (err) {
             console.error('Failed to create/open chat:', err);
             alert('Failed to open chat');
@@ -3779,7 +5035,9 @@ class LunaIntegration {
           this.users.push(space);
           this.renderUsers();
           this.selectUser(space.id);
-          handleClose();
+          if (modal && modal.parentNode) {
+            modal.parentNode.removeChild(modal);
+          }
         }
       };
 
@@ -3976,7 +5234,7 @@ class LunaIntegration {
 
       // Cargar mensajes
       this.loadChatMessages(wrapper, chat.id);
-    } catch (err) {
+    } catch {
       // Solo mostrar error si no se ha renderizado nada todavía
       const messagesContainer = wrapper.querySelector('.chat-messages');
       if (messagesContainer && !messagesContainer.hasAttribute('data-chat-id')) {
