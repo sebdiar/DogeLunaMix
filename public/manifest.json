@@ -1,0 +1,37 @@
+{
+  "name": "DogeLunaMix",
+  "short_name": "DogeLuna",
+  "description": "DogeLunaMix - Your workspace in the cloud",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ececed",
+  "theme_color": "#ececed",
+  "orientation": "any",
+  "scope": "/",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "categories": ["productivity", "utilities"],
+  "screenshots": [],
+  "shortcuts": [
+    {
+      "name": "New Tab",
+      "short_name": "New Tab",
+      "description": "Open a new tab",
+      "url": "/indev?new",
+      "icons": [{ "src": "/icon.svg", "sizes": "any" }]
+    }
+  ]
+}
+

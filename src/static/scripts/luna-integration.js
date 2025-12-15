@@ -57,6 +57,28 @@ class LunaIntegration {
     }
   }
 
+  async initNotifications() {
+    // Initialize PWA notifications service worker
+    if ('serviceWorker' in navigator && 'Notification' in window) {
+      try {
+        // Register notification service worker
+        const registration = await navigator.serviceWorker.register('/notifications-sw.js', {
+          scope: '/'
+        });
+        
+        // Request notification permission (but don't force it)
+        if (Notification.permission === 'default') {
+          // Permission not yet requested, will be requested when user enables notifications
+          console.log('Notification permission not yet requested');
+        }
+        
+        console.log('Notification service worker registered');
+      } catch (error) {
+        console.error('Failed to register notification service worker:', error);
+      }
+    }
+  }
+
   async init() {
     
     // Wait for TabManager to be ready
@@ -147,6 +169,9 @@ class LunaIntegration {
     
     // Intercept clicks on personal tabs to close active space
     this.setupPersonalTabsClickHandler();
+    
+    // Initialize PWA notifications
+    this.initNotifications();
   }
 
   setupPersonalTabsClickHandler() {
