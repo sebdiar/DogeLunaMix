@@ -3783,10 +3783,14 @@ class LunaIntegration {
         }
       };
 
-      // Remove previous listener if exists
-      goBtn.replaceWith(goBtn.cloneNode(true));
-      const newGoBtn = document.getElementById('user-picker-go-btn');
-      newGoBtn.addEventListener('click', handlers.goToChat);
+      // Remove previous listener and add new one
+      const newGoBtnHandler = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        handlers.goToChat();
+      };
+      goBtn.onclick = null; // Clear previous
+      goBtn.addEventListener('click', newGoBtnHandler, { once: false });
 
       // Close handler
       handlers.close = () => {
@@ -3797,9 +3801,8 @@ class LunaIntegration {
         renderUsers();
         updateGoButton();
         
-        // Clean up event listeners
-        if (handlers.search) searchInput.removeEventListener('input', handlers.search);
-        if (handlers.modalClick) modal.removeEventListener('click', handlers.modalClick);
+        // Note: Event listeners will be cleaned up when modal is closed
+        // They're attached with specific handlers that won't interfere
       };
 
       handlers.modalClick = (e) => {
@@ -3808,13 +3811,22 @@ class LunaIntegration {
         }
       };
 
-      // Remove previous listeners if exists
-      closeBtn.replaceWith(closeBtn.cloneNode(true));
-      const newCloseBtn = document.getElementById('user-picker-close');
-      newCloseBtn.addEventListener('click', handlers.close);
+      // Remove previous listener and add new one  
+      const newCloseBtnHandler = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        handlers.close();
+      };
+      closeBtn.onclick = null; // Clear previous
+      closeBtn.addEventListener('click', newCloseBtnHandler, { once: false });
       
-      modal.removeEventListener('click', handlers.modalClick);
-      modal.addEventListener('click', handlers.modalClick);
+      const newModalClickHandler = (e) => {
+        if (e.target === modal) {
+          handlers.close();
+        }
+      };
+      modal.onclick = null; // Clear previous
+      modal.addEventListener('click', newModalClickHandler, { once: false });
 
       // Initial render
       renderUsers();
