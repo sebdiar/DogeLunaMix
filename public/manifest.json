@@ -2,7 +2,7 @@
   "name": "DogeLunaMix",
   "short_name": "DogeLuna",
   "description": "DogeLunaMix - Your workspace in the cloud",
-  "start_url": "/",
+  "start_url": "/indev",
   "display": "standalone",
   "background_color": "#ececed",
   "theme_color": "#ececed",
@@ -11,13 +11,13 @@
   "icons": [
     {
       "src": "/icon.svg",
-      "sizes": "any",
+      "sizes": "192x192 512x512",
       "type": "image/svg+xml",
       "purpose": "any maskable"
     },
     {
       "src": "/logo.svg",
-      "sizes": "any",
+      "sizes": "192x192 512x512",
       "type": "image/svg+xml",
       "purpose": "any"
     }
@@ -30,7 +30,7 @@
       "short_name": "New Tab",
       "description": "Open a new tab",
       "url": "/indev?new",
-      "icons": [{ "src": "/icon.svg", "sizes": "any" }]
+      "icons": [{ "src": "/icon.svg", "sizes": "192x192" }]
     }
   ]
 }
