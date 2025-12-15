@@ -54,6 +54,39 @@ router.get('/search', async (req, res) => {
   }
 });
 
+// Get Supabase public credentials for frontend Realtime
+router.get('/supabase-config', async (req, res) => {
+  try {
+    // Return public credentials (safe to expose to frontend)
+    // Try SUPABASE_ANON_KEY first, then SUPABASE_KEY as fallback
+    // SUPABASE_KEY should be the anon/public key (not service_role key)
+    const supabaseUrl = process.env.SUPABASE_URL?.trim();
+    let supabaseAnonKey = process.env.SUPABASE_ANON_KEY?.trim();
+    
+    // Fallback to SUPABASE_KEY if SUPABASE_ANON_KEY is not set
+    // This assumes SUPABASE_KEY is the anon key (public key)
+    if (!supabaseAnonKey) {
+      supabaseAnonKey = process.env.SUPABASE_KEY?.trim();
+    }
+    
+    if (!supabaseUrl || !supabaseAnonKey) {
+      console.error('Missing Supabase config for frontend:', {
+        url: supabaseUrl ? 'SET' : 'MISSING',
+        anonKey: supabaseAnonKey ? 'SET' : 'MISSING'
+      });
+      return res.status(500).json({ error: 'Supabase configuration missing' });
+    }
+    
+    res.json({
+      url: supabaseUrl,
+      anonKey: supabaseAnonKey
+    });
+  } catch (error) {
+    console.error('Get Supabase config error:', error);
+    res.status(500).json({ error: 'Failed to get Supabase config' });
+  }
+});
+
 // Get user preferences (for tabs in "More" dropdown)
 router.get('/preferences', async (req, res) => {
   try {

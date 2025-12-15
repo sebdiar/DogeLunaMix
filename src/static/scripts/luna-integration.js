@@ -15,6 +15,7 @@ class LunaIntegration {
     this.mouseY = 0; // Track mouse Y for drag and drop
     this.menuCloseListener = null; // Track menu close listener
     this.currentChatId = null; // Current active chat ID for message sending
+    this.chatNotificationChannel = null; // Supabase Realtime channel for chat notifications
     
     this.init();
   }
@@ -59,23 +60,162 @@ class LunaIntegration {
 
   async initNotifications() {
     // Initialize PWA notifications service worker
-    if ('serviceWorker' in navigator && 'Notification' in window) {
-      try {
-        // Register notification service worker
-        const registration = await navigator.serviceWorker.register('/notifications-sw.js', {
-          scope: '/'
-        });
-        
-        // Request notification permission (but don't force it)
-        if (Notification.permission === 'default') {
-          // Permission not yet requested, will be requested when user enables notifications
-          console.log('Notification permission not yet requested');
+    if (!('serviceWorker' in navigator) || !('Notification' in window)) {
+      console.log('Notifications not supported in this browser');
+      return;
+    }
+
+    try {
+      // Register notification service worker
+      const registration = await navigator.serviceWorker.register('/notifications-sw.js', {
+        scope: '/'
+      });
+      
+      console.log('Notification service worker registered');
+      
+      // Request notification permission if not already granted/denied
+      if (Notification.permission === 'default') {
+        // Ask for permission
+        const permission = await Notification.requestPermission();
+        if (permission === 'granted') {
+          console.log('Notification permission granted');
+          // Setup chat notifications after permission is granted
+          await this.setupChatNotifications();
+        } else {
+          console.log('Notification permission denied');
         }
-        
-        console.log('Notification service worker registered');
-      } catch (error) {
-        console.error('Failed to register notification service worker:', error);
+      } else if (Notification.permission === 'granted') {
+        // Already granted, setup notifications
+        await this.setupChatNotifications();
       }
+    } catch (error) {
+      console.error('Failed to register notification service worker:', error);
+    }
+  }
+
+  async setupChatNotifications() {
+    if (!this.user || !this.user.id) {
+      console.log('Cannot setup chat notifications: user not authenticated');
+      return;
+    }
+
+    try {
+      // Get Supabase config from backend
+      const config = await this.request('/api/users/supabase-config');
+      if (!config.url || !config.anonKey) {
+        console.warn('Supabase config not available');
+        return;
+      }
+
+      // Dynamically import Supabase client from CDN
+      // @ts-ignore - dynamic import from CDN
+      const { createClient } = await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm');
+      
+      // Create Supabase client with public credentials
+      // Use JWT token in headers for RLS policies
+      const supabase = createClient(config.url, config.anonKey, {
+        global: {
+          headers: {
+            Authorization: this.token ? `Bearer ${this.token}` : ''
+          }
+        },
+        auth: {
+          persistSession: false,
+          autoRefreshToken: false
+        }
+      });
+
+      // Get current user's chats
+      const { data: chatParticipants } = await supabase
+        .from('chat_participants')
+        .select('chat_id')
+        .eq('user_id', this.user.id);
+
+      if (!chatParticipants || chatParticipants.length === 0) {
+        console.log('No chats found for user');
+        return;
+      }
+
+      const chatIds = chatParticipants.map(p => p.chat_id);
+
+      // Subscribe to new messages in user's chats
+      const channel = supabase
+        .channel(`chat-notifications-${this.user.id}`)
+        .on(
+          'postgres_changes',
+          {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'chat_messages',
+            filter: `user_id=neq.${this.user.id}` // Only messages from other users
+          },
+          async (payload) => {
+            const message = payload.new;
+            
+            // Check if message is in one of user's chats
+            if (!chatIds.includes(message.chat_id)) {
+              return;
+            }
+
+            // Verify user has access to this chat
+            const { data: participants } = await supabase
+              .from('chat_participants')
+              .select('user_id')
+              .eq('chat_id', message.chat_id);
+
+            const hasAccess = participants?.some(p => p.user_id === this.user.id);
+            if (!hasAccess) {
+              return;
+            }
+
+            // Get sender info
+            const { data: sender } = await supabase
+              .from('users')
+              .select('name, email')
+              .eq('id', message.user_id)
+              .single();
+
+            const senderName = sender?.name || sender?.email || 'Someone';
+            const messageText = message.message || '';
+
+            // Check if app is in foreground and if current chat is active
+            const isAppInForeground = document.visibilityState === 'visible';
+            const isCurrentChat = this.currentChatId === message.chat_id;
+
+            // Only show notification if app is in background OR user is not viewing this chat
+            if (!isAppInForeground || !isCurrentChat) {
+              // Show notification
+              if ('serviceWorker' in navigator) {
+                const registration = await navigator.serviceWorker.ready;
+                registration.showNotification(`${senderName}`, {
+                  body: messageText.length > 100 ? messageText.substring(0, 100) + '...' : messageText,
+                  icon: '/icon.svg',
+                  badge: '/icon.svg',
+                  tag: `chat-${message.chat_id}`,
+                  data: {
+                    url: `/indev?chat=${message.chat_id}`,
+                    chatId: message.chat_id,
+                    type: 'chat_message'
+                  },
+                  requireInteraction: false
+                });
+              } else if (Notification.permission === 'granted') {
+                new Notification(`${senderName}`, {
+                  body: messageText,
+                  icon: '/icon.svg',
+                  tag: `chat-${message.chat_id}`
+                });
+              }
+            }
+          }
+        )
+        .subscribe();
+
+      // Store channel for cleanup
+      this.chatNotificationChannel = channel;
+      console.log('Chat notifications setup complete');
+    } catch (error) {
+      console.error('Failed to setup chat notifications:', error);
     }
   }
 
@@ -3483,28 +3623,178 @@ class LunaIntegration {
 
   async showUserPicker() {
     try {
-      const { users } = await this.request('/api/users');
-      const userList = users.map(u => `${u.name || u.email} (${u.email})`).join('\n');
-      const selected = prompt(`Select user:\n\n${userList}\n\nEnter email:`);
-      if (!selected) return;
-
-      const user = users.find(u => u.email === selected || u.name === selected);
-      if (!user) {
-        alert('User not found');
+      const modal = document.getElementById('user-picker-modal');
+      const listContainer = document.getElementById('user-picker-list');
+      const searchInput = document.getElementById('user-picker-search-input');
+      const goBtn = document.getElementById('user-picker-go-btn');
+      const closeBtn = document.getElementById('user-picker-close');
+      
+      if (!modal || !listContainer || !searchInput || !goBtn || !closeBtn) {
+        console.error('User picker modal elements not found');
         return;
       }
 
-      const { space } = await this.request('/api/spaces', {
-        method: 'POST',
-        body: JSON.stringify({
-          name: user.name || user.email,
-          category: 'user'
-        })
+      // Load users
+      const { users } = await this.request('/api/users');
+      let filteredUsers = users || [];
+      let selectedUsers = [];
+
+      // Render users function
+      const renderUsers = () => {
+        listContainer.innerHTML = '';
+        
+        if (filteredUsers.length === 0) {
+          listContainer.innerHTML = '<div class="user-picker-empty">No users found</div>';
+          return;
+        }
+
+        filteredUsers.forEach(user => {
+          const userEl = document.createElement('button');
+          userEl.className = 'user-picker-item';
+          if (selectedUsers.some(u => u.id === user.id)) {
+            userEl.classList.add('selected');
+          }
+
+          const name = user.name || user.email || 'Unknown';
+          const email = user.email || '';
+          const initials = name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2) || name[0]?.toUpperCase() || 'U';
+
+          userEl.innerHTML = `
+            <div class="user-picker-avatar">${initials}</div>
+            <div class="user-picker-info">
+              <div class="user-picker-name">${this.escapeHTML(name)}</div>
+              <div class="user-picker-email">${this.escapeHTML(email)}</div>
+            </div>
+          `;
+
+          userEl.addEventListener('click', () => {
+            const index = selectedUsers.findIndex(u => u.id === user.id);
+            if (index >= 0) {
+              selectedUsers.splice(index, 1);
+              userEl.classList.remove('selected');
+            } else {
+              selectedUsers.push(user);
+              userEl.classList.add('selected');
+            }
+            updateGoButton();
+          });
+
+          listContainer.appendChild(userEl);
+        });
+      };
+
+      // Update Go button state
+      const updateGoButton = () => {
+        goBtn.disabled = selectedUsers.length === 0;
+      };
+
+      // Search handler
+      const handleSearch = () => {
+        const query = searchInput.value.toLowerCase().trim();
+        if (!query) {
+          filteredUsers = users || [];
+        } else {
+          filteredUsers = (users || []).filter(user => {
+            const name = (user.name || '').toLowerCase();
+            const email = (user.email || '').toLowerCase();
+            return name.includes(query) || email.includes(query);
+          });
+        }
+        selectedUsers = selectedUsers.filter(selected => 
+          filteredUsers.some(u => u.id === selected.id)
+        );
+        renderUsers();
+        updateGoButton();
+      };
+
+      searchInput.addEventListener('input', handleSearch);
+
+      // Go to chat handler
+      const handleGoToChat = async () => {
+        if (selectedUsers.length === 0) return;
+
+        // If only one user selected, open chat directly
+        if (selectedUsers.length === 1) {
+          const user = selectedUsers[0];
+          try {
+            // Check if space already exists
+            const existingSpace = this.users.find(
+              s => s.name === user.name || s.name === user.email || s.display_name === user.name
+            );
+
+            if (existingSpace) {
+              this.selectUser(existingSpace.id);
+            } else {
+              // Create new space
+              const { space } = await this.request('/api/spaces', {
+                method: 'POST',
+                body: JSON.stringify({
+                  name: user.name || user.email,
+                  category: 'user'
+                })
+              });
+
+              this.users.push(space);
+              this.renderUsers();
+              this.selectUser(space.id);
+            }
+
+            // Close modal
+            modal.classList.remove('active');
+            searchInput.value = '';
+            selectedUsers = [];
+            filteredUsers = users || [];
+            renderUsers();
+            updateGoButton();
+          } catch (err) {
+            console.error('Failed to create/open chat:', err);
+            alert('Failed to open chat');
+          }
+        } else {
+          // Multiple users selected - for now, just open the first one
+          // TODO: Implement group chat functionality
+          alert('Group chat functionality coming soon. Opening chat with first selected user.');
+          const user = selectedUsers[0];
+          const { space } = await this.request('/api/spaces', {
+            method: 'POST',
+            body: JSON.stringify({
+              name: user.name || user.email,
+              category: 'user'
+            })
+          });
+          this.users.push(space);
+          this.renderUsers();
+          this.selectUser(space.id);
+          modal.classList.remove('active');
+        }
+      };
+
+      goBtn.addEventListener('click', handleGoToChat);
+
+      // Close handler
+      const handleClose = () => {
+        modal.classList.remove('active');
+        searchInput.value = '';
+        selectedUsers = [];
+        filteredUsers = users || [];
+        renderUsers();
+        updateGoButton();
+      };
+
+      closeBtn.addEventListener('click', handleClose);
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+          handleClose();
+        }
       });
 
-      this.users.push(space);
-      this.renderUsers();
-      this.selectUser(space.id);
+      // Initial render
+      renderUsers();
+      updateGoButton();
+      
+      // Show modal and focus search
+      modal.classList.add('active');
+      setTimeout(() => searchInput.focus(), 100);
     } catch (err) {
       console.error('Failed to show user picker:', err);
       alert('Failed to load users');

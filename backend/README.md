@@ -11,10 +11,16 @@ Backend API para DogeUB con Express y Supabase.
    ```env
    SUPABASE_URL=tu_supabase_url
    SUPABASE_KEY=tu_supabase_anon_key
+   SUPABASE_ANON_KEY=tu_supabase_anon_key  # Opcional: si está definido, se usa en lugar de SUPABASE_KEY para frontend
    SUPABASE_SERVICE_KEY=tu_supabase_service_role_key
    JWT_SECRET=tu_jwt_secret_cambiar_en_produccion
    BACKEND_PORT=3001
    ```
+   
+   **Nota sobre las claves de Supabase:**
+   - `SUPABASE_KEY` o `SUPABASE_ANON_KEY`: Clave pública (anon key) - segura para frontend, respeta RLS
+   - `SUPABASE_SERVICE_KEY`: Clave privada (service_role key) - solo para backend, bypass RLS
+   - Puedes obtener ambas claves en tu dashboard de Supabase: Settings > API
 
 2. **Ejecutar migración SQL**
 
