@@ -3196,25 +3196,25 @@ class LunaIntegration {
     const project = this.projects.find(p => p.id === projectId);
     if (!project) return;
 
-    // Toggle expanded state - EXACTLY like luna-chat
+    // OPTIMISTIC UI: Update local state immediately for instant feedback
     const newExpanded = !project.is_expanded;
+    project.is_expanded = newExpanded;
     
-    try {
-      await this.request(`/api/spaces/${projectId}`, {
-        method: 'PUT',
-        body: JSON.stringify({
-          is_expanded: newExpanded
-        })
-      });
-      
-      // Update local state
-      project.is_expanded = newExpanded;
-      
-      // Re-render to show updated hierarchy
-      this.renderProjects();
-    } catch (err) {
+    // Re-render immediately to show updated hierarchy
+    this.renderProjects();
+    
+    // Update backend in background (don't wait for response)
+    this.request(`/api/spaces/${projectId}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        is_expanded: newExpanded
+      })
+    }).catch(err => {
+      // If backend update fails, revert the change
       console.error('Failed to toggle project expanded:', err);
-    }
+      project.is_expanded = !newExpanded;
+      this.renderProjects();
+    });
   }
 
   async archiveProject(projectId) {
