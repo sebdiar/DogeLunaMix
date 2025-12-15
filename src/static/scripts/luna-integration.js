@@ -3630,14 +3630,32 @@ class LunaIntegration {
       const closeBtn = document.getElementById('user-picker-close');
       
       if (!modal || !listContainer || !searchInput || !goBtn || !closeBtn) {
-        console.error('User picker modal elements not found');
+        console.error('User picker modal elements not found', {
+          modal: !!modal,
+          listContainer: !!listContainer,
+          searchInput: !!searchInput,
+          goBtn: !!goBtn,
+          closeBtn: !!closeBtn
+        });
         return;
       }
 
-      // Load users
+      // Load users first
       const { users } = await this.request('/api/users');
       let filteredUsers = users || [];
       let selectedUsers = [];
+
+      // Clear previous state
+      searchInput.value = '';
+      listContainer.innerHTML = '';
+
+      // Store handlers to remove them later
+      const handlers = {
+        search: null,
+        goToChat: null,
+        close: null,
+        modalClick: null
+      };
 
       // Render users function
       const renderUsers = () => {
@@ -3689,7 +3707,7 @@ class LunaIntegration {
       };
 
       // Search handler
-      const handleSearch = () => {
+      handlers.search = () => {
         const query = searchInput.value.toLowerCase().trim();
         if (!query) {
           filteredUsers = users || [];
@@ -3707,10 +3725,12 @@ class LunaIntegration {
         updateGoButton();
       };
 
-      searchInput.addEventListener('input', handleSearch);
+      // Remove previous listener if exists
+      searchInput.removeEventListener('input', handlers.search);
+      searchInput.addEventListener('input', handlers.search);
 
       // Go to chat handler
-      const handleGoToChat = async () => {
+      handlers.goToChat = async () => {
         if (selectedUsers.length === 0) return;
 
         // If only one user selected, open chat directly
@@ -3740,19 +3760,13 @@ class LunaIntegration {
             }
 
             // Close modal
-            modal.classList.remove('active');
-            searchInput.value = '';
-            selectedUsers = [];
-            filteredUsers = users || [];
-            renderUsers();
-            updateGoButton();
+            handleClose();
           } catch (err) {
             console.error('Failed to create/open chat:', err);
             alert('Failed to open chat');
           }
         } else {
           // Multiple users selected - for now, just open the first one
-          // TODO: Implement group chat functionality
           alert('Group chat functionality coming soon. Opening chat with first selected user.');
           const user = selectedUsers[0];
           const { space } = await this.request('/api/spaces', {
@@ -3765,28 +3779,42 @@ class LunaIntegration {
           this.users.push(space);
           this.renderUsers();
           this.selectUser(space.id);
-          modal.classList.remove('active');
+          handleClose();
         }
       };
 
-      goBtn.addEventListener('click', handleGoToChat);
+      // Remove previous listener if exists
+      goBtn.replaceWith(goBtn.cloneNode(true));
+      const newGoBtn = document.getElementById('user-picker-go-btn');
+      newGoBtn.addEventListener('click', handlers.goToChat);
 
       // Close handler
-      const handleClose = () => {
+      handlers.close = () => {
         modal.classList.remove('active');
         searchInput.value = '';
         selectedUsers = [];
         filteredUsers = users || [];
         renderUsers();
         updateGoButton();
+        
+        // Clean up event listeners
+        if (handlers.search) searchInput.removeEventListener('input', handlers.search);
+        if (handlers.modalClick) modal.removeEventListener('click', handlers.modalClick);
       };
 
-      closeBtn.addEventListener('click', handleClose);
-      modal.addEventListener('click', (e) => {
+      handlers.modalClick = (e) => {
         if (e.target === modal) {
-          handleClose();
+          handlers.close();
         }
-      });
+      };
+
+      // Remove previous listeners if exists
+      closeBtn.replaceWith(closeBtn.cloneNode(true));
+      const newCloseBtn = document.getElementById('user-picker-close');
+      newCloseBtn.addEventListener('click', handlers.close);
+      
+      modal.removeEventListener('click', handlers.modalClick);
+      modal.addEventListener('click', handlers.modalClick);
 
       // Initial render
       renderUsers();
@@ -3794,10 +3822,12 @@ class LunaIntegration {
       
       // Show modal and focus search
       modal.classList.add('active');
-      setTimeout(() => searchInput.focus(), 100);
+      setTimeout(() => {
+        searchInput.focus();
+      }, 100);
     } catch (err) {
       console.error('Failed to show user picker:', err);
-      alert('Failed to load users');
+      alert('Failed to load users: ' + (err.message || 'Unknown error'));
     }
   }
 
