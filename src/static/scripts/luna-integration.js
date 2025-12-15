@@ -751,14 +751,20 @@ class LunaIntegration {
 
   // Mobile UI functions
   initMobileViews() {
-    if (!window.mobileUI || !window.mobileUI.isMobile()) return;
-    
-    // Render mobile bottom bar tabs
-    this.renderMobileBottomBar();
+    try {
+      if (!window.mobileUI || typeof window.mobileUI.isMobile !== 'function' || !window.mobileUI.isMobile()) return;
+      
+      // Render mobile bottom bar tabs
+      this.renderMobileBottomBar();
+    } catch (err) {
+      // Silently fail if mobile UI is not available
+      console.error('Error initializing mobile views:', err);
+    }
   }
 
   renderMobileBottomBar() {
-    if (!window.tabManager || !window.mobileUI || !window.mobileUI.isMobile()) return;
+    try {
+      if (!window.tabManager || !window.mobileUI || typeof window.mobileUI.isMobile !== 'function' || !window.mobileUI.isMobile()) return;
 
     const container = document.getElementById('mobile-tabs-container');
     if (!container) return;
@@ -816,7 +822,9 @@ class LunaIntegration {
         tabItem.addEventListener('click', () => {
           if (window.tabManager) {
             window.tabManager.activate(tab.id);
-            window.mobileUI.hideAll();
+            if (window.mobileUI && window.mobileUI.hideAll) {
+              window.mobileUI.hideAll();
+            }
           }
         });
         
@@ -828,30 +836,41 @@ class LunaIntegration {
     this.mobileMoreTabs = moreTabs;
     
     // Setup event listeners for mobile bottom nav items
-    const bottomNav = document.querySelector('#mobile-tabs-container')?.parentElement;
-    if (bottomNav) {
-      bottomNav.addEventListener('click', (e) => {
-        const clickedItem = e.target.closest('.bottom-nav-item');
-        if (!clickedItem) return;
-        
-        const label = clickedItem.querySelector('.label')?.textContent?.trim();
-        
-        if (label === 'Proyectos' || label?.includes('Proyectos')) {
-          if (window.mobileUI && window.mobileUI.show) {
-            window.mobileUI.show('mobile-projects-view');
-            setTimeout(() => {
-              this.renderMobileProjects();
-            }, 50);
+    try {
+      const bottomNav = document.querySelector('#mobile-tabs-container')?.parentElement;
+      if (bottomNav) {
+        bottomNav.addEventListener('click', (e) => {
+          try {
+            const clickedItem = e.target.closest('.bottom-nav-item');
+            if (!clickedItem) return;
+            
+            const label = clickedItem.querySelector('.label')?.textContent?.trim();
+            
+            if (label === 'Proyectos' || label?.includes('Proyectos')) {
+              if (window.mobileUI && typeof window.mobileUI.show === 'function') {
+                window.mobileUI.show('mobile-projects-view');
+                setTimeout(() => {
+                  this.renderMobileProjects();
+                }, 50);
+              }
+            } else if (label === 'Messenger' || label?.includes('Messenger')) {
+              if (window.mobileUI && typeof window.mobileUI.show === 'function') {
+                window.mobileUI.show('mobile-messenger-view');
+                setTimeout(() => {
+                  this.renderMobileMessenger();
+                }, 50);
+              }
+            }
+          } catch (err) {
+            console.error('Error handling mobile nav click:', err);
           }
-        } else if (label === 'Messenger' || label?.includes('Messenger')) {
-          if (window.mobileUI && window.mobileUI.show) {
-            window.mobileUI.show('mobile-messenger-view');
-            setTimeout(() => {
-              this.renderMobileMessenger();
-            }, 50);
-          }
-        }
-      });
+        });
+      }
+    } catch (err) {
+      console.error('Error setting up mobile nav listeners:', err);
+    }
+    } catch (err) {
+      console.error('Error rendering mobile bottom bar:', err);
     }
   }
 
@@ -906,7 +925,9 @@ class LunaIntegration {
         // Select project
         if (!e.target.closest('.drop-indicator') && !e.target.closest('.project-archive-btn')) {
           this.selectProject(projectId);
-          window.mobileUI.hideAll();
+          if (window.mobileUI && window.mobileUI.hideAll) {
+            window.mobileUI.hideAll();
+          }
         }
       });
     });
@@ -944,7 +965,9 @@ class LunaIntegration {
       item.addEventListener('click', (e) => {
         if (!e.target.closest('.drop-indicator')) {
           this.selectUser(userId);
-          window.mobileUI.hideAll();
+          if (window.mobileUI && window.mobileUI.hideAll) {
+            window.mobileUI.hideAll();
+          }
         }
       });
     });
@@ -1437,8 +1460,12 @@ class LunaIntegration {
         // Reload tabs to sync
         await this.loadPersonalTabs();
         await this.syncTabsToTabManager();
-        if (window.mobileUI && window.mobileUI.isMobile && window.mobileUI.isMobile()) {
-          this.renderMobileBottomBar();
+        if (window.mobileUI && typeof window.mobileUI.isMobile === 'function' && window.mobileUI.isMobile()) {
+          try {
+            this.renderMobileBottomBar();
+          } catch (err) {
+            console.error('Error rendering mobile bottom bar:', err);
+          }
         }
       } catch (err) {
         console.error('Failed to save tabs order:', err);
@@ -1937,8 +1964,14 @@ class LunaIntegration {
       }
       
       // Update mobile bottom bar if on mobile
-      if (window.mobileUI && window.mobileUI.isMobile && window.mobileUI.isMobile()) {
-        setTimeout(() => this.renderMobileBottomBar(), 100);
+      if (window.mobileUI && typeof window.mobileUI.isMobile === 'function' && window.mobileUI.isMobile()) {
+        setTimeout(() => {
+          try {
+            this.renderMobileBottomBar();
+          } catch (err) {
+            console.error('Error rendering mobile bottom bar:', err);
+          }
+        }, 100);
       }
       }
     } catch (err) {

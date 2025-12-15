@@ -83,6 +83,25 @@ const NOTION_JS = `
   })();
 `;
 
+async function injectNotionContent(html) {
+  // Check if already injected to avoid duplicates
+  if (html.includes('kasimir-notion-css') || html.includes('kasimir-notion-js')) {
+    return html;
+  }
+  
+  // Inject CSS before </head>
+  let modifiedHtml = html.replace('</head>', `<style id="kasimir-notion-css">${NOTION_CSS}</style></head>`);
+  
+  // Inject JS before </body> or </html>
+  if (modifiedHtml.includes('</body>')) {
+    modifiedHtml = modifiedHtml.replace('</body>', `<script id="kasimir-notion-js">${NOTION_JS}</script></body>`);
+  } else if (modifiedHtml.includes('</html>')) {
+    modifiedHtml = modifiedHtml.replace('</html>', `<script id="kasimir-notion-js">${NOTION_JS}</script></html>`);
+  }
+  
+  return modifiedHtml;
+}
+
 async function handleRequest(event) {
   await scramjet.loadConfig();
   
@@ -94,31 +113,25 @@ async function handleRequest(event) {
     const response = await scramjet.fetch(event);
     
     // Intercept HTML responses for Notion
-    if (isNotion && response) {
+    if (isNotion && response && response.ok) {
       const contentType = response.headers.get('content-type') || '';
       if (contentType.includes('text/html')) {
         try {
           const html = await response.clone().text();
+          const modifiedHtml = await injectNotionContent(html);
           
-          // Inject CSS before </head>
-          let modifiedHtml = html.replace('</head>', `<style id="kasimir-notion-css">${NOTION_CSS}</style></head>`);
-          
-          // Inject JS before </body> or </html>
-          if (modifiedHtml.includes('</body>')) {
-            modifiedHtml = modifiedHtml.replace('</body>', `<script id="kasimir-notion-js">${NOTION_JS}</script></body>`);
-          } else {
-            modifiedHtml = modifiedHtml.replace('</html>', `<script id="kasimir-notion-js">${NOTION_JS}</script></html>`);
-          }
+          // Create new headers object (can't copy Headers directly)
+          const newHeaders = new Headers(response.headers);
           
           // Return modified response
           return new Response(modifiedHtml, {
             status: response.status,
             statusText: response.statusText,
-            headers: response.headers
+            headers: newHeaders
           });
         } catch (error) {
-          console.error('Error injecting Notion CSS:', error);
-          return response; // Return original if injection fails
+          // Return original if injection fails
+          return response;
         }
       }
     }
@@ -130,23 +143,23 @@ async function handleRequest(event) {
   if (isNotion) {
     try {
       const response = await fetch(event.request);
-      const contentType = response.headers.get('content-type') || '';
       
-      if (contentType.includes('text/html')) {
-        const html = await response.clone().text();
-        let modifiedHtml = html.replace('</head>', `<style id="kasimir-notion-css">${NOTION_CSS}</style></head>`);
+      if (response && response.ok) {
+        const contentType = response.headers.get('content-type') || '';
         
-        if (modifiedHtml.includes('</body>')) {
-          modifiedHtml = modifiedHtml.replace('</body>', `<script id="kasimir-notion-js">${NOTION_JS}</script></body>`);
-        } else {
-          modifiedHtml = modifiedHtml.replace('</html>', `<script id="kasimir-notion-js">${NOTION_JS}</script></html>`);
+        if (contentType.includes('text/html')) {
+          const html = await response.clone().text();
+          const modifiedHtml = await injectNotionContent(html);
+          
+          // Create new headers object
+          const newHeaders = new Headers(response.headers);
+          
+          return new Response(modifiedHtml, {
+            status: response.status,
+            statusText: response.statusText,
+            headers: newHeaders
+          });
         }
-        
-        return new Response(modifiedHtml, {
-          status: response.status,
-          statusText: response.statusText,
-          headers: response.headers
-        });
       }
       
       return response;
