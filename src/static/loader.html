@@ -238,7 +238,7 @@
           height: 60px;
           background-color: #ffffff;
           border-top: 1px solid #e8eaed;
-          z-index: 1003; /* Above More view (1000) */
+          z-index: 300; /* Above mobile views */
           padding: 0 8px;
           box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.05);
         }
@@ -314,7 +314,7 @@
           right: 0;
           bottom: 60px;
           background-color: #ffffff;
-          z-index: 999;
+          z-index: 100;
           overflow-y: auto;
         }
 
@@ -330,7 +330,7 @@
           left: 0;
           right: 0;
           bottom: 0;
-          z-index: 1000; /* Below bottom bar (1002) */
+          z-index: 200; /* Below bottom bar */
           pointer-events: none;
         }
 
@@ -547,28 +547,29 @@
         .more-dropdown-content:hover::-webkit-scrollbar-thumb {
           background: #d1d5db;
         }
+      }
 
-        /* User Picker Modal */
-        #user-picker-modal {
-          display: none;
-          position: fixed;
-          top: 0;
-          left: 0;
-          right: 0;
-          bottom: 0;
-          background-color: rgba(0, 0, 0, 0.5);
-          z-index: 10001 !important;
-          align-items: center;
-          justify-content: center;
-          pointer-events: none;
-        }
+      /* User Picker Modal - GLOBAL STYLES (outside media queries) */
+      #user-picker-modal {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(0, 0, 0, 0.5);
+        z-index: 999999;
+        align-items: center;
+        justify-content: center;
+      }
 
-        #user-picker-modal.active {
-          display: flex !important;
-          pointer-events: auto;
-        }
+      #user-picker-modal.active {
+        display: flex;
+      }
 
-        .user-picker-dialog {
+      .user-picker-dialog {
           background-color: #ffffff;
           border-radius: 8px;
           box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
@@ -729,12 +730,11 @@
           white-space: nowrap;
         }
 
-        .user-picker-empty {
-          padding: 40px 24px;
-          text-align: center;
-          color: #5f6368;
-          font-size: 14px;
-        }
+      .user-picker-empty {
+        padding: 40px 24px;
+        text-align: center;
+        color: #5f6368;
+        font-size: 14px;
       }
     </style>
 
@@ -922,28 +922,6 @@
           </div>
         </div>
         <div id="class-portal" style="position: absolute; inset: 0; z-index: 1; display: none;"></div>
-        </div>
-      </div>
-    </div>
-
-    <!-- User Picker Modal -->
-    <div id="user-picker-modal">
-      <div class="user-picker-dialog">
-        <div class="user-picker-header">
-          <h2 class="user-picker-title">OPEN A CHAT OR GO TO A GROUP CHAT</h2>
-          <button class="user-picker-close" id="user-picker-close">×</button>
-        </div>
-        <div class="user-picker-search">
-          <input
-            type="text"
-            id="user-picker-search-input"
-            class="user-picker-search-input"
-            placeholder="Find member"
-          />
-          <button id="user-picker-go-btn" class="user-picker-go-btn" disabled>Go to chat</button>
-        </div>
-        <div class="user-picker-list" id="user-picker-list">
-          <!-- Users will be rendered here -->
         </div>
       </div>
     </div>
@@ -1413,5 +1391,27 @@
         scrollableContainer.addEventListener('wheel', handleScroll, { passive: true });
       })();
     </script>
+
+    <!-- User Picker Modal - placed at very end of body to ensure highest stacking context -->
+    <div id="user-picker-modal">
+      <div class="user-picker-dialog">
+        <div class="user-picker-header">
+          <h2 class="user-picker-title">OPEN A CHAT OR GO TO A GROUP CHAT</h2>
+          <button class="user-picker-close" id="user-picker-close">×</button>
+        </div>
+        <div class="user-picker-search">
+          <input
+            type="text"
+            id="user-picker-search-input"
+            class="user-picker-search-input"
+            placeholder="Find member"
+          />
+          <button id="user-picker-go-btn" class="user-picker-go-btn" disabled>Go to chat</button>
+        </div>
+        <div class="user-picker-list" id="user-picker-list">
+          <!-- Users will be rendered here -->
+        </div>
+      </div>
+    </div>
   </body>
 </html>
