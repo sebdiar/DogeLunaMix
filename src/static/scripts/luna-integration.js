@@ -3833,7 +3833,10 @@ class LunaIntegration {
       updateGoButton();
       
       // Show modal and focus search
+      console.log('Showing user picker modal');
       modal.classList.add('active');
+      console.log('Modal active class added. Current classes:', modal.className);
+      console.log('Modal computed display:', window.getComputedStyle(modal).display);
       setTimeout(() => {
         searchInput.focus();
       }, 100);
