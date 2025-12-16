@@ -160,5 +160,44 @@ router.put('/preferences', async (req, res) => {
   }
 });
 
+// Delete user
+router.delete('/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Prevent users from deleting themselves
+    if (id === req.userId) {
+      return res.status(400).json({ error: 'Cannot delete your own account' });
+    }
+    
+    // Check if user exists
+    const { data: user, error: userError } = await supabase
+      .from('users')
+      .select('id, email, name')
+      .eq('id', id)
+      .single();
+    
+    if (userError || !user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    // Delete user (cascade will handle related data)
+    const { error: deleteError } = await supabase
+      .from('users')
+      .delete()
+      .eq('id', id);
+    
+    if (deleteError) {
+      console.error('Error deleting user:', deleteError);
+      return res.status(500).json({ error: 'Failed to delete user' });
+    }
+    
+    res.json({ message: 'User deleted successfully', user: { id: user.id, email: user.email, name: user.name } });
+  } catch (error) {
+    console.error('Delete user error:', error);
+    res.status(500).json({ error: 'Failed to delete user' });
+  }
+});
+
 export default router;
 

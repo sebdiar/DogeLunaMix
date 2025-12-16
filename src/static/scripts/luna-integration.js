@@ -16,6 +16,8 @@ class LunaIntegration {
     this.menuCloseListener = null; // Track menu close listener
     this.currentChatId = null; // Current active chat ID for message sending
     this.chatNotificationChannel = null; // Supabase Realtime channel for chat notifications
+    this.supabaseClient = null; // Supabase client for realtime
+    this.chatSubscriptions = new Map(); // Map of chatId -> subscription channel
     
     this.init();
   }
@@ -5301,10 +5303,242 @@ class LunaIntegration {
       
       // Scroll to bottom
       messagesContainer.scrollTop = messagesContainer.scrollHeight;
+      
+      // Setup realtime subscription for this chat (only once)
+      const existing = this.chatSubscriptions.get(chatId);
+      if (!existing || (existing !== 'pending' && existing !== null && (!existing.state || existing.state !== 'joined'))) {
+        this.setupChatRealtime(chatId, messagesContainer);
+      }
     } catch (err) {
       console.error('Failed to load messages:', err);
     }
   }
+  
+  async initSupabaseClient() {
+    if (this.supabaseClient) return this.supabaseClient;
+    
+    try {
+      const config = await this.request('/api/users/supabase-config');
+      
+      if (config?.url && config?.anonKey) {
+        const { createClient } = await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm');
+        this.supabaseClient = createClient(config.url, config.anonKey, {
+          realtime: {
+            params: {
+              eventsPerSecond: 10
+            },
+            // Improved reconnection handling
+            heartbeatIntervalMs: 30000,
+            reconnectAfterMs: (tries) => {
+              // Exponential backoff: 1s, 2s, 4s, 8s, max 30s
+              return Math.min(Math.pow(2, tries) * 1000, 30000);
+            }
+          },
+          // Disable auto-refresh since we're using custom JWT auth
+          auth: {
+            autoRefreshToken: false,
+            persistSession: false
+          }
+        });
+        // Supabase client initialized
+        return this.supabaseClient;
+      }
+      console.warn('[Realtime] Missing Supabase configuration');
+      return null;
+    } catch (err) {
+      console.error('[Realtime] Failed to initialize Supabase client:', err);
+      return null;
+    }
+  }
+  
+  async setupChatRealtime(chatId, messagesContainer) {
+    // Prevent duplicate setup or if Realtime is disabled for this chat
+    if (this.chatSubscriptions.has(chatId)) {
+      const existing = this.chatSubscriptions.get(chatId);
+      if (existing === null) {
+        // Realtime was disabled for this chat after failed attempts
+        // Realtime is disabled for chat (previous connection failed)
+        return;
+      }
+      if (existing && existing.state === 'joined') {
+        // Already subscribed and active
+        // Already subscribed to chat
+        return;
+      }
+    }
+    
+    // Mark as attempting to prevent race conditions
+    this.chatSubscriptions.set(chatId, 'pending');
+    
+    // Initialize Supabase client if needed
+    const client = await this.initSupabaseClient();
+    if (!client) {
+      this.showRealtimeError(messagesContainer, 'Unable to initialize Realtime connection. Please refresh the page.');
+      return;
+    }
+    
+    // Test basic connectivity first
+    try {
+      const { error: testError } = await client
+        .from('chat_messages')
+        .select('id')
+        .limit(1);
+      
+      if (testError) {
+        console.error('[Realtime] Cannot query chat_messages table:', testError);
+        this.showRealtimeError(messagesContainer, 'Cannot access chat messages. Please check your permissions.');
+        return;
+      }
+    } catch (err) {
+      console.error('[Realtime] Error testing connectivity:', err);
+      this.showRealtimeError(messagesContainer, 'Realtime connection test failed. Please refresh the page.');
+      return;
+    }
+    
+    const channelName = `chat:${chatId}`;
+    let retryCount = 0;
+    const maxRetries = 3;
+    let isSubscribed = false;
+    let isAttempting = false; // Prevent multiple simultaneous attempts
+    let retryTimeout = null;
+    
+    const attemptSubscribe = () => {
+      // Prevent multiple simultaneous attempts
+      if (isSubscribed || isAttempting) {
+        return;
+      }
+      
+      isAttempting = true;
+      const currentAttempt = retryCount + 1;
+      // Setting up subscription for chat
+      
+      const channel = client
+        .channel(channelName, {
+          config: {
+            broadcast: { self: true }
+          }
+        })
+        .on(
+          'postgres_changes',
+          {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'chat_messages',
+            filter: `chat_id=eq.${chatId}`
+          },
+          (payload) => {
+            // Reload messages when new one arrives
+            const chatWrapper = messagesContainer.closest('.chat-wrapper');
+            if (chatWrapper) {
+              this.loadChatMessages(chatWrapper, chatId);
+            } else {
+              // Fallback: try to find by data-chat-id
+              const fallbackContainer = document.querySelector(`[data-chat-id="${chatId}"]`)?.closest('.chat-wrapper');
+              if (fallbackContainer) {
+                this.loadChatMessages(fallbackContainer, chatId);
+              }
+            }
+          }
+        )
+        .subscribe((status, err) => {
+          isAttempting = false; // Reset attempting flag
+          
+          if (status === 'SUBSCRIBED') {
+            isSubscribed = true;
+            retryCount = 0;
+            if (retryTimeout) {
+              clearTimeout(retryTimeout);
+              retryTimeout = null;
+            }
+            this.chatSubscriptions.set(chatId, channel);
+            // Successfully subscribed to chat
+            this.hideRealtimeError(messagesContainer);
+          } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+            const errorDetails = err ? JSON.stringify(err) : 'No error details';
+            console.warn(`[Realtime] Subscription failed for chat ${chatId}:`, status, errorDetails);
+            
+            // Clean up failed channel asynchronously
+            setTimeout(() => {
+              try {
+                if (channel && channel.state !== 'closed') {
+                  channel.unsubscribe();
+                }
+              } catch (e) {
+                // Ignore cleanup errors
+              }
+            }, 100);
+            
+            // Retry with exponential backoff
+            if (retryCount < maxRetries && !isSubscribed) {
+              retryCount++;
+              const delay = Math.min(Math.pow(2, retryCount) * 1000, 10000); // 2s, 4s, 8s, max 10s
+              // Retrying subscription for chat
+              
+              // Clear any existing retry timeout
+              if (retryTimeout) {
+                clearTimeout(retryTimeout);
+              }
+              
+              retryTimeout = setTimeout(() => {
+                if (!isSubscribed && retryCount <= maxRetries) {
+                  attemptSubscribe();
+                }
+              }, delay);
+            } else if (!isSubscribed) {
+              // Max retries reached - disable Realtime for this chat permanently
+              console.error(`[Realtime] ❌ Failed to subscribe to chat ${chatId} after ${maxRetries} attempts`);
+              console.error(`[Realtime] Realtime is disabled for this chat. Possible causes:`);
+              console.error(`[Realtime] 1. Realtime is not enabled for the project in Supabase Dashboard > Settings > API`);
+              console.error(`[Realtime] 2. The table is not in the supabase_realtime publication`);
+              console.error(`[Realtime] 3. REPLICA IDENTITY is not set to FULL`);
+              console.error(`[Realtime] 4. Network/firewall is blocking WebSocket connections`);
+              console.error(`[Realtime] 5. The anon key does not have Realtime permissions`);
+              
+              // Mark this chat as having Realtime disabled to prevent further attempts
+              this.chatSubscriptions.set(chatId, null); // null means disabled
+              this.showRealtimeError(messagesContainer, 'Realtime connection unavailable. Messages will not update automatically. Please refresh to check for new messages.');
+            }
+          }
+        });
+    };
+    
+    // Start subscription attempt
+    attemptSubscribe();
+  }
+  
+  showRealtimeError(messagesContainer, message) {
+    const container = messagesContainer.closest('.chat-wrapper');
+    if (!container) return;
+    
+    // Remove any existing error message
+    const existingError = container.querySelector('.realtime-error');
+    if (existingError) {
+      existingError.remove();
+    }
+    
+    // Create error message
+    const errorDiv = document.createElement('div');
+    errorDiv.className = 'realtime-error';
+    errorDiv.style.cssText = 'padding: 12px 16px; background: #fff3cd; border-left: 4px solid #ffc107; color: #856404; font-size: 14px; margin-bottom: 8px;';
+    errorDiv.textContent = message;
+    
+    // Insert at the top of messages container
+    const messagesEl = container.querySelector('.chat-messages');
+    if (messagesEl && messagesEl.parentNode) {
+      messagesEl.parentNode.insertBefore(errorDiv, messagesEl);
+    }
+  }
+  
+  hideRealtimeError(messagesContainer) {
+    const container = messagesContainer.closest('.chat-wrapper');
+    if (!container) return;
+    
+    const errorDiv = container.querySelector('.realtime-error');
+    if (errorDiv) {
+      errorDiv.remove();
+    }
+  }
+  
 
   renderChatMessages(container, messages) {
     const user = this.user;
@@ -5861,14 +6095,11 @@ class LunaIntegration {
         body: JSON.stringify({ message })
       });
 
-      // Reload messages to show the new one
-      const chatContainer = document.querySelector(`[data-chat-id="${chatId}"]`)?.closest('.chat-wrapper');
-      if (chatContainer) {
-        this.loadChatMessages(chatContainer, chatId);
-      }
+      // Realtime will automatically reload messages via postgres_changes event
+      // No need to manually reload here
     } catch (err) {
       console.error('Failed to send message:', err);
-      alert('Failed to send message');
+      alert('Failed to send message: ' + (err.message || 'Unknown error'));
     }
   }
 }

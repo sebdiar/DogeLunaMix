@@ -7,6 +7,16 @@ router.use(authenticate);
 
 // Helper: Get or create chat for a space
 async function getOrCreateChatForSpace(spaceId, userId) {
+  // First, get the space to check if it's a user space (DM)
+  const { data: space } = await supabase
+    .from('spaces')
+    .select('id, category, name, user_id')
+    .eq('id', spaceId)
+    .single();
+  
+  if (!space) return null;
+  
+  // Check if chat already exists for this space
   const { data: spaceChat } = await supabase
     .from('space_chats')
     .select('chat_id')
@@ -14,9 +24,24 @@ async function getOrCreateChatForSpace(spaceId, userId) {
     .single();
   
   if (spaceChat) {
+    // Chat exists - ensure current user is a participant
+    const { data: existingParticipant } = await supabase
+      .from('chat_participants')
+      .select('id')
+      .eq('chat_id', spaceChat.chat_id)
+      .eq('user_id', userId)
+      .single();
+    
+    if (!existingParticipant) {
+      await supabase
+        .from('chat_participants')
+        .insert({ chat_id: spaceChat.chat_id, user_id: userId });
+    }
+    
     return spaceChat.chat_id;
   }
   
+  // Create new chat
   const { data: chat } = await supabase
     .from('chats')
     .insert({})
@@ -29,9 +54,44 @@ async function getOrCreateChatForSpace(spaceId, userId) {
     .from('space_chats')
     .insert({ space_id: spaceId, chat_id: chat.id });
   
+  // Add current user as participant
   await supabase
     .from('chat_participants')
     .insert({ chat_id: chat.id, user_id: userId });
+  
+  // If this is a user space (DM), add the other user as participant too
+  if (space.category === 'user') {
+    // Find the other user by name/email
+    const { data: otherUser } = await supabase
+      .from('users')
+      .select('id')
+      .or(`email.eq.${space.name},name.eq.${space.name}`)
+      .neq('id', userId)
+      .single();
+    
+    if (otherUser) {
+      // Add the other user as participant
+      await supabase
+        .from('chat_participants')
+        .insert({ chat_id: chat.id, user_id: otherUser.id });
+    }
+    
+    // Also add the space owner if different from current user
+    if (space.user_id && space.user_id !== userId) {
+      const { data: ownerParticipant } = await supabase
+        .from('chat_participants')
+        .select('id')
+        .eq('chat_id', chat.id)
+        .eq('user_id', space.user_id)
+        .single();
+      
+      if (!ownerParticipant) {
+        await supabase
+          .from('chat_participants')
+          .insert({ chat_id: chat.id, user_id: space.user_id });
+      }
+    }
+  }
   
   return chat.id;
 }
@@ -53,6 +113,7 @@ router.get('/space/:spaceId', async (req, res) => {
     
     let hasAccess = space.user_id === req.userId;
     
+    // For user spaces (DMs), check if current user is the other participant
     if (!hasAccess && space.category === 'user') {
       const { data: currentUser } = await supabase
         .from('users')
@@ -60,8 +121,30 @@ router.get('/space/:spaceId', async (req, res) => {
         .eq('id', req.userId)
         .single();
       
-      hasAccess = currentUser && 
-        (space.name === currentUser.email || space.name === currentUser.name);
+      if (currentUser) {
+        // Check if space name matches current user (meaning this is a DM where current user is the recipient)
+        hasAccess = space.name === currentUser.email || space.name === currentUser.name;
+        
+        // Also check if there's a chat for this space and current user is a participant
+        if (!hasAccess) {
+          const { data: spaceChat } = await supabase
+            .from('space_chats')
+            .select('chat_id')
+            .eq('space_id', spaceId)
+            .single();
+          
+          if (spaceChat) {
+            const { data: participant } = await supabase
+              .from('chat_participants')
+              .select('id')
+              .eq('chat_id', spaceChat.chat_id)
+              .eq('user_id', req.userId)
+              .single();
+            
+            hasAccess = !!participant;
+          }
+        }
+      }
     }
     
     if (!hasAccess) {
@@ -74,6 +157,7 @@ router.get('/space/:spaceId', async (req, res) => {
       return res.status(500).json({ error: 'Failed to get chat' });
     }
     
+    // Ensure current user is a participant (should already be added by getOrCreateChatForSpace, but double-check)
     const { data: participant } = await supabase
       .from('chat_participants')
       .select('id')
@@ -136,7 +220,7 @@ router.get('/:chatId/messages', async (req, res) => {
         user:users!chat_messages_user_id_fkey(id, name, email)
       `)
       .eq('chat_id', chatId)
-      .order('created_at', { ascending: true })
+      .order('created_at', { ascending: false }) // Most recent first
       .limit(parseInt(limit));
     
     if (before) {
@@ -150,7 +234,10 @@ router.get('/:chatId/messages', async (req, res) => {
       return res.status(500).json({ error: 'Failed to fetch messages' });
     }
     
-    res.json({ messages: messages || [] });
+    // Reverse to show oldest first (for chat UI)
+    const sortedMessages = (messages || []).reverse();
+    
+    res.json({ messages: sortedMessages });
   } catch (error) {
     console.error('Get messages error:', error);
     res.status(500).json({ error: 'Failed to get messages' });
@@ -208,4 +295,7 @@ router.post('/:chatId/messages', async (req, res) => {
 });
 
 export default router;
+
+
+
 

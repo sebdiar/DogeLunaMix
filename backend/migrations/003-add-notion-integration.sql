@@ -67,3 +67,16 @@ CREATE POLICY "Allow all on notion_config" ON notion_config FOR ALL USING (true)
 -- SELECT notion_page_id, notion_page_url, archived FROM spaces LIMIT 5;
 -- =====================================================
 
+
+
+
+
+
+
+
+
+
+
+
+
+

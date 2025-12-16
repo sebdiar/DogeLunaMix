@@ -74,3 +74,16 @@ Para simplificar, podemos hacer que el frontend sirva también las rutas del bac
 - **"Build failed"**: Ejecuta `npm run build` manualmente
 - **"Port already in use"**: Cambia BACKEND_PORT a otro puerto
 
+
+
+
+
+
+
+
+
+
+
+
+
+

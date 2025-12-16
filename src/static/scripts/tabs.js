@@ -1178,7 +1178,9 @@ window.addEventListener('load', async () => {
     document.getElementById(id)?.addEventListener('click', fn),
   );
 
-  document.getElementById('bookmark-btn').addEventListener('click', () => {
+  const bookmarkBtn = document.getElementById('bookmark-btn');
+  if (bookmarkBtn) {
+    bookmarkBtn.addEventListener('click', () => {
     const bookmark = document.getElementById('bookmark');
     const setBookmark = (add) => {
       const old = JSON.parse(localStorage.getItem('options'));
@@ -1199,7 +1201,8 @@ window.addEventListener('load', async () => {
       bookmark.setAttribute('fill', 'currentColor');
       setBookmark(true);
     }
-  });
+    });
+  }
 
   document.addEventListener('newFrame', (e) => {
     const bookmark = document.getElementById('bookmark');

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import api from '../utils/api';
 
 export default function ContentArea({ activeSpace, activeTab, spaceTabs, onSpaceTabSelect }) {
@@ -49,7 +49,7 @@ export default function ContentArea({ activeSpace, activeTab, spaceTabs, onSpace
   if (currentUrl?.startsWith('doge://chat/') || currentUrl?.startsWith('luna://chat/')) {
     return (
       <div className="flex-1 flex flex-col bg-white">
-        <ChatComponent chatData={chatData} spaceId={activeSpace?.id} />
+        <ChatComponent chatData={chatData} />
       </div>
     );
   }
@@ -78,39 +78,51 @@ export default function ContentArea({ activeSpace, activeTab, spaceTabs, onSpace
   );
 }
 
-function ChatComponent({ chatData, spaceId }) {
+function ChatComponent({ chatData }) {
   const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState('');
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    if (chatData?.chat?.id) {
-      loadMessages(chatData.chat.id);
-    }
-  }, [chatData]);
-
-  const loadMessages = async (chatId) => {
+  const loadMessages = useCallback(async (chatId, showLoading = false) => {
     try {
-      setLoading(true);
-      const { messages } = await api.getMessages(chatId);
-      setMessages(messages || []);
+      if (showLoading) {
+        setLoading(true);
+      }
+      
+      const { messages: newMessages } = await api.getMessages(chatId);
+      setMessages(newMessages || []);
     } catch (err) {
       console.error('Failed to load messages:', err);
     } finally {
-      setLoading(false);
+      if (showLoading) {
+        setLoading(false);
+      }
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    if (chatData?.chat?.id) {
+      loadMessages(chatData.chat.id, true); // Show loading on initial load
+    }
+  }, [chatData?.chat?.id, loadMessages]);
 
   const handleSend = async (e) => {
     e.preventDefault();
     if (!newMessage.trim() || !chatData?.chat?.id) return;
 
+    const messageText = newMessage.trim();
+    setNewMessage(''); // Clear input immediately for better UX
+
     try {
-      const { message } = await api.sendMessage(chatData.chat.id, newMessage);
-      setMessages([...messages, message]);
-      setNewMessage('');
+      await api.sendMessage(chatData.chat.id, messageText);
+      // Reload messages after sending (Realtime will update automatically)
+      // Small delay to ensure message is saved
+      setTimeout(() => {
+        loadMessages(chatData.chat.id);
+      }, 200);
     } catch (err) {
       console.error('Failed to send message:', err);
+      setNewMessage(messageText); // Restore message on error
     }
   };
 

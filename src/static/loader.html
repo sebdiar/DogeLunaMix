@@ -15,6 +15,16 @@
     <meta name="theme-color" content="#ececed" />
     <meta name="msapplication-TileColor" content="#ececed" />
     
+    <!-- Import Map for module resolution - must be before any module scripts -->
+    <script type="importmap">
+    {
+      "imports": {
+        "@mercuryworkshop/bare-mux": "/baremux/index.mjs",
+        "lucide": "https://cdn.jsdelivr.net/npm/lucide@0.263.1/dist/esm/lucide.js"
+      }
+    }
+    </script>
+    
     <script type="module">
       (function() {
         const options = JSON.parse(localStorage.getItem("options") || "{}");
@@ -42,40 +52,61 @@
       })();
     </script>
 
+    <!-- Lucide icons - required for dynamic tab icons -->
     <script type="module">
-      import "basecoat-css/all";
-      import {
-        createIcons,
-        ArrowLeft,
-        ArrowRight,
-        RotateCw,
-        Folder,
-        Menu,
-        Plus,
-        Search,
-        PanelBottomClose,
-        Star,
-        Settings,
-        Home
-      } from "lucide";
-
-      createIcons({
-        icons: {
-          ArrowLeft,
-          ArrowRight,
-          RotateCw,
-          Folder,
-          Menu,
-          Plus,
-          Search,
-          PanelBottomClose,
-          Star,
-          Settings,
-          Home
-        },
-      });
+      // Try to load lucide icons - required for tab icons
+      (async () => {
+        try {
+          // Try multiple CDN sources
+          const sources = [
+            'https://unpkg.com/lucide@latest/dist/umd/lucide.js',
+            'https://cdn.jsdelivr.net/npm/lucide@latest/dist/umd/lucide.js',
+            'https://esm.sh/lucide@latest'
+          ];
+          
+          let loaded = false;
+          for (const source of sources) {
+            try {
+              // Try UMD version first (works better with CORS)
+              if (source.includes('umd')) {
+                const script = document.createElement('script');
+                script.src = source;
+                script.type = 'text/javascript';
+                await new Promise((resolve, reject) => {
+                  script.onload = resolve;
+                  script.onerror = reject;
+                  document.head.appendChild(script);
+                });
+                if (window.lucide && window.lucide.createIcons) {
+                  window.lucide.createIcons();
+                  loaded = true;
+                  break;
+                }
+              } else {
+                // Try ES module version
+                const module = await import(source);
+                if (module && (module.createIcons || module.default?.createIcons)) {
+                  (module.createIcons || module.default.createIcons)();
+                  loaded = true;
+                  break;
+                }
+              }
+            } catch (e) {
+              // Continue to next source
+              continue;
+            }
+          }
+          
+          if (!loaded) {
+            console.warn('Lucide icons could not be loaded - some tab icons may not appear');
+          }
+        } catch (e) {
+          console.warn('Failed to load Lucide icons:', e);
+        }
+      })();
     </script>
 
+    <!-- globals.css is processed by Vite during build, but in dev we need to import it -->
     <link rel="stylesheet" href="../globals.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/basecoat-css@0.3.1/dist/basecoat.cdn.min.css">
 
@@ -228,30 +259,56 @@
           display: none !important;
         }
 
-        /* Bottom navigation bar */
+        /* Remove rounded corners and padding from main content container in mobile */
+        /* But respect safe areas for iPhone notch and bottom bar */
+        .flex-1.flex.flex-col {
+          padding-top: env(safe-area-inset-top, 0) !important;
+          padding-bottom: calc(72px + env(safe-area-inset-bottom, 0)) !important;
+          padding-left: 0 !important;
+          padding-right: 0 !important;
+        }
+
+        .flex-1.flex.flex-col > div.bg-white.rounded-2xl {
+          border-radius: 0 !important;
+        }
+
+        /* Also remove rounded corners from sidebar card if visible */
+        #sidebar > div.rounded-2xl {
+          border-radius: 0 !important;
+        }
+
+        /* Bottom navigation bar - fixed to bottom */
         #mobile-bottom-bar {
           display: flex;
           position: fixed;
-          bottom: env(safe-area-inset-bottom, 0);
-          left: env(safe-area-inset-left, 0);
-          right: env(safe-area-inset-right, 0);
-          height: calc(60px + env(safe-area-inset-bottom, 0));
+          bottom: 0;
+          left: 0;
+          right: 0;
+          height: calc(72px + env(safe-area-inset-bottom, 0));
           background-color: #ffffff;
           border-top: 1px solid #e8eaed;
           z-index: 300; /* Above mobile views */
           padding: 0 8px;
           padding-bottom: env(safe-area-inset-bottom, 0);
+          padding-left: env(safe-area-inset-left, 0);
+          padding-right: env(safe-area-inset-right, 0);
           box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.05);
+        }
+        
+        /* URL bar - respect safe area at top for iPhone notch */
+        #d-url {
+          position: relative;
+          margin-top: 0;
         }
 
         #mobile-bottom-bar .bottom-nav-item {
-          flex: 1;
+          flex: 1 1 0; /* Equal distribution - all items get same space */
           display: flex;
           flex-direction: column;
           align-items: center;
           justify-content: center;
           gap: 4px;
-          padding: 6px 4px;
+          padding: 8px 4px;
           color: #5f6368;
           font-size: 10px;
           font-weight: 500;
@@ -259,6 +316,159 @@
           transition: color 0.2s;
           position: relative;
           min-width: 0; /* Allow flex items to shrink */
+          max-width: 100%; /* Prevent overflow */
+        }
+        
+        /* Tabs container - should not take flex space, just contain tabs */
+        #mobile-tabs-container {
+          display: contents !important; /* Makes container transparent to flexbox */
+          gap: 4px;
+        }
+        
+        /* All items (tabs and fixed buttons) get equal space */
+        #mobile-tabs-container .bottom-nav-item,
+        #mobile-nav-projects,
+        #mobile-nav-messenger,
+        #mobile-nav-more {
+          flex: 1 1 0 !important; /* Each item gets equal space */
+          min-width: 0; /* Allow flex items to shrink */
+          max-width: none; /* Remove max-width restriction */
+        }
+        
+        /* Ensure fixed buttons are always visible */
+        #mobile-nav-projects,
+        #mobile-nav-messenger,
+        #mobile-nav-more {
+          display: flex !important; /* Ensure visibility */
+          visibility: visible !important;
+          opacity: 1 !important;
+        }
+        
+        /* Ensure all text content is centered */
+        #mobile-bottom-bar .bottom-nav-item > * {
+          text-align: center;
+        }
+
+        /* Ensure all labels have same font size and are centered */
+        #mobile-bottom-bar .bottom-nav-item .label,
+        #mobile-bottom-bar .bottom-nav-item span:not(.badge) {
+          font-size: 10px;
+          font-weight: 500;
+          text-align: center;
+          width: 100%;
+          display: block;
+        }
+
+        /* More button - same structure as other buttons (icon above, text below) */
+        #mobile-nav-more {
+          flex-direction: column !important;
+        }
+        
+        /* Ensure all fixed buttons have vertical layout (icon above, text below) */
+        #mobile-nav-projects,
+        #mobile-nav-messenger,
+        #mobile-nav-more {
+          flex-direction: column !important;
+        }
+
+        /* Editing mode - wiggle animation for ALL items in bottom bar AND More view */
+        #mobile-bottom-bar.editing .bottom-nav-item {
+          animation: wiggle 0.3s ease-in-out infinite;
+          cursor: move;
+        }
+        
+        #mobile-bottom-bar.editing .bottom-nav-item.dragging {
+          opacity: 0.5;
+          z-index: 1000;
+        }
+
+        #mobile-bottom-bar.editing .bottom-nav-item:nth-child(1) { animation-delay: 0s; }
+        #mobile-bottom-bar.editing .bottom-nav-item:nth-child(2) { animation-delay: 0.05s; }
+        #mobile-bottom-bar.editing .bottom-nav-item:nth-child(3) { animation-delay: 0.1s; }
+        #mobile-bottom-bar.editing .bottom-nav-item:nth-child(4) { animation-delay: 0.15s; }
+        #mobile-bottom-bar.editing .bottom-nav-item:nth-child(5) { animation-delay: 0.2s; }
+        #mobile-bottom-bar.editing .bottom-nav-item:nth-child(6) { animation-delay: 0.25s; }
+
+        /* Also animate items in More view when editing */
+        .mobile-more-editing .mobile-more-item {
+          animation: wiggle 0.3s ease-in-out infinite;
+        }
+
+        .mobile-more-editing .mobile-more-item:nth-child(1) { animation-delay: 0s; }
+        .mobile-more-editing .mobile-more-item:nth-child(2) { animation-delay: 0.05s; }
+        .mobile-more-editing .mobile-more-item:nth-child(3) { animation-delay: 0.1s; }
+        .mobile-more-editing .mobile-more-item:nth-child(4) { animation-delay: 0.15s; }
+        .mobile-more-editing .mobile-more-item:nth-child(5) { animation-delay: 0.2s; }
+        .mobile-more-editing .mobile-more-item:nth-child(6) { animation-delay: 0.25s; }
+        .mobile-more-editing .mobile-more-item:nth-child(7) { animation-delay: 0.3s; }
+        .mobile-more-editing .mobile-more-item:nth-child(8) { animation-delay: 0.35s; }
+
+        @keyframes wiggle {
+          0%, 100% { transform: rotate(0deg) translateX(0); }
+          25% { transform: rotate(-1deg) translateX(-1px); }
+          75% { transform: rotate(1deg) translateX(1px); }
+        }
+
+        /* Three dots button for bottom bar items in editing mode */
+        #mobile-bottom-bar.editing .bottom-nav-item .mobile-tab-menu-btn {
+          position: absolute;
+          top: 2px;
+          right: 2px;
+          padding: 4px;
+          opacity: 0.95;
+          z-index: 1000 !important;
+          background: rgba(255, 255, 255, 0.98);
+          border-radius: 4px;
+          border: none;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+          pointer-events: auto !important;
+          touch-action: manipulation;
+          min-width: 24px;
+          min-height: 24px;
+        }
+        
+        #mobile-bottom-bar.editing .bottom-nav-item {
+          position: relative;
+        }
+        
+        #mobile-bottom-bar.editing .bottom-nav-item .mobile-tab-menu-btn:active {
+          opacity: 1;
+          transform: scale(0.95);
+        }
+        
+        /* Three dots button for More view items */
+        .mobile-more-item .mobile-tab-menu-btn {
+          position: absolute;
+          top: 4px;
+          right: 4px;
+          padding: 2px;
+          opacity: 0.7;
+          z-index: 1000 !important;
+          background: rgba(255, 255, 255, 0.9);
+          border-radius: 50%;
+          border: 1px solid rgba(0,0,0,0.1);
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+          pointer-events: auto !important;
+          touch-action: manipulation;
+          width: 20px;
+          height: 20px;
+        }
+        
+        .mobile-more-item {
+          position: relative;
+        }
+        
+        .mobile-more-item .mobile-tab-menu-btn:active {
+          opacity: 1;
+          transform: scale(0.95);
         }
 
         #mobile-bottom-bar .bottom-nav-item.active {
@@ -266,26 +476,51 @@
         }
 
         #mobile-bottom-bar .bottom-nav-item .icon {
-          width: 24px;
-          height: 24px;
+          width: 36px; /* Mismo tamaño que More */
+          height: 36px; /* Mismo tamaño que More */
           display: flex;
           align-items: center;
           justify-content: center;
           flex-shrink: 0;
         }
+        
+        #mobile-bottom-bar .bottom-nav-item .icon > div {
+          width: 100% !important;
+          height: 100% !important;
+        }
+        
+        /* Iconos dentro del círculo - mismo tamaño que More */
+        #mobile-bottom-bar .bottom-nav-item .icon > div > img,
+        #mobile-bottom-bar .bottom-nav-item .icon > div > svg {
+          max-width: 20px !important;
+          max-height: 20px !important;
+          width: auto !important;
+          height: auto !important;
+        }
+        
+        /* Iconos SVG directos (Projects, Users, More) - mismo tamaño que tabs */
+        #mobile-bottom-bar .bottom-nav-item .icon > svg {
+          width: 20px;
+          height: 20px;
+        }
 
         #mobile-bottom-bar .bottom-nav-item .label {
           width: 100%;
-          text-align: center;
+          text-align: center !important;
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
           line-height: 1.2;
-          max-height: 24px; /* Allow 2 lines if needed */
-          display: -webkit-box;
-          -webkit-line-clamp: 2;
-          -webkit-box-orient: vertical;
-          white-space: normal;
+          max-height: 14px;
+          display: block;
+          margin: 0 auto;
+        }
+        
+        /* Ensure all spans in bottom nav items are centered */
+        #mobile-bottom-bar .bottom-nav-item > span:not(.badge) {
+          text-align: center !important;
+          display: block;
+          width: 100%;
         }
 
         #mobile-bottom-bar .bottom-nav-item .badge {
@@ -446,6 +681,8 @@
           padding: 8px 4px;
           border-radius: 8px;
           transition: background-color 0.2s;
+          min-width: 0; /* Permitir que el item se encoja */
+          max-width: 100%; /* No exceder el ancho del grid */
         }
 
         .mobile-more-item:active {
@@ -453,24 +690,31 @@
         }
 
         .mobile-more-item-icon {
-          width: 40px;
-          height: 40px;
-          border-radius: 10px;
+          width: 36px; /* Aumentado de 28px a 36px */
+          height: 36px; /* Aumentado de 28px a 36px */
+          border-radius: 50%; /* Círculo como desktop */
           display: flex;
           align-items: center;
           justify-content: center;
-          font-size: 20px;
+          font-size: 18px;
           flex-shrink: 0;
+          position: relative;
+        }
+        
+        .mobile-more-item-icon > div {
+          width: 100% !important;
+          height: 100% !important;
+          border-radius: 50% !important; /* Asegurar que el círculo interno también sea redondo */
         }
 
         .mobile-more-item-icon img,
         .mobile-more-item-icon svg {
-          width: 24px;
-          height: 24px;
+          width: 20px; /* Aumentado de 16px a 20px */
+          height: 20px; /* Aumentado de 16px a 20px */
         }
 
         .mobile-more-item-label {
-          font-size: 11px;
+          font-size: 10px;
           color: #202124;
           text-align: center;
           max-width: 100%;
@@ -478,6 +722,10 @@
           text-overflow: ellipsis;
           white-space: nowrap;
           line-height: 1.2;
+          padding: 0 4px; /* Aumentado padding para mejor truncamiento */
+          margin-top: 4px;
+          word-break: break-word; /* Asegurar que palabras largas se rompan */
+          hyphens: auto; /* Agregar guiones si es necesario */
         }
 
         /* Adjust main content for mobile */
@@ -790,7 +1038,10 @@
                 <span>Tabs</span>
                 <div class="relative">
                   <button id="tab-btn" class="p-1 hover:bg-[#e8eaed] rounded transition-colors" title="New Tab" type="button">
-                    <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: #5f6368;">
+                      <line x1="12" y1="5" x2="12" y2="19"></line>
+                      <line x1="5" y1="12" x2="19" y2="12"></line>
+                    </svg>
                   </button>
                   <!-- Submenu dropdown -->
                   <div id="tab-submenu" class="hidden absolute right-0 top-full mt-1 bg-white border border-[#e8eaed] rounded-lg shadow-lg py-1 z-50 min-w-[160px]">
@@ -829,7 +1080,10 @@
               <div class="w-full flex items-center justify-between px-2 py-1.5 text-xs font-semibold text-[#5f6368] uppercase tracking-wide">
                 <span>Projects</span>
                 <button id="project-btn" class="p-0.5 hover:bg-[#e8eaed] rounded transition-colors" title="New Project">
-                  <i data-lucide="plus" class="w-3 h-3"></i>
+                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: #5f6368;">
+                    <line x1="12" y1="5" x2="12" y2="19"></line>
+                    <line x1="5" y1="12" x2="19" y2="12"></line>
+                  </svg>
         </button>
               </div>
               <div id="projects-cont" class="px-2 space-y-0.5"></div>
@@ -840,7 +1094,10 @@
               <div class="w-full flex items-center justify-between px-2 py-1.5 text-xs font-semibold text-[#5f6368] uppercase tracking-wide">
                 <span>Users</span>
                 <button id="dm-btn" class="p-0.5 hover:bg-[#e8eaed] rounded transition-colors" title="New Message">
-                  <i data-lucide="plus" class="w-3 h-3"></i>
+                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: #5f6368;">
+                    <line x1="12" y1="5" x2="12" y2="19"></line>
+                    <line x1="5" y1="12" x2="19" y2="12"></line>
+                  </svg>
         </button>
       </div>
               <div id="users-cont" class="px-2 space-y-0.5"></div>
@@ -931,6 +1188,7 @@
 
     <div id="toaster" class="toaster"></div>
     <script src="./scripts/tabs.js" type="module"></script>
+    <script src="./scripts/luna-integration-mobile-bottom-bar.js"></script>
     <script src="./scripts/luna-integration.js" type="module"></script>
     <script>
       // Setup Return Home button
@@ -1039,56 +1297,65 @@
 
     <!-- Mobile Bottom Navigation Bar -->
     <div id="mobile-bottom-bar" style="display: none;">
-      <!-- Tabs will be dynamically added here (max 3-4) -->
-      <div id="mobile-tabs-container" class="flex flex-1 gap-1"></div>
+      <!-- Tabs will be dynamically added here (max 3) - cloned from sidebar -->
+      <div id="mobile-tabs-container" style="display: flex; flex: 1 1 0; gap: 4px;"></div>
       
-      <!-- Proyectos button -->
-      <div class="bottom-nav-item" id="mobile-nav-projects" data-view="projects">
+      <!-- Projects button - with circle like tabs -->
+      <div class="bottom-nav-item" id="mobile-nav-projects" data-view="projects" data-fixed-button="projects">
         <div class="icon">
-          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-            <line x1="3" x2="21" y1="9" y2="9"></line>
-            <line x1="9" x2="9" y1="21" y2="9"></line>
-          </svg>
+          <div style="width: 36px; height: 36px; border-radius: 50%; background-color: #ffffff; border: 1px solid #e8eaed; display: flex; align-items: center; justify-content: center;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#5f6368" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+              <line x1="3" x2="21" y1="9" y2="9"></line>
+              <line x1="9" x2="9" y1="21" y2="9"></line>
+            </svg>
+          </div>
         </div>
-        <span>Proyectos</span>
+        <span class="label">Projects</span>
       </div>
 
-      <!-- Messenger/Chat button -->
-      <div class="bottom-nav-item" id="mobile-nav-messenger" data-view="messenger">
+      <!-- Users/Messenger button - with circle like tabs -->
+      <div class="bottom-nav-item" id="mobile-nav-messenger" data-view="messenger" data-fixed-button="users">
         <div class="icon">
-          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-          </svg>
+          <div style="width: 36px; height: 36px; border-radius: 50%; background-color: #ffffff; border: 1px solid #e8eaed; display: flex; align-items: center; justify-content: center;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#5f6368" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+              <circle cx="9" cy="7" r="4"></circle>
+              <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+              <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+            </svg>
+          </div>
         </div>
-        <span>Messenger</span>
+        <span class="label">Users</span>
         <div class="badge" id="mobile-messenger-badge" style="display: none;">0</div>
       </div>
 
-      <!-- More button (contains extra tabs) -->
-      <div class="bottom-nav-item" id="mobile-nav-more" data-view="more">
+      <!-- More button - with circle like tabs -->
+      <div class="bottom-nav-item" id="mobile-nav-more" data-view="more" data-fixed-button="more">
         <div class="icon">
-          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="1"></circle>
-            <circle cx="12" cy="5" r="1"></circle>
-            <circle cx="12" cy="19" r="1"></circle>
-          </svg>
+          <div style="width: 36px; height: 36px; border-radius: 50%; background-color: #ffffff; border: 1px solid #e8eaed; display: flex; align-items: center; justify-content: center;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#5f6368" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="5" cy="12" r="1"></circle>
+              <circle cx="12" cy="12" r="1"></circle>
+              <circle cx="19" cy="12" r="1"></circle>
+            </svg>
+          </div>
         </div>
-        <span>More</span>
+        <span class="label">More</span>
       </div>
     </div>
 
-    <!-- Mobile Projects View (Full Screen) -->
+    <!-- Mobile Projects View (Full Screen) - Cloned from sidebar -->
     <div id="mobile-projects-view">
       <div id="mobile-projects-content" class="p-0">
-        <!-- Entire Projects section will be cloned here from sidebar -->
+        <!-- Entire Projects section will be cloned here from sidebar (including header) -->
       </div>
     </div>
 
-    <!-- Mobile Messenger View (Full Screen) -->
+    <!-- Mobile Users/Messenger View (Full Screen) - Cloned from sidebar -->
     <div id="mobile-messenger-view">
       <div id="mobile-messenger-content" class="p-0">
-        <!-- Entire Users section will be cloned here from sidebar -->
+        <!-- Entire Users section will be cloned here from sidebar (including header) -->
       </div>
     </div>
 
@@ -1175,23 +1442,83 @@
 
           // Edit button to toggle edit mode
           if (moreEditBtn) {
-            moreEditBtn.addEventListener('click', () => {
+            moreEditBtn.addEventListener('click', async () => {
               isEditingMore = !isEditingMore;
               const moreViewElement = document.getElementById('mobile-more-view');
+              const bottomBar = document.getElementById('mobile-bottom-bar');
+              
               if (moreViewElement) {
                 moreViewElement.classList.toggle('mobile-more-editing', isEditingMore);
                 moreEditBtn.textContent = isEditingMore ? 'Done' : 'Edit';
               }
+              
+              // Add/remove editing class to bottom bar for wiggle animation
+              if (bottomBar) {
+                if (isEditingMore) {
+                  bottomBar.classList.add('editing');
+                // Add editing class to all bottom nav items
+                const bottomNavItems = bottomBar.querySelectorAll('.bottom-nav-item');
+                bottomNavItems.forEach(item => {
+                    item.classList.add('editing');
+                  });
+                } else {
+                  // Exit edit mode - do this immediately
+                  bottomBar.classList.remove('editing');
+                  // Remove editing class from all bottom nav items
+                  const bottomNavItems = bottomBar.querySelectorAll('.bottom-nav-item');
+                  bottomNavItems.forEach(item => {
+                    item.classList.remove('editing');
+                  });
+                  
+                  // Disable drag & drop immediately
+                  if (window.lunaIntegration) {
+                    // Clear drag setup flag to disable drag & drop and allow re-setup next time
+                    bottomBar.dataset.dragSetup = 'false';
+                    // Remove all drag listeners by removing data attributes
+                    bottomNavItems.forEach(item => {
+                      item.dataset.dragListener = 'false';
+                      // Remove any dragging classes and styles
+                      item.classList.remove('dragging');
+                      item.style.opacity = '';
+                      item.style.touchAction = '';
+                      item.style.userSelect = '';
+                      item.style.webkitUserSelect = '';
+                      item.style.zIndex = '';
+                    });
+                    
+                    // Remover tres puntos inmediatamente cuando se sale del modo de edición
+                    const allThreeDots = bottomBar.querySelectorAll('.mobile-tab-menu-btn');
+                    allThreeDots.forEach(btn => btn.remove());
+                  }
+                  
+                  // Save order when exiting edit mode
+                  if (window.lunaIntegration) {
+                    await window.lunaIntegration.saveMobileBottomBarOrder();
+                  }
+                }
+              }
+              
+              // Update UI immediately
               if (window.lunaIntegration) {
                 window.lunaIntegration.renderMobileMore(isEditingMore);
+                
+                // Re-render bottom bar to add/remove three dots based on edit mode
+                // Solo llamar UNA VEZ - renderMobileBottomBar() ya maneja los listeners
+                // IMPORTANTE: Pasar isEditingMore para que se remuevan los tres puntos inmediatamente
+                window.lunaIntegration.renderMobileBottomBar(isEditingMore);
               }
             });
           }
 
-          // Close More view when clicking backdrop
+          // Close More view when clicking backdrop (but not if in editing mode)
           if (moreView) {
             moreView.addEventListener('click', (e) => {
               if (e.target === moreView) {
+                // Don't close if in editing mode - user needs access to "Done" button
+                const bottomBar = document.getElementById('mobile-bottom-bar');
+                if (bottomBar && bottomBar.classList.contains('editing')) {
+                  return; // Keep More open when in editing mode
+                }
                 hideAllMobileViews();
               }
             });
@@ -1224,6 +1551,15 @@
                 const touchY = e.changedTouches[0].clientY;
                 const deltaY = touchY - touchStartY;
                 if (deltaY > 100) {
+                  // Don't close if in editing mode - user needs access to "Done" button
+                  const bottomBar = document.getElementById('mobile-bottom-bar');
+                  if (bottomBar && bottomBar.classList.contains('editing')) {
+                    // Reset transform but don't close
+                    sheet.style.transform = '';
+                    sheet.style.transition = '';
+                    e.stopPropagation();
+                    return;
+                  }
                   hideAllMobileViews();
                 } else {
                   sheet.style.transform = '';

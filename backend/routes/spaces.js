@@ -274,17 +274,109 @@ router.get('/', async (req, res) => {
         }
       }
       
-      // Also get spaces where current user is a participant
+      // Also get spaces where current user is a participant in the chat
+      // This includes spaces owned by other users where current user is in the chat
       if (currentUser) {
-        const { data: sharedSpaces } = await supabase
+        // Find all chats where current user is a participant
+        const { data: userChats } = await supabase
+          .from('chat_participants')
+          .select('chat_id')
+          .eq('user_id', req.userId);
+        
+        if (userChats && userChats.length > 0) {
+          const chatIds = userChats.map(c => c.chat_id);
+          
+          // Find spaces linked to these chats
+          const { data: spaceChats } = await supabase
+            .from('space_chats')
+            .select('space_id, chat_id')
+            .in('chat_id', chatIds);
+          
+          if (spaceChats && spaceChats.length > 0) {
+            const spaceIds = spaceChats.map(sc => sc.space_id);
+            
+            // Get these spaces - don't filter by archived for shared spaces
+            // Shared spaces should always be visible to participants
+            const { data: sharedSpaces } = await supabase
+              .from('spaces')
+              .select('*, owner:users!spaces_user_id_fkey(id, name, email)')
+              .in('id', spaceIds)
+              .eq('category', 'user');
+            
+            if (sharedSpaces && sharedSpaces.length > 0) {
+              // Enrich with other user's info
+              for (let space of sharedSpaces) {
+                // For spaces owned by other users, the "other user" is the owner
+                if (space.user_id !== req.userId) {
+                  space.display_name = space.owner?.name || space.owner?.email || space.name;
+                  space.other_user_id = space.user_id;
+                } else if (space.name && space.name.includes('@')) {
+                  // For spaces owned by current user, find the other user by name
+                  const { data: otherUser } = await supabase
+                    .from('users')
+                    .select('id, name, email')
+                    .or(`email.eq.${space.name},name.eq.${space.name}`)
+                    .neq('id', req.userId)
+                    .single();
+                  
+                  if (otherUser) {
+                    space.display_name = otherUser.name || otherUser.email;
+                    space.other_user_id = otherUser.id;
+                  } else {
+                    space.display_name = space.name;
+                  }
+                } else {
+                  // Try to find other user from chat participants
+                  const { data: spaceChat } = await supabase
+                    .from('space_chats')
+                    .select('chat_id')
+                    .eq('space_id', space.id)
+                    .single();
+                  
+                  if (spaceChat) {
+                    const { data: participants } = await supabase
+                      .from('chat_participants')
+                      .select('user_id, users!chat_participants_user_id_fkey(id, name, email)')
+                      .eq('chat_id', spaceChat.chat_id)
+                      .neq('user_id', req.userId)
+                      .limit(1)
+                      .single();
+                    
+                    if (participants && participants.users) {
+                      space.display_name = participants.users.name || participants.users.email;
+                      space.other_user_id = participants.users.id;
+                    } else {
+                      space.display_name = space.name;
+                    }
+                  } else {
+                    space.display_name = space.name;
+                  }
+                }
+              }
+              
+              // Add shared spaces to the list, avoiding duplicates
+              const existingIds = new Set(spaces.map(s => s.id));
+              sharedSpaces.forEach(s => {
+                if (!existingIds.has(s.id)) {
+                  spaces.push(s);
+                  existingIds.add(s.id); // Update set to prevent duplicates
+                }
+              });
+            }
+          }
+        }
+        
+        // Also get spaces by name match (backward compatibility)
+        // Don't filter by archived - shared spaces should always be visible
+        const { data: sharedSpacesByName } = await supabase
           .from('spaces')
           .select('*, owner:users!spaces_user_id_fkey(id, name, email)')
           .eq('category', 'user')
           .neq('user_id', req.userId)
           .or(`name.eq.${currentUser.email},name.eq.${currentUser.name}`);
         
-        if (sharedSpaces && sharedSpaces.length > 0) {
-          const mappedShared = sharedSpaces.map(s => ({
+        if (sharedSpacesByName && sharedSpacesByName.length > 0) {
+          const mappedShared = sharedSpacesByName.map(s => ({
             ...s,
             display_name: s.owner?.name || s.owner?.email || s.name
           }));
@@ -387,6 +479,100 @@ router.post('/', async (req, res) => {
     
     if (!name || !category) {
       return res.status(400).json({ error: 'Name and category are required' });
+    }
+    
+    // For user spaces (DMs), check if a space already exists between these two users
+    if (category === 'user') {
+      try {
+        // Find the other user by name/email
+        const { data: otherUser, error: otherUserError } = await supabase
+          .from('users')
+          .select('id, email, name')
+          .or(`email.eq.${name},name.eq.${name}`)
+          .neq('id', req.userId)
+          .single();
+        
+        if (!otherUserError && otherUser) {
+          // Get current user info
+          const { data: currentUser } = await supabase
+            .from('users')
+            .select('email, name')
+            .eq('id', req.userId)
+            .single();
+          
+          if (currentUser) {
+            // Check ALL user spaces between these two users
+            // This is the most reliable method - verifies both users are chat participants
+            const { data: allUserSpaces, error: allSpacesError } = await supabase
+              .from('spaces')
+              .select('*')
+              .eq('category', 'user')
+              .eq('archived', false)
+              .or(`user_id.eq.${req.userId},user_id.eq.${otherUser.id}`);
+            
+            if (!allSpacesError && allUserSpaces && allUserSpaces.length > 0) {
+              // Check each space to see if it's a DM between these two users
+              for (const space of allUserSpaces) {
+                const { data: spaceChat } = await supabase
+                  .from('space_chats')
+                  .select('chat_id')
+                  .eq('space_id', space.id)
+                  .maybeSingle();
+                
+                if (spaceChat) {
+                  // Check if both users are participants in this chat
+                  const { data: participants } = await supabase
+                    .from('chat_participants')
+                    .select('user_id')
+                    .eq('chat_id', spaceChat.chat_id)
+                    .in('user_id', [req.userId, otherUser.id]);
+                  
+                  const participantIds = participants?.map(p => p.user_id) || [];
+                  const hasBothUsers = participantIds.includes(req.userId) && participantIds.includes(otherUser.id);
+                  
+                  if (hasBothUsers) {
+                    // Both users are participants - this is the DM we're looking for
+                    return res.json({ space: space });
+                  }
+                }
+              }
+            }
+            
+            // Fallback: Check for existing space by name match
+            const { data: existingSpace1 } = await supabase
+              .from('spaces')
+              .select('*')
+              .eq('user_id', req.userId)
+              .eq('category', 'user')
+              .eq('archived', false)
+              .or(`name.eq.${otherUser.email},name.eq.${otherUser.name}`)
+              .limit(1)
+              .maybeSingle();
+            
+            if (existingSpace1) {
+              return res.json({ space: existingSpace1 });
+            }
+            
+            // Check for existing space owned by other user
+            const { data: existingSpace2 } = await supabase
+              .from('spaces')
+              .select('*')
+              .eq('user_id', otherUser.id)
+              .eq('category', 'user')
+              .eq('archived', false)
+              .or(`name.eq.${currentUser.email},name.eq.${currentUser.name}`)
+              .limit(1)
+              .maybeSingle();
+            
+            if (existingSpace2) {
+              return res.json({ space: existingSpace2 });
+            }
+          }
+        }
+      } catch (searchError) {
+        console.error('Error during space search:', searchError);
+        // Continue to create new space if search fails
+      }
     }
     
     // Only sync with Notion for projects (category === 'project')

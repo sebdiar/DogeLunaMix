@@ -143,3 +143,16 @@ CREATE POLICY "Allow all on chat_messages" ON chat_messages FOR ALL USING (true)
 -- SELECT * FROM tabs LIMIT 5;
 -- =====================================================
 
+
+
+
+
+
+
+
+
+
+
+
+
+

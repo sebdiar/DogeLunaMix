@@ -45,3 +45,16 @@ export const generateToken = (user) => {
 
 export { JWT_SECRET };
 
+
+
+
+
+
+
+
+
+
+
+
+
+

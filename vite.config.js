@@ -167,6 +167,7 @@ export default defineConfig(({ command }) => {
       },
     },
     server: {
+      port: 5173, // Vite default port
       proxy: {
         '/api': {
           target: 'http://localhost:3001',

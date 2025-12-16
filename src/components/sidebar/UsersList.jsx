@@ -13,6 +13,14 @@ export default function UsersList({ activeSpace, onSelect }) {
     loadSpaces();
   }, []);
 
+  // Reload spaces when activeSpace changes to ensure we have the latest list
+  useEffect(() => {
+    if (activeSpace?.category === 'user') {
+      loadSpaces();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSpace?.id]);
+
   const loadSpaces = async () => {
     try {
       const { spaces } = await api.getSpaces('user');
@@ -41,8 +49,19 @@ export default function UsersList({ activeSpace, onSelect }) {
 
   const handleSelectUser = async (user) => {
     try {
+      // First, reload spaces to make sure we have the latest list
+      await loadSpaces();
+      
+      // Search for existing DM - check by name, email, display_name, or other_user_id
       const existingDM = spaces.find(
-        s => s.name === user.name || s.name === user.email || s.display_name === user.name
+        s => 
+          s.name === user.name || 
+          s.name === user.email || 
+          s.display_name === user.name ||
+          s.display_name === user.email ||
+          s.other_user_id === user.id ||
+          (s.owner && s.owner.id === user.id) ||
+          (s.user_id === user.id && s.category === 'user')
       );
       
       if (existingDM) {
@@ -51,12 +70,16 @@ export default function UsersList({ activeSpace, onSelect }) {
         return;
       }
 
+      // The backend will check for existing spaces/chats before creating
       const { space } = await api.createSpace({
         name: user.name || user.email,
         category: 'user'
       });
 
-      setSpaces([...spaces, space]);
+      // Reload spaces to update the list
+      await loadSpaces();
+      
+      // Use the space returned by backend - it's either existing or newly created
       onSelect(space);
       setShowUserPicker(false);
     } catch (err) {
@@ -160,4 +183,7 @@ export default function UsersList({ activeSpace, onSelect }) {
     </div>
   );
 }
+
+
+
 

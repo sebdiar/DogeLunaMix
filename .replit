@@ -12,21 +12,9 @@ channel = "stable-25_05"
 [agent]
 expertMode = true
 
-[[ports]]
-localPort = 2345
-externalPort = 80
-
-[[ports]]
-localPort = 3001
-externalPort = 3000
-
-[[ports]]
-localPort = 5000
-externalPort = 80
-
-[[ports]]
-localPort = 5001
-externalPort = 3001
+# Replit asignará automáticamente el puerto principal via process.env.PORT
+# Solo necesitamos configurar el puerto que Replit usará
+# El backend corre internamente en 3001 y se accede via proxy desde el frontend
 
 [workflows]
 runButton = "Project"

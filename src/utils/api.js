@@ -112,6 +112,12 @@ class Api {
     return this.request(`/api/users/search?q=${encodeURIComponent(query)}`);
   }
 
+  async deleteUser(userId) {
+    return this.request(`/api/users/${userId}`, {
+      method: 'DELETE'
+    });
+  }
+
   // Tabs (bookmarks)
   async getTabs() {
     return this.request('/api/tabs');
@@ -219,6 +225,11 @@ class Api {
       method: 'POST',
       body: JSON.stringify(config)
     });
+  }
+
+  // Supabase config for realtime
+  async getSupabaseConfig() {
+    return this.request('/api/users/supabase-config');
   }
 }
 
