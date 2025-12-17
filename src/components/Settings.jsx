@@ -5,6 +5,7 @@ import { useOptions } from '/src/utils/optionsContext';
 import SettingsContainerItem from './settings/components/ContainerItem';
 import * as settings from '/src/data/settings';
 import PanicDialog from './PanicDialog';
+import ProfileSettings from './ProfileSettings';
 
 const Type = ({ type, title }) => {
   const { options, updateOption } = useOptions();
@@ -62,6 +63,7 @@ const Setting = ({ setting }) => {
 
   return (
     <Container>
+      {setting === 'Profile' && <ProfileSettings />}
       {setting === 'Privacy' && <Type type={() => privSettings} title="Privacy" />}
       {setting === 'Customize' && <Type type={settings.customizeConfig} title="Customize" />}
       {setting === 'Browsing' && <Type type={settings.browsingConfig} title="Browsing" />}

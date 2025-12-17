@@ -1,5 +1,15 @@
 // Luna Integration - Integrate backend tabs with TabManager
-const API_URL = '';
+// Determine API URL based on environment
+const getApiUrl = () => {
+  // In development, if we're in an iframe (like Notion), use the backend URL directly
+  if (window.location.hostname === 'localhost' && window.self !== window.top) {
+    return 'http://localhost:3001';
+  }
+  // Otherwise use relative URLs (proxy will handle it)
+  return '';
+};
+
+const API_URL = getApiUrl();
 
 class LunaIntegration {
   constructor() {
@@ -298,6 +308,9 @@ class LunaIntegration {
     this.renderUserInfo(); // Render user info
     await this.loadPersonalTabs();
     await this.loadProjects();
+    
+    // Initialize project settings
+    this.initProjectSettings();
     await this.loadUsers();
 
     // Load preferences from backend first (this will cache them)
@@ -3449,6 +3462,7 @@ class LunaIntegration {
     const topbarSpaceName = document.getElementById('topbar-space-name');
     const topbarSpaceAvatar = document.getElementById('topbar-space-avatar');
     const topbarTabsCont = document.getElementById('topbar-tabs-cont');
+    const topbarSettingsBtn = document.getElementById('topbar-settings-btn');
     
     if (!topbarSpace || !topbarSpaceName || !topbarSpaceAvatar || !topbarTabsCont) return;
 
@@ -3456,12 +3470,28 @@ class LunaIntegration {
       // Hide TopBar when no space is active
       topbarSpace.classList.add('hidden');
       topbarSpace.style.display = 'none';
+      if (topbarSettingsBtn) {
+        topbarSettingsBtn.style.display = 'none';
+      }
       return;
     }
 
     // Show TopBar
     topbarSpace.classList.remove('hidden');
     topbarSpace.style.display = 'flex'; // Ensure it's displayed
+    
+    // Show/hide settings button based on space category (only for projects)
+    if (topbarSettingsBtn) {
+      if (this.activeSpace.category === 'project') {
+        topbarSettingsBtn.style.display = 'flex';
+        // Initialize icon if not already done
+        if (window.lucide && window.lucide.createIcons) {
+          window.lucide.createIcons();
+        }
+      } else {
+        topbarSettingsBtn.style.display = 'none';
+      }
+    }
     
     // Set space name
     topbarSpaceName.textContent = this.activeSpace.display_name || this.activeSpace.name;
@@ -4998,11 +5028,15 @@ class LunaIntegration {
           const name = user.name || user.email || 'Unknown';
           const email = user.email || '';
           const initials = name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2) || name[0]?.toUpperCase() || 'U';
+          const isCurrentUser = user.id === this.user?.id;
+          const avatarHtml = user.avatar_photo 
+            ? `<img src="${this.escapeHTML(user.avatar_photo)}" alt="${this.escapeHTML(name)}" style="width: 100%; height: 100%; object-fit: cover; border-radius: 50%;" />`
+            : `<div style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 500; color: #5f6368;">${initials}</div>`;
 
           userEl.innerHTML = `
-            <div class="user-picker-avatar">${initials}</div>
+            <div class="user-picker-avatar" style="overflow: hidden; border-radius: 50%;">${avatarHtml}</div>
             <div class="user-picker-info">
-              <div class="user-picker-name">${this.escapeHTML(name)}</div>
+              <div class="user-picker-name">${this.escapeHTML(name)}${isCurrentUser ? ' <span style="color: #5f6368;">(you)</span>' : ''}</div>
               <div class="user-picker-email">${this.escapeHTML(email)}</div>
             </div>
           `;
@@ -6166,6 +6200,409 @@ class LunaIntegration {
     } catch (err) {
       console.error('Failed to send message:', err);
       alert('Failed to send message: ' + (err.message || 'Unknown error'));
+    }
+  }
+
+  initProjectSettings() {
+    // Initialize project settings sidebar
+    const settingsBtn = document.getElementById('topbar-settings-btn');
+    const settingsSidebar = document.getElementById('project-settings-sidebar');
+    const closeBtn = document.getElementById('project-settings-close');
+    const addMemberBtn = document.getElementById('add-member-btn');
+    const removeMemberBtn = document.getElementById('remove-member-btn');
+    const deleteProjectBtn = document.getElementById('delete-project-btn');
+    const addMembersClose = document.getElementById('add-members-close');
+    const addMembersCancel = document.getElementById('add-members-cancel');
+    const addMembersSubmit = document.getElementById('add-members-submit');
+    const deleteProjectCancel = document.getElementById('delete-project-cancel');
+    const deleteProjectConfirm = document.getElementById('delete-project-confirm');
+
+    if (!settingsBtn || !settingsSidebar) return;
+
+    // Open sidebar
+    settingsBtn.addEventListener('click', () => {
+      if (this.activeSpace && this.activeSpace.category === 'project') {
+        this.openProjectSettings();
+      }
+    });
+
+    // Close sidebar
+    if (closeBtn) {
+      closeBtn.addEventListener('click', () => {
+        this.closeProjectSettings();
+      });
+    }
+
+    // Add member button
+    if (addMemberBtn) {
+      addMemberBtn.addEventListener('click', () => {
+        this.openAddMembersModal();
+      });
+    }
+
+    // Remove member button
+    if (removeMemberBtn) {
+      removeMemberBtn.addEventListener('click', () => {
+        this.removeSelectedMembers();
+      });
+    }
+
+    // Delete project button
+    if (deleteProjectBtn) {
+      deleteProjectBtn.addEventListener('click', () => {
+        this.openDeleteProjectModal();
+      });
+    }
+
+    // Add members modal
+    if (addMembersClose) {
+      addMembersClose.addEventListener('click', () => {
+        this.closeAddMembersModal();
+      });
+    }
+    if (addMembersCancel) {
+      addMembersCancel.addEventListener('click', () => {
+        this.closeAddMembersModal();
+      });
+    }
+    if (addMembersSubmit) {
+      addMembersSubmit.addEventListener('click', () => {
+        this.addSelectedMembers();
+      });
+    }
+
+    // Delete project modal
+    if (deleteProjectCancel) {
+      deleteProjectCancel.addEventListener('click', () => {
+        this.closeDeleteProjectModal();
+      });
+    }
+    if (deleteProjectConfirm) {
+      deleteProjectConfirm.addEventListener('click', () => {
+        this.confirmDeleteProject();
+      });
+    }
+
+    // Close sidebar when clicking outside (on the sidebar itself, not overlay)
+    if (settingsSidebar) {
+      settingsSidebar.addEventListener('click', (e) => {
+        if (e.target === settingsSidebar) {
+          this.closeProjectSettings();
+        }
+      });
+    }
+
+    // Initialize icons
+    if (window.lucide && window.lucide.createIcons) {
+      window.lucide.createIcons();
+    }
+  }
+
+  async openProjectSettings() {
+    if (!this.activeSpace || this.activeSpace.category !== 'project') return;
+
+    const sidebar = document.getElementById('project-settings-sidebar');
+    if (!sidebar) return;
+
+    sidebar.classList.remove('hidden');
+    
+    // Calculate top position based on TopBar height - align exactly with topbar bottom
+    const topbar = document.getElementById('topbar-space');
+    if (topbar && !topbar.classList.contains('hidden')) {
+      const topbarRect = topbar.getBoundingClientRect();
+      sidebar.style.top = `${topbarRect.bottom}px`;
+      sidebar.style.height = `calc(100vh - ${topbarRect.bottom}px)`;
+    } else {
+      sidebar.style.top = '0';
+      sidebar.style.height = '100vh';
+    }
+
+    // Load members
+    await this.loadProjectMembers();
+  }
+
+  closeProjectSettings() {
+    const sidebar = document.getElementById('project-settings-sidebar');
+    if (sidebar) {
+      sidebar.classList.add('hidden');
+    }
+    // Clear selected members
+    this.selectedMemberIds = new Set();
+    this.updateRemoveButton();
+  }
+
+  async loadProjectMembers() {
+    if (!this.activeSpace || this.activeSpace.category !== 'project') return;
+
+    try {
+      const data = await this.request(`/api/chat/space/${this.activeSpace.id}/members`);
+      this.projectMembers = data.members || [];
+      this.selectedMemberIds = new Set();
+      
+      this.renderMembers();
+      this.updateRemoveButton();
+    } catch (error) {
+      console.error('Error loading members:', error);
+      this.projectMembers = [];
+      this.renderMembers();
+    }
+  }
+
+  renderMembers() {
+    const membersList = document.getElementById('members-list');
+    const membersCount = document.getElementById('members-count');
+    
+    if (!membersList) return;
+
+    membersList.innerHTML = '';
+
+    if (membersCount) {
+      membersCount.textContent = this.projectMembers.length;
+    }
+
+    this.projectMembers.forEach(member => {
+      const memberEl = document.createElement('div');
+      memberEl.className = 'member-avatar';
+      if (this.selectedMemberIds.has(member.id)) {
+        memberEl.classList.add('selected');
+      }
+
+      if (member.avatar_photo) {
+        memberEl.innerHTML = `<img src="${member.avatar_photo}" alt="${member.name || member.email}" />`;
+      } else {
+        const initials = (member.name || member.email || 'U')[0].toUpperCase();
+        memberEl.innerHTML = `<div class="member-avatar-initials">${initials}</div>`;
+      }
+
+      memberEl.addEventListener('click', () => {
+        this.toggleMemberSelection(member.id);
+      });
+
+      membersList.appendChild(memberEl);
+    });
+  }
+
+  toggleMemberSelection(userId) {
+    if (!this.selectedMemberIds) {
+      this.selectedMemberIds = new Set();
+    }
+    if (this.selectedMemberIds.has(userId)) {
+      this.selectedMemberIds.delete(userId);
+    } else {
+      this.selectedMemberIds.add(userId);
+    }
+    this.renderMembers();
+    this.updateRemoveButton();
+  }
+
+  updateRemoveButton() {
+    const removeBtn = document.getElementById('remove-member-btn');
+    if (removeBtn) {
+      if (this.selectedMemberIds && this.selectedMemberIds.size > 0) {
+        removeBtn.style.display = 'flex';
+      } else {
+        removeBtn.style.display = 'none';
+      }
+    }
+  }
+
+  async openAddMembersModal() {
+    const modal = document.getElementById('add-members-modal');
+    if (!modal) return;
+
+    modal.classList.remove('hidden');
+    
+    // Load available users
+    await this.loadAvailableUsers();
+  }
+
+  closeAddMembersModal() {
+    const modal = document.getElementById('add-members-modal');
+    if (modal) {
+      modal.classList.add('hidden');
+    }
+    // Clear selected users
+    this.selectedUserIds = new Set();
+    const searchInput = document.getElementById('add-members-search-input');
+    if (searchInput) {
+      searchInput.value = '';
+    }
+  }
+
+  async loadAvailableUsers() {
+    try {
+      const data = await this.request('/api/users');
+      const allUsers = data.users || [];
+      
+      // Filter out users that are already members
+      const memberIds = new Set((this.projectMembers || []).map(m => m.id));
+      this.availableUsers = allUsers.filter(u => !memberIds.has(u.id));
+      
+      this.renderAvailableUsers();
+      
+      // Setup search
+      const searchInput = document.getElementById('add-members-search-input');
+      if (searchInput) {
+        searchInput.addEventListener('input', (e) => {
+          this.filterAvailableUsers(e.target.value);
+        });
+      }
+    } catch (error) {
+      console.error('Error loading users:', error);
+      this.availableUsers = [];
+      this.renderAvailableUsers();
+    }
+  }
+
+  filterAvailableUsers(query) {
+    const filtered = this.availableUsers.filter(user => {
+      const q = query.toLowerCase();
+      return (user.name || '').toLowerCase().includes(q) || 
+             (user.email || '').toLowerCase().includes(q);
+    });
+    this.renderAvailableUsers(filtered);
+  }
+
+  renderAvailableUsers(users = null) {
+    const usersList = document.getElementById('add-members-list');
+    if (!usersList) return;
+
+    const usersToRender = users || this.availableUsers;
+    usersList.innerHTML = '';
+
+    if (usersToRender.length === 0) {
+      usersList.innerHTML = '<div style="padding: 20px; text-align: center; color: #5f6368;">No users available</div>';
+      return;
+    }
+
+    // Get current user ID
+    const currentUserId = this.user?.id;
+
+    usersToRender.forEach(user => {
+      const userEl = document.createElement('div');
+      userEl.className = 'add-member-item';
+
+      const isSelected = this.selectedUserIds && this.selectedUserIds.has(user.id);
+      const isCurrentUser = user.id === currentUserId;
+
+      userEl.innerHTML = `
+        <input type="checkbox" ${isSelected ? 'checked' : ''} data-user-id="${user.id}" />
+        <div class="add-member-avatar">
+          ${user.avatar_photo 
+            ? `<img src="${user.avatar_photo}" alt="${user.name || user.email}" />`
+            : `<div class="add-member-avatar-initials">${(user.name || user.email || 'U')[0].toUpperCase()}</div>`
+          }
+        </div>
+        <div class="add-member-info">
+          <div class="add-member-name">${user.name || user.email}${isCurrentUser ? ' <span style="color: #5f6368;">(you)</span>' : ''}</div>
+          ${user.name ? `<div class="add-member-email">${user.email}</div>` : ''}
+        </div>
+      `;
+
+      const checkbox = userEl.querySelector('input[type="checkbox"]');
+      checkbox.addEventListener('change', (e) => {
+        if (!this.selectedUserIds) this.selectedUserIds = new Set();
+        if (e.target.checked) {
+          this.selectedUserIds.add(user.id);
+        } else {
+          this.selectedUserIds.delete(user.id);
+        }
+        this.updateAddMembersSubmit();
+      });
+
+      usersList.appendChild(userEl);
+    });
+
+    this.updateAddMembersSubmit();
+  }
+
+  updateAddMembersSubmit() {
+    const submitBtn = document.getElementById('add-members-submit');
+    if (submitBtn) {
+      const hasSelection = this.selectedUserIds && this.selectedUserIds.size > 0;
+      submitBtn.disabled = !hasSelection;
+    }
+  }
+
+  async addSelectedMembers() {
+    if (!this.activeSpace || !this.selectedUserIds || this.selectedUserIds.size === 0) return;
+
+    try {
+      const userIds = Array.from(this.selectedUserIds);
+      await this.request(`/api/chat/space/${this.activeSpace.id}/members`, {
+        method: 'POST',
+        body: JSON.stringify({ userIds })
+      });
+
+      // Reload members
+      await this.loadProjectMembers();
+      this.closeAddMembersModal();
+    } catch (error) {
+      console.error('Error adding members:', error);
+      alert('Failed to add members. Please try again.');
+    }
+  }
+
+  async removeSelectedMembers() {
+    if (!this.activeSpace || !this.selectedMemberIds || this.selectedMemberIds.size === 0) return;
+
+    if (!confirm(`Remove ${this.selectedMemberIds.size} member(s) from this project?`)) {
+      return;
+    }
+
+    try {
+      const userIds = Array.from(this.selectedMemberIds);
+      await this.request(`/api/chat/space/${this.activeSpace.id}/members`, {
+        method: 'DELETE',
+        body: JSON.stringify({ userIds })
+      });
+
+      // Reload members
+      await this.loadProjectMembers();
+    } catch (error) {
+      console.error('Error removing members:', error);
+      alert('Failed to remove members. Please try again.');
+    }
+  }
+
+  openDeleteProjectModal() {
+    const modal = document.getElementById('delete-project-modal');
+    if (modal) {
+      modal.classList.remove('hidden');
+    }
+  }
+
+  closeDeleteProjectModal() {
+    const modal = document.getElementById('delete-project-modal');
+    if (modal) {
+      modal.classList.add('hidden');
+    }
+  }
+
+  async confirmDeleteProject() {
+    if (!this.activeSpace || this.activeSpace.category !== 'project') return;
+
+    try {
+      await this.request(`/api/spaces/${this.activeSpace.id}`, {
+        method: 'DELETE'
+      });
+
+      // Close modals
+      this.closeDeleteProjectModal();
+      this.closeProjectSettings();
+
+      // Reload projects and clear active space
+      this.activeSpace = null;
+      await this.loadProjects();
+      this.renderTopBar();
+
+      // Show personal tabs in sidebar
+      if (window.tabManager) {
+        await this.loadPersonalTabs();
+      }
+    } catch (error) {
+      console.error('Error deleting project:', error);
+      alert('Failed to delete project. Please try again.');
     }
   }
 }

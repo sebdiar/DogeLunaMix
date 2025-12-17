@@ -254,11 +254,12 @@ router.get('/', async (req, res) => {
       
       // For spaces created by current user, get the other user's info
       for (let space of spaces) {
-        // If name looks like an email, try to find the user
+        // Try to find the other user by name or email
+        // First check if name is an email
         if (space.name && space.name.includes('@')) {
           const { data: otherUser } = await supabase
             .from('users')
-            .select('id, name, email')
+            .select('id, name, email, avatar_photo')
             .or(`email.eq.${space.name},name.eq.${space.name}`)
             .neq('id', req.userId)
             .single();
@@ -266,8 +267,50 @@ router.get('/', async (req, res) => {
           if (otherUser) {
             space.display_name = otherUser.name || otherUser.email;
             space.other_user_id = otherUser.id;
+            space.other_user_photo = otherUser.avatar_photo;
           } else {
             space.display_name = space.name;
+          }
+        } else if (space.name) {
+          // Try to find by name (could be a name, not email)
+          const { data: otherUser } = await supabase
+            .from('users')
+            .select('id, name, email, avatar_photo')
+            .or(`name.eq.${space.name},email.eq.${space.name}`)
+            .neq('id', req.userId)
+            .maybeSingle();
+          
+          if (otherUser) {
+            space.display_name = otherUser.name || otherUser.email;
+            space.other_user_id = otherUser.id;
+            space.other_user_photo = otherUser.avatar_photo;
+          } else {
+            // If not found by name, try to get from chat participants
+            const { data: spaceChat } = await supabase
+              .from('space_chats')
+              .select('chat_id')
+              .eq('space_id', space.id)
+              .maybeSingle();
+            
+            if (spaceChat) {
+              const { data: participants } = await supabase
+                .from('chat_participants')
+                .select('user_id, users!chat_participants_user_id_fkey(id, name, email, avatar_photo)')
+                .eq('chat_id', spaceChat.chat_id)
+                .neq('user_id', req.userId)
+                .limit(1)
+                .maybeSingle();
+              
+              if (participants && participants.users) {
+                space.display_name = participants.users.name || participants.users.email;
+                space.other_user_id = participants.users.id;
+                space.other_user_photo = participants.users.avatar_photo;
+              } else {
+                space.display_name = space.name;
+              }
+            } else {
+              space.display_name = space.name;
+            }
           }
         } else {
           space.display_name = space.name;
@@ -299,7 +342,7 @@ router.get('/', async (req, res) => {
             // Shared spaces should always be visible to participants
             const { data: sharedSpaces } = await supabase
               .from('spaces')
-              .select('*, owner:users!spaces_user_id_fkey(id, name, email)')
+              .select('*, owner:users!spaces_user_id_fkey(id, name, email, avatar_photo)')
               .in('id', spaceIds)
               .eq('category', 'user');
             
@@ -310,11 +353,12 @@ router.get('/', async (req, res) => {
                 if (space.user_id !== req.userId) {
                   space.display_name = space.owner?.name || space.owner?.email || space.name;
                   space.other_user_id = space.user_id;
+                  space.other_user_photo = space.owner?.avatar_photo;
                 } else if (space.name && space.name.includes('@')) {
                   // For spaces owned by current user, find the other user by name
                   const { data: otherUser } = await supabase
                     .from('users')
-                    .select('id, name, email')
+                    .select('id, name, email, avatar_photo')
                     .or(`email.eq.${space.name},name.eq.${space.name}`)
                     .neq('id', req.userId)
                     .single();
@@ -322,6 +366,7 @@ router.get('/', async (req, res) => {
                   if (otherUser) {
                     space.display_name = otherUser.name || otherUser.email;
                     space.other_user_id = otherUser.id;
+                    space.other_user_photo = otherUser.avatar_photo;
                   } else {
                     space.display_name = space.name;
                   }
@@ -336,7 +381,7 @@ router.get('/', async (req, res) => {
                   if (spaceChat) {
                     const { data: participants } = await supabase
                       .from('chat_participants')
-                      .select('user_id, users!chat_participants_user_id_fkey(id, name, email)')
+                      .select('user_id, users!chat_participants_user_id_fkey(id, name, email, avatar_photo)')
                       .eq('chat_id', spaceChat.chat_id)
                       .neq('user_id', req.userId)
                       .limit(1)
@@ -345,6 +390,7 @@ router.get('/', async (req, res) => {
                     if (participants && participants.users) {
                       space.display_name = participants.users.name || participants.users.email;
                       space.other_user_id = participants.users.id;
+                      space.other_user_photo = participants.users.avatar_photo;
                     } else {
                       space.display_name = space.name;
                     }
@@ -370,7 +416,7 @@ router.get('/', async (req, res) => {
         // Don't filter by archived - shared spaces should always be visible
         const { data: sharedSpacesByName } = await supabase
           .from('spaces')
-          .select('*, owner:users!spaces_user_id_fkey(id, name, email)')
+          .select('*, owner:users!spaces_user_id_fkey(id, name, email, avatar_photo)')
           .eq('category', 'user')
           .neq('user_id', req.userId)
           .or(`name.eq.${currentUser.email},name.eq.${currentUser.name}`);
@@ -378,6 +424,7 @@ router.get('/', async (req, res) => {
         if (sharedSpacesByName && sharedSpacesByName.length > 0) {
           const mappedShared = sharedSpacesByName.map(s => ({
             ...s,
+            other_user_photo: s.owner?.avatar_photo,
             display_name: s.owner?.name || s.owner?.email || s.name
           }));
           
@@ -487,7 +534,7 @@ router.post('/', async (req, res) => {
         // Find the other user by name/email
         const { data: otherUser, error: otherUserError } = await supabase
           .from('users')
-          .select('id, email, name')
+          .select('id, email, name, avatar_photo')
           .or(`email.eq.${name},name.eq.${name}`)
           .neq('id', req.userId)
           .single();
@@ -550,6 +597,7 @@ router.post('/', async (req, res) => {
               .maybeSingle();
             
             if (existingSpace1) {
+              existingSpace1.other_user_photo = otherUser.avatar_photo;
               return res.json({ space: existingSpace1 });
             }
             
@@ -565,6 +613,7 @@ router.post('/', async (req, res) => {
               .maybeSingle();
             
             if (existingSpace2) {
+              existingSpace2.other_user_photo = otherUser.avatar_photo;
               return res.json({ space: existingSpace2 });
             }
           }
@@ -646,6 +695,11 @@ router.post('/', async (req, res) => {
         user_id: req.userId,
         type: 'chat'
       });
+    
+    // For user spaces, add other_user_photo if it's a DM
+    if (space.category === 'user' && otherUser) {
+      space.other_user_photo = otherUser.avatar_photo;
+    }
     
     res.json({ space });
   } catch (error) {
@@ -841,28 +895,51 @@ router.patch('/:id/archive', async (req, res) => {
   }
 });
 
-// Delete space (permanently delete - does NOT archive)
+// Delete space (permanently delete - also deletes from Notion and all tabs)
+// Note: Currently anyone can delete (no ownership check)
 router.delete('/:id', async (req, res) => {
   try {
     const { data: existing } = await supabase
       .from('spaces')
-      .select('id')
+      .select('id, notion_page_id, category')
       .eq('id', req.params.id)
-      .eq('user_id', req.userId)
       .single();
     
     if (!existing) {
       return res.status(404).json({ error: 'Space not found' });
     }
     
-    // Note: We do NOT archive in Notion when deleting - deletion is permanent
-    // If user wants to keep in Notion, they should use archive instead
+    // Delete from Notion if it has a notion_page_id
+    if (existing.notion_page_id && existing.category === 'project') {
+      const apiKey = process.env.NOTION_API_KEY;
+      
+      if (apiKey) {
+        try {
+          // Archive the page in Notion (Notion doesn't support permanent deletion via API)
+          await archiveNotionPage(apiKey, existing.notion_page_id, true);
+        } catch (notionError) {
+          console.error('Failed to archive Notion page:', notionError);
+          // Continue with deletion even if Notion fails
+        }
+      }
+    }
     
+    // Delete all tabs associated with this space
+    const { error: tabsError } = await supabase
+      .from('tabs')
+      .delete()
+      .eq('space_id', req.params.id);
+    
+    if (tabsError) {
+      console.error('Error deleting tabs:', tabsError);
+      // Continue with space deletion even if tabs deletion fails
+    }
+    
+    // Delete the space
     const { error } = await supabase
       .from('spaces')
       .delete()
-      .eq('id', req.params.id)
-      .eq('user_id', req.userId);
+      .eq('id', req.params.id);
     
     if (error) {
       console.error('Error deleting space:', error);

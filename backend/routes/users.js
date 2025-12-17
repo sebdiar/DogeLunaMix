@@ -5,28 +5,47 @@ import { authenticate } from '../middleware/auth.js';
 const router = express.Router();
 router.use(authenticate);
 
-// Get all users (for creating DMs)
+// Get all users (for creating DMs) - includes current user at the end
 router.get('/', async (req, res) => {
   try {
-    const { data: users, error } = await supabase
+    // Get all other users
+    const { data: otherUsers, error: otherUsersError } = await supabase
       .from('users')
-      .select('id, email, name, created_at')
+      .select('id, email, name, avatar_photo, created_at')
       .neq('id', req.userId)
       .order('name', { ascending: true });
     
-    if (error) {
-      console.error('Error fetching users:', error);
+    if (otherUsersError) {
+      console.error('Error fetching other users:', otherUsersError);
       return res.status(500).json({ error: 'Failed to fetch users' });
     }
     
-    res.json({ users: users || [] });
+    // Get current user
+    const { data: currentUser, error: currentUserError } = await supabase
+      .from('users')
+      .select('id, email, name, avatar_photo, created_at')
+      .eq('id', req.userId)
+      .single();
+    
+    if (currentUserError) {
+      console.error('Error fetching current user:', currentUserError);
+      // Continue without current user if there's an error
+    }
+    
+    // Combine: other users first, then current user at the end
+    const users = [...(otherUsers || [])];
+    if (currentUser) {
+      users.push(currentUser);
+    }
+    
+    res.json({ users });
   } catch (error) {
     console.error('Get users error:', error);
     res.status(500).json({ error: 'Failed to get users' });
   }
 });
 
-// Search users by name or email
+// Search users by name or email - includes current user if matches
 router.get('/search', async (req, res) => {
   try {
     const { q } = req.query;
@@ -35,19 +54,34 @@ router.get('/search', async (req, res) => {
       return res.json({ users: [] });
     }
     
-    const { data: users, error } = await supabase
+    // Search other users
+    const { data: otherUsers, error: otherUsersError } = await supabase
       .from('users')
-      .select('id, email, name')
+      .select('id, email, name, avatar_photo')
       .neq('id', req.userId)
       .or(`name.ilike.%${q}%,email.ilike.%${q}%`)
       .limit(10);
     
-    if (error) {
-      console.error('Error searching users:', error);
+    if (otherUsersError) {
+      console.error('Error searching other users:', otherUsersError);
       return res.status(500).json({ error: 'Search failed' });
     }
     
-    res.json({ users: users || [] });
+    // Check if current user matches the search
+    const { data: currentUser, error: currentUserError } = await supabase
+      .from('users')
+      .select('id, email, name, avatar_photo')
+      .eq('id', req.userId)
+      .or(`name.ilike.%${q}%,email.ilike.%${q}%`)
+      .single();
+    
+    // Combine: other users first, then current user if it matches
+    const users = [...(otherUsers || [])];
+    if (currentUser && !currentUserError) {
+      users.push(currentUser);
+    }
+    
+    res.json({ users });
   } catch (error) {
     console.error('Search users error:', error);
     res.status(500).json({ error: 'Search failed' });
@@ -157,6 +191,44 @@ router.put('/preferences', async (req, res) => {
   } catch (error) {
     console.error('Update preferences error:', error);
     res.status(500).json({ error: 'Failed to update preferences' });
+  }
+});
+
+// Update current user profile
+router.put('/me', async (req, res) => {
+  try {
+    const { name, avatar_photo } = req.body;
+    
+    const updates = {};
+    if (name !== undefined) updates.name = name;
+    if (avatar_photo !== undefined) {
+      // Limit avatar_photo to reasonable size (max 1MB base64 = ~750KB image)
+      if (avatar_photo.length > 1000000) {
+        return res.status(400).json({ error: 'Image too large. Maximum size is 750KB.' });
+      }
+      updates.avatar_photo = avatar_photo;
+    }
+    
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ error: 'No fields to update' });
+    }
+    
+    const { data: updatedUser, error } = await supabase
+      .from('users')
+      .update(updates)
+      .eq('id', req.userId)
+      .select('id, email, name, avatar_photo, created_at')
+      .single();
+    
+    if (error) {
+      console.error('Error updating user profile:', error);
+      return res.status(500).json({ error: 'Failed to update profile' });
+    }
+    
+    res.json({ user: updatedUser });
+  } catch (error) {
+    console.error('Update profile error:', error);
+    res.status(500).json({ error: 'Failed to update profile' });
   }
 });
 

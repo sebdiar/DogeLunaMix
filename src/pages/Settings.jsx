@@ -2,12 +2,18 @@ import clsx from 'clsx';
 import { useState, useMemo, useCallback, useEffect } from 'react';
 import Nav from '../layouts/Nav';
 import theme from '../styles/theming.module.css';
-import { Search, HatGlasses, Palette, Globe, Wrench } from 'lucide-react';
+import { Search, HatGlasses, Palette, Globe, Wrench, User } from 'lucide-react';
 import { useOptions } from '/src/utils/optionsContext';
 import RenderSetting from '../components/Settings';
 
 let asyncConfs = [];
 const baseConfigs = [
+  {
+    name: 'Profile',
+    icon: User,
+    keywords: ['profile', 'avatar', 'photo', 'picture', 'image', 'user', 'account', 'name', 'email'],
+    key: 'profileConfig',
+  },
   {
     name: 'Privacy',
     icon: HatGlasses,
@@ -66,14 +72,17 @@ const baseConfigs = [
 const Settings = () => {
   const { options, updateOption } = useOptions();
   const [q, setQ] = useState('');
-  const [content, setContent] = useState('Privacy');
+  const [content, setContent] = useState('Profile');
 
   const [loaded, setLoaded] = useState(false);
   useEffect(() => {
     let m = true;
     import('/src/data/settings.js').then((mod) => {
       if (!m) return;
-      asyncConfs = baseConfigs.map((c) => ({ ...c, fn: mod[c.key] }));
+      // Only map configs that exist in settings.js, Profile is handled separately
+      asyncConfs = baseConfigs
+        .filter((c) => c.key !== 'profileConfig' && mod[c.key])
+        .map((c) => ({ ...c, fn: mod[c.key] }));
       setLoaded(true);
     });
     return () => {
@@ -82,8 +91,9 @@ const Settings = () => {
   }, []);
 
   const settings = useMemo(
-    () =>
-      loaded
+    () => {
+      const profileConfig = baseConfigs.find((c) => c.key === 'profileConfig');
+      const otherConfigs = loaded
         ? asyncConfs.map(({ fn, ...c }) => ({
             ...c,
             items: Object.values(fn({ options, updateOption })).map(({ name, desc }) => ({
@@ -91,7 +101,13 @@ const Settings = () => {
               desc,
             })),
           }))
-        : [],
+        : [];
+      
+      // Add Profile at the beginning if it exists
+      return profileConfig
+        ? [{ ...profileConfig, items: [] }, ...otherConfigs]
+        : otherConfigs;
+    },
     [options, updateOption, loaded],
   );
 

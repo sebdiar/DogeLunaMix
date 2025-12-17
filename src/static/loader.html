@@ -1099,6 +1099,504 @@
       .ub {
         transition: background-color 0.1s ease-in;
       }
+
+      /* Project Settings Sidebar */
+      .project-settings-sidebar {
+        position: fixed;
+        top: 0;
+        right: 0;
+        width: 320px;
+        height: 100vh;
+        background: white;
+        border-left: 1px solid #e8eaed;
+        z-index: 200;
+        transform: translateX(100%);
+        transition: transform 0.3s ease-in-out;
+        overflow-y: auto;
+      }
+
+      .project-settings-sidebar:not(.hidden) {
+        transform: translateX(0);
+      }
+
+      .project-settings-sidebar.hidden {
+        display: none;
+      }
+
+      .project-settings-content {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+      }
+
+      .project-settings-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 16px;
+        border-bottom: 1px solid #e8eaed;
+      }
+
+      .project-settings-title {
+        font-size: 18px;
+        font-weight: 600;
+        color: #202124;
+        margin: 0;
+      }
+
+      .project-settings-close-btn {
+        padding: 4px;
+        border: none;
+        background: transparent;
+        cursor: pointer;
+        color: #5f6368;
+        border-radius: 4px;
+        transition: background-color 0.2s;
+      }
+
+      .project-settings-close-btn:hover {
+        background-color: #f1f3f4;
+      }
+
+      .project-settings-section {
+        padding: 16px;
+        border-bottom: 1px solid #e8eaed;
+      }
+
+      .project-settings-danger {
+        margin-top: auto;
+        border-top: 1px solid #e8eaed;
+        border-bottom: none;
+      }
+
+      .members-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 12px;
+      }
+
+      .members-title {
+        font-size: 14px;
+        font-weight: 600;
+        color: #202124;
+        margin: 0;
+      }
+
+      .members-count {
+        font-size: 12px;
+        color: #5f6368;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+
+      .members-search {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+        background: #f8f9fa;
+        border-radius: 8px;
+        margin-bottom: 12px;
+      }
+
+      .members-search-input {
+        flex: 1;
+        border: none;
+        background: transparent;
+        outline: none;
+        font-size: 14px;
+        color: #202124;
+      }
+
+      .members-search-input::placeholder {
+        color: #9aa0a6;
+      }
+
+      .members-list {
+        display: flex;
+        gap: 8px;
+        overflow-x: auto;
+        padding-bottom: 8px;
+        margin-bottom: 12px;
+        scrollbar-width: thin;
+      }
+
+      .members-list::-webkit-scrollbar {
+        height: 6px;
+      }
+
+      .members-list::-webkit-scrollbar-thumb {
+        background: #dadce0;
+        border-radius: 3px;
+      }
+
+      .member-avatar {
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        flex-shrink: 0;
+        overflow: hidden;
+        position: relative;
+        cursor: pointer;
+        border: 2px solid transparent;
+        transition: border-color 0.2s;
+      }
+
+      .member-avatar.selected {
+        border-color: #1a73e8;
+      }
+
+      .member-avatar img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+
+      .member-avatar-initials {
+        width: 100%;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        font-size: 14px;
+        font-weight: 500;
+      }
+
+      .members-actions {
+        display: flex;
+        gap: 8px;
+      }
+
+      .member-action-btn {
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        border: 1px solid #dadce0;
+        background: white;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        transition: all 0.2s;
+        flex-shrink: 0;
+      }
+
+      .member-add-btn:hover {
+        background: #f1f3f4;
+        border-color: #1a73e8;
+        color: #1a73e8;
+      }
+
+      .member-remove-btn:hover {
+        background: #fce8e6;
+        border-color: #ea4335;
+        color: #ea4335;
+      }
+
+      .delete-project-btn {
+        width: 100%;
+        padding: 12px;
+        background: #ea4335;
+        color: white;
+        border: none;
+        border-radius: 8px;
+        font-size: 14px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: background-color 0.2s;
+      }
+
+      .delete-project-btn:hover {
+        background: #d33b2c;
+      }
+
+      /* Add Members Modal */
+      .add-members-modal {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 300;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0, 0, 0, 0.5);
+      }
+
+      .add-members-modal.hidden {
+        display: none;
+      }
+
+      .add-members-modal-content {
+        background: white;
+        border-radius: 12px;
+        width: 90%;
+        max-width: 500px;
+        max-height: 80vh;
+        display: flex;
+        flex-direction: column;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+      }
+
+      .add-members-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 20px;
+        border-bottom: 1px solid #e8eaed;
+      }
+
+      .add-members-title {
+        font-size: 18px;
+        font-weight: 600;
+        color: #202124;
+        margin: 0;
+      }
+
+      .add-members-close-btn {
+        padding: 4px;
+        border: none;
+        background: transparent;
+        cursor: pointer;
+        color: #5f6368;
+        border-radius: 4px;
+        transition: background-color 0.2s;
+      }
+
+      .add-members-close-btn:hover {
+        background-color: #f1f3f4;
+      }
+
+      .add-members-search {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 12px 20px;
+        border-bottom: 1px solid #e8eaed;
+      }
+
+      .add-members-search-input {
+        flex: 1;
+        border: none;
+        background: transparent;
+        outline: none;
+        font-size: 14px;
+        color: #202124;
+      }
+
+      .add-members-search-input::placeholder {
+        color: #9aa0a6;
+      }
+
+      .add-members-list {
+        flex: 1;
+        overflow-y: auto;
+        padding: 8px 0;
+        max-height: 400px;
+      }
+
+      .add-member-item {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 20px;
+        cursor: pointer;
+        transition: background-color 0.2s;
+      }
+
+      .add-member-item:hover {
+        background-color: #f8f9fa;
+      }
+
+      .add-member-item input[type="checkbox"] {
+        width: 18px;
+        height: 18px;
+        cursor: pointer;
+      }
+
+      .add-member-avatar {
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        overflow: hidden;
+        flex-shrink: 0;
+      }
+
+      .add-member-avatar img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+
+      .add-member-avatar-initials {
+        width: 100%;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        font-size: 14px;
+        font-weight: 500;
+      }
+
+      .add-member-info {
+        flex: 1;
+        min-width: 0;
+      }
+
+      .add-member-name {
+        font-size: 14px;
+        font-weight: 500;
+        color: #202124;
+        margin: 0 0 2px 0;
+      }
+
+      .add-member-email {
+        font-size: 12px;
+        color: #5f6368;
+        margin: 0;
+      }
+
+      .add-members-footer {
+        display: flex;
+        gap: 12px;
+        padding: 16px 20px;
+        border-top: 1px solid #e8eaed;
+        justify-content: flex-end;
+      }
+
+      .add-members-cancel-btn,
+      .add-members-submit-btn {
+        padding: 8px 16px;
+        border-radius: 6px;
+        font-size: 14px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s;
+        border: none;
+      }
+
+      .add-members-cancel-btn {
+        background: transparent;
+        color: #5f6368;
+      }
+
+      .add-members-cancel-btn:hover {
+        background: #f1f3f4;
+      }
+
+      .add-members-submit-btn {
+        background: #1a73e8;
+        color: white;
+      }
+
+      .add-members-submit-btn:hover {
+        background: #1557b0;
+      }
+
+      .add-members-submit-btn:disabled {
+        background: #dadce0;
+        color: #9aa0a6;
+        cursor: not-allowed;
+      }
+
+      /* Delete Project Confirmation Modal */
+      .delete-project-modal {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 300;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0, 0, 0, 0.5);
+      }
+
+      .delete-project-modal.hidden {
+        display: none;
+      }
+
+      .delete-project-modal-content {
+        background: white;
+        border-radius: 12px;
+        width: 90%;
+        max-width: 400px;
+        padding: 24px;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+      }
+
+      .delete-project-modal-title {
+        font-size: 20px;
+        font-weight: 600;
+        color: #202124;
+        margin: 0 0 12px 0;
+      }
+
+      .delete-project-modal-text {
+        font-size: 14px;
+        color: #5f6368;
+        margin: 0 0 24px 0;
+        line-height: 1.5;
+      }
+
+      .delete-project-modal-actions {
+        display: flex;
+        gap: 12px;
+        justify-content: flex-end;
+      }
+
+      .delete-project-cancel-btn,
+      .delete-project-confirm-btn {
+        padding: 10px 20px;
+        border-radius: 6px;
+        font-size: 14px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s;
+        border: none;
+      }
+
+      .delete-project-cancel-btn {
+        background: transparent;
+        color: #5f6368;
+      }
+
+      .delete-project-cancel-btn:hover {
+        background: #f1f3f4;
+      }
+
+      .delete-project-confirm-btn {
+        background: #ea4335;
+        color: white;
+      }
+
+      .delete-project-confirm-btn:hover {
+        background: #d33b2c;
+      }
+
+      /* Adjust sidebar position based on TopBar */
+      #topbar-space:not(.hidden) ~ * .project-settings-sidebar {
+        top: auto;
+      }
+
+      /* Calculate top position dynamically - sidebar starts below TopBar */
+      .project-settings-sidebar {
+        top: 0;
+      }
+
+      /* When TopBar is visible, adjust sidebar top */
+      body:has(#topbar-space:not(.hidden)) .project-settings-sidebar {
+        top: var(--topbar-height, 0px);
+        height: calc(100vh - var(--topbar-height, 0px));
+      }
     </style>
     <script src="/baremux/index.js" defer></script>
     <script src="/libcurl/index.js" defer></script>
@@ -1209,7 +1707,7 @@
         <div class="h-full flex flex-col bg-white rounded-2xl overflow-hidden">
           <!-- TopBar for active space (Projects/DMs) - estilo minimalista vertical -->
           <div id="topbar-space" class="bg-white border-b border-[#e8eaed] hidden" style="display: none;">
-            <div class="flex items-start gap-2 px-2 py-1">
+            <div class="flex items-start gap-2 px-2 py-1 relative w-full">
               <!-- Space avatar/icon - a la izquierda de todo -->
               <div id="topbar-space-avatar" class="w-7 h-7 rounded-full bg-gray-200 flex items-center justify-center text-gray-600 text-xs font-medium flex-shrink-0 overflow-hidden mt-0.5">
                 <!-- Avatar will be rendered here by luna-integration.js -->
@@ -1222,6 +1720,99 @@
                 <div id="topbar-tabs-cont" class="flex items-center gap-0.5 overflow-x-auto">
                   <!-- Tabs will be rendered here by luna-integration.js -->
                 </div>
+              </div>
+              <!-- Three dots menu button - positioned absolutely at top right -->
+              <button id="topbar-settings-btn" class="absolute top-1 right-2 p-1 hover:bg-gray-100 rounded transition-colors flex-shrink-0" title="Project Settings" style="display: none;">
+                <i data-lucide="more-vertical" class="w-4 h-4 text-gray-600"></i>
+              </button>
+            </div>
+          </div>
+          
+          <!-- Project Settings Sidebar -->
+          <div id="project-settings-sidebar" class="project-settings-sidebar hidden">
+            <div class="project-settings-content">
+              <!-- Header -->
+              <div class="project-settings-header">
+                <h2 class="project-settings-title">Project Settings</h2>
+                <button id="project-settings-close" class="project-settings-close-btn" title="Close">
+                  <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+              </div>
+              
+              <!-- Members Section -->
+              <div class="project-settings-section">
+                <div class="members-header">
+                  <h3 class="members-title">Members</h3>
+                  <span id="members-count" class="members-count">0</span>
+                </div>
+                
+                <!-- Search bar -->
+                <div class="members-search">
+                  <i data-lucide="search" class="w-4 h-4 text-gray-400"></i>
+                  <input type="text" id="members-search-input" class="members-search-input" placeholder="Search" />
+                </div>
+                
+                <!-- Members list (horizontal scroll) -->
+                <div id="members-list" class="members-list">
+                  <!-- Members will be rendered here by luna-integration.js -->
+                </div>
+                
+                <!-- Add/Remove buttons -->
+                <div class="members-actions">
+                  <button id="add-member-btn" class="member-action-btn member-add-btn" title="Add Member">
+                    <i data-lucide="plus" class="w-4 h-4"></i>
+                  </button>
+                  <button id="remove-member-btn" class="member-action-btn member-remove-btn" title="Remove Selected Members" style="display: none;">
+                    <i data-lucide="minus" class="w-4 h-4"></i>
+                  </button>
+                </div>
+              </div>
+              
+              <!-- Delete Project Section -->
+              <div class="project-settings-section project-settings-danger">
+                <button id="delete-project-btn" class="delete-project-btn">
+                  Delete Project
+                </button>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Add Members Modal -->
+          <div id="add-members-modal" class="add-members-modal hidden">
+            <div class="add-members-modal-content">
+              <div class="add-members-header">
+                <h3 class="add-members-title">Add Members</h3>
+                <button id="add-members-close" class="add-members-close-btn" title="Close">
+                  <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+              </div>
+              
+              <div class="add-members-search">
+                <i data-lucide="search" class="w-4 h-4 text-gray-400"></i>
+                <input type="text" id="add-members-search-input" class="add-members-search-input" placeholder="Search users..." />
+              </div>
+              
+              <div id="add-members-list" class="add-members-list">
+                <!-- Users will be rendered here by luna-integration.js -->
+              </div>
+              
+              <div class="add-members-footer">
+                <button id="add-members-cancel" class="add-members-cancel-btn">Cancel</button>
+                <button id="add-members-submit" class="add-members-submit-btn">Add Selected</button>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Delete Confirmation Modal -->
+          <div id="delete-project-modal" class="delete-project-modal hidden">
+            <div class="delete-project-modal-content">
+              <h3 class="delete-project-modal-title">Delete Project</h3>
+              <p class="delete-project-modal-text">
+                Are you sure you want to delete this project? This will permanently delete the project from Notion and remove all tabs. This action cannot be undone.
+              </p>
+              <div class="delete-project-modal-actions">
+                <button id="delete-project-cancel" class="delete-project-cancel-btn">Cancel</button>
+                <button id="delete-project-confirm" class="delete-project-confirm-btn">Delete Project</button>
               </div>
             </div>
           </div>

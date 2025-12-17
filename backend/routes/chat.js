@@ -96,6 +96,82 @@ async function getOrCreateChatForSpace(spaceId, userId) {
   return chat.id;
 }
 
+// Get project members (participants in the chat for a space)
+// IMPORTANT: This route must come BEFORE /space/:spaceId to avoid route conflicts
+router.get('/space/:spaceId/members', async (req, res) => {
+  try {
+    const { spaceId } = req.params;
+    
+    // Get the space to verify it exists and get the owner
+    const { data: space, error: spaceError } = await supabase
+      .from('spaces')
+      .select('id, category, user_id')
+      .eq('id', spaceId)
+      .single();
+    
+    if (spaceError || !space) {
+      return res.status(404).json({ error: 'Space not found' });
+    }
+    
+    const members = [];
+    const existingIds = new Set();
+    
+    // Always include the space owner as a member
+    if (space.user_id) {
+      const { data: owner, error: ownerError } = await supabase
+        .from('users')
+        .select('id, name, email, avatar_photo')
+        .eq('id', space.user_id)
+        .maybeSingle();
+      
+      if (!ownerError && owner) {
+        members.push({
+          id: owner.id,
+          name: owner.name,
+          email: owner.email,
+          avatar_photo: owner.avatar_photo || null
+        });
+        existingIds.add(owner.id);
+      }
+    }
+    
+    // Get chat for this space
+    const { data: spaceChat, error: spaceChatError } = await supabase
+      .from('space_chats')
+      .select('chat_id')
+      .eq('space_id', spaceId)
+      .maybeSingle();
+    
+    if (!spaceChatError && spaceChat) {
+      // Get all participants in the chat
+      const { data: participants, error: participantsError } = await supabase
+        .from('chat_participants')
+        .select('user_id, users!chat_participants_user_id_fkey(id, name, email, avatar_photo)')
+        .eq('chat_id', spaceChat.chat_id);
+      
+      if (!participantsError && participants) {
+        // Add participants, avoiding duplicates (owner might already be a participant)
+        participants.forEach(p => {
+          if (p.users && !existingIds.has(p.users.id)) {
+            members.push({
+              id: p.users.id,
+              name: p.users.name,
+              email: p.users.email,
+              avatar_photo: p.users.avatar_photo || null
+            });
+            existingIds.add(p.users.id);
+          }
+        });
+      }
+    }
+    
+    res.json({ members });
+  } catch (error) {
+    console.error('Get members error:', error);
+    res.status(500).json({ error: 'Failed to get members' });
+  }
+});
+
 // Get chat for a space
 router.get('/space/:spaceId', async (req, res) => {
   try {
@@ -291,6 +367,96 @@ router.post('/:chatId/messages', async (req, res) => {
   } catch (error) {
     console.error('Send message error:', error);
     res.status(500).json({ error: 'Failed to send message' });
+  }
+});
+
+// Add members to project (add participants to chat)
+router.post('/space/:spaceId/members', async (req, res) => {
+  try {
+    const { spaceId } = req.params;
+    const { userIds } = req.body;
+    
+    if (!Array.isArray(userIds) || userIds.length === 0) {
+      return res.status(400).json({ error: 'userIds array is required' });
+    }
+    
+    // Get or create chat for this space
+    const chatId = await getOrCreateChatForSpace(spaceId, req.userId);
+    
+    if (!chatId) {
+      return res.status(500).json({ error: 'Failed to get chat' });
+    }
+    
+    // Add each user as a participant (ignore if already exists)
+    const results = [];
+    for (const userId of userIds) {
+      // Check if already a participant
+      const { data: existing } = await supabase
+        .from('chat_participants')
+        .select('id')
+        .eq('chat_id', chatId)
+        .eq('user_id', userId)
+        .single();
+      
+      if (!existing) {
+        const { error } = await supabase
+          .from('chat_participants')
+          .insert({ chat_id: chatId, user_id: userId });
+        
+        if (!error) {
+          results.push(userId);
+        }
+      }
+    }
+    
+    res.json({ success: true, added: results });
+  } catch (error) {
+    console.error('Add members error:', error);
+    res.status(500).json({ error: 'Failed to add members' });
+  }
+});
+
+// Remove members from project (remove participants from chat)
+router.delete('/space/:spaceId/members', async (req, res) => {
+  try {
+    const { spaceId } = req.params;
+    const { userIds } = req.body;
+    
+    if (!Array.isArray(userIds) || userIds.length === 0) {
+      return res.status(400).json({ error: 'userIds array is required' });
+    }
+    
+    // Get chat for this space
+    const { data: spaceChat } = await supabase
+      .from('space_chats')
+      .select('chat_id')
+      .eq('space_id', spaceId)
+      .single();
+    
+    if (!spaceChat) {
+      return res.status(404).json({ error: 'Chat not found for this space' });
+    }
+    
+    // Remove participants (don't remove the current user if they're in the list)
+    const userIdsToRemove = userIds.filter(id => id !== req.userId);
+    
+    if (userIdsToRemove.length > 0) {
+      const { error } = await supabase
+        .from('chat_participants')
+        .delete()
+        .eq('chat_id', spaceChat.chat_id)
+        .in('user_id', userIdsToRemove);
+      
+      if (error) {
+        console.error('Error removing members:', error);
+        return res.status(500).json({ error: 'Failed to remove members' });
+      }
+    }
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Remove members error:', error);
+    res.status(500).json({ error: 'Failed to remove members' });
   }
 });
 

@@ -37,7 +37,7 @@ router.post('/register', async (req, res) => {
         password_hash: passwordHash,
         name: name || email.split('@')[0]
       })
-      .select('id, email, name')
+      .select('id, email, name, avatar_photo')
       .single();
     
     if (error) {
@@ -129,7 +129,7 @@ router.post('/login', async (req, res) => {
     // Find user
     const { data: user, error } = await supabase
       .from('users')
-      .select('id, email, name, password_hash')
+      .select('id, email, name, avatar_photo, password_hash')
       .eq('email', email)
       .single();
     
@@ -166,7 +166,7 @@ router.get('/me', authenticate, async (req, res) => {
   try {
     const { data: user, error } = await supabase
       .from('users')
-      .select('id, email, name, created_at')
+      .select('id, email, name, avatar_photo, created_at')
       .eq('id', req.userId)
       .single();
     

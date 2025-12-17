@@ -252,7 +252,8 @@ async function archiveNotionPage(apiKey, pageId, archived = true) {
   }
 
   try {
-    // Update the "Archive" property (checkbox) in the page properties
+    // Archive/unarchive the page using the archived field directly
+    // Note: Notion API only supports archiving, not permanent deletion
     const response = await fetch(`https://api.notion.com/v1/pages/${pageId}`, {
       method: 'PATCH',
       headers: {
@@ -261,11 +262,7 @@ async function archiveNotionPage(apiKey, pageId, archived = true) {
         'Notion-Version': NOTION_API_VERSION
       },
       body: JSON.stringify({
-        properties: {
-          'Archive': {
-            checkbox: Boolean(archived)
-          }
-        }
+        archived: Boolean(archived)
       }),
     });
 

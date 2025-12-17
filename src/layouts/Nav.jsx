@@ -1,4 +1,4 @@
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import NavItem from '../components/NavItem';
 import { Cog } from 'lucide-react';
 import { useOptions } from '/src/utils/optionsContext';
@@ -18,6 +18,7 @@ const navItems = [
 
 const Nav = memo(() => {
   const navigate = useNavigate();
+  const location = useLocation();
   const { options } = useOptions();
 
   const scale = Number(options.navScale || 1);
@@ -44,6 +45,9 @@ const Nav = memo(() => {
     [navigate],
   );
 
+  // Check if we're on the settings page
+  const isSettingsPage = location.pathname === '/settings';
+
   return (
     <div
       className={clsx(
@@ -54,18 +58,22 @@ const Nav = memo(() => {
       )}
       style={{ height: `${dimensions.navHeight}px` }}
     >
-      <Logo width={dimensions.logoWidth} height={dimensions.logoHeight} action={handleLogoClick} />
-      <div
-        className="border rounded-full text-center"
-        style={{
-          fontSize: `${dimensions.versionFont}px`,
-          marginLeft: `${dimensions.versionMargin}px`,
-          paddingLeft: '0.3rem',
-          paddingRight: '0.3rem',
-        }}
-      >
-        v{version}
-      </div>
+      {!isSettingsPage && (
+        <>
+          <Logo width={dimensions.logoWidth} height={dimensions.logoHeight} action={handleLogoClick} />
+          <div
+            className="border rounded-full text-center"
+            style={{
+              fontSize: `${dimensions.versionFont}px`,
+              marginLeft: `${dimensions.versionMargin}px`,
+              paddingLeft: '0.3rem',
+              paddingRight: '0.3rem',
+            }}
+          >
+            v{version}
+          </div>
+        </>
+      )}
       <div className="flex items-center gap-5 ml-auto" style={{ height: 'calc(100% - 0.5rem)' }}>
         <NavItem items={items} />
       </div>

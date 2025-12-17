@@ -103,6 +103,13 @@ class Api {
     return this.request('/api/auth/me');
   }
 
+  async updateProfile(data) {
+    return this.request('/api/users/me', {
+      method: 'PUT',
+      body: JSON.stringify(data)
+    });
+  }
+
   // Users
   async getUsers() {
     return this.request('/api/users');
@@ -230,6 +237,25 @@ class Api {
   // Supabase config for realtime
   async getSupabaseConfig() {
     return this.request('/api/users/supabase-config');
+  }
+
+  // Project Members
+  async getProjectMembers(spaceId) {
+    return this.request(`/api/chat/space/${spaceId}/members`);
+  }
+
+  async addProjectMembers(spaceId, userIds) {
+    return this.request(`/api/chat/space/${spaceId}/members`, {
+      method: 'POST',
+      body: JSON.stringify({ userIds })
+    });
+  }
+
+  async removeProjectMembers(spaceId, userIds) {
+    return this.request(`/api/chat/space/${spaceId}/members`, {
+      method: 'DELETE',
+      body: JSON.stringify({ userIds })
+    });
   }
 }
 

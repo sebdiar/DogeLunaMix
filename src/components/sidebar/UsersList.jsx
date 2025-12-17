@@ -87,6 +87,18 @@ export default function UsersList({ activeSpace, onSelect }) {
     }
   };
 
+  const currentUser = api.getUser();
+  const currentUserId = currentUser?.id;
+
+  const getDisplayName = (space) => {
+    const name = space.display_name || space.name;
+    // Check if this is a self-reference (user's own space)
+    if (space.user_id === currentUserId && space.category === 'user') {
+      return `${name} (you)`;
+    }
+    return name;
+  };
+
   const filteredUsers = availableUsers.filter(user => {
     if (!searchQuery) return true;
     const q = searchQuery.toLowerCase();
@@ -95,10 +107,6 @@ export default function UsersList({ activeSpace, onSelect }) {
       user.email?.toLowerCase().includes(q)
     );
   });
-
-  const getDisplayName = (space) => {
-    return space.display_name || space.name;
-  };
 
   return (
     <div className="py-1 mt-4">
@@ -149,23 +157,33 @@ export default function UsersList({ activeSpace, onSelect }) {
               ) : filteredUsers.length === 0 ? (
                 <div className="px-3 py-2 text-sm text-gray-500">No users found</div>
               ) : (
-                filteredUsers.map(user => (
-                  <button
-                    key={user.id}
-                    onClick={() => handleSelectUser(user)}
-                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors text-left"
-                  >
-                    <div className="w-6 h-6 rounded-full bg-blue-500 flex items-center justify-center text-xs font-medium text-white">
-                      {(user.name || user.email)[0].toUpperCase()}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="truncate">{user.name || user.email}</div>
-                      {user.name && (
-                        <div className="text-xs text-gray-500 truncate">{user.email}</div>
-                      )}
-                    </div>
-                  </button>
-                ))
+                filteredUsers.map(user => {
+                  const isCurrentUser = user.id === currentUserId;
+                  return (
+                    <button
+                      key={user.id}
+                      onClick={() => handleSelectUser(user)}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors text-left"
+                    >
+                      <div className="w-6 h-6 rounded-full bg-blue-500 flex items-center justify-center text-xs font-medium text-white overflow-hidden flex-shrink-0">
+                        {user.avatar_photo ? (
+                          <img src={user.avatar_photo} alt="" className="w-full h-full object-cover" />
+                        ) : (
+                          <span>{(user.name || user.email)[0].toUpperCase()}</span>
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="truncate">
+                          {user.name || user.email}
+                          {isCurrentUser && <span className="text-gray-500 ml-1">(you)</span>}
+                        </div>
+                        {user.name && (
+                          <div className="text-xs text-gray-500 truncate">{user.email}</div>
+                        )}
+                      </div>
+                    </button>
+                  );
+                })
               )}
             </div>
             <button
