@@ -3403,9 +3403,10 @@ class LunaIntegration {
   renderTopBar() {
     const topbarSpace = document.getElementById('topbar-space');
     const topbarSpaceName = document.getElementById('topbar-space-name');
+    const topbarSpaceAvatar = document.getElementById('topbar-space-avatar');
     const topbarTabsCont = document.getElementById('topbar-tabs-cont');
     
-    if (!topbarSpace || !topbarSpaceName || !topbarTabsCont) return;
+    if (!topbarSpace || !topbarSpaceName || !topbarSpaceAvatar || !topbarTabsCont) return;
 
     if (!this.activeSpace) {
       // Hide TopBar when no space is active
@@ -3417,7 +3418,27 @@ class LunaIntegration {
     // Show TopBar
     topbarSpace.classList.remove('hidden');
     topbarSpace.style.display = 'flex'; // Ensure it's displayed
+    
+    // Set space name
     topbarSpaceName.textContent = this.activeSpace.display_name || this.activeSpace.name;
+    
+    // Set space avatar/photo
+    // For user spaces (DMs): use other_user_photo
+    // For project spaces: use avatar_photo
+    const avatarPhoto = this.activeSpace.category === 'user' 
+      ? this.activeSpace.other_user_photo 
+      : this.activeSpace.avatar_photo;
+    
+    if (avatarPhoto) {
+      topbarSpaceAvatar.innerHTML = `<img src="${avatarPhoto}" alt="" class="w-full h-full object-cover" />`;
+    } else if (this.activeSpace.avatar_emoji) {
+      topbarSpaceAvatar.innerHTML = `<span class="text-xs">${this.activeSpace.avatar_emoji}</span>`;
+    } else {
+      // Fallback: first letter of name
+      const displayName = this.activeSpace.display_name || this.activeSpace.name || '';
+      const firstLetter = displayName[0]?.toUpperCase() || '?';
+      topbarSpaceAvatar.innerHTML = `<span class="text-xs">${firstLetter}</span>`;
+    }
 
     // Render space tabs in TopBar
     if (!this.spaceTabs || this.spaceTabs.length === 0) {

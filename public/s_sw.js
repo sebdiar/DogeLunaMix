@@ -108,12 +108,20 @@ async function handleRequest(event) {
   // Check if it's a Notion URL
   const url = event.request.url;
   const isNotion = url.includes('notion.so') || url.includes('notion.com');
+  // IMPORTANT: NO procesar Notion si viene del Cloudflare Worker (debe usar el Worker directamente)
+  const isCloudflareWorker = url.includes('silent-queen-f1d8.sebdiar.workers.dev');
+  
+  // Si es Notion pero viene del Cloudflare Worker, NO procesar con ScramJet
+  if (isNotion && isCloudflareWorker) {
+    // Dejar que el Cloudflare Worker maneje esto directamente
+    return fetch(event.request);
+  }
   
   if (scramjet.route(event)) {
     const response = await scramjet.fetch(event);
     
-    // Intercept HTML responses for Notion
-    if (isNotion && response && response.ok) {
+    // Intercept HTML responses for Notion (solo si NO viene del Cloudflare Worker)
+    if (isNotion && !isCloudflareWorker && response && response.ok) {
       const contentType = response.headers.get('content-type') || '';
       if (contentType.includes('text/html')) {
         try {
@@ -139,8 +147,8 @@ async function handleRequest(event) {
     return response;
   }
 
-  // For non-Scramjet requests, also check for Notion
-  if (isNotion) {
+  // For non-Scramjet requests, also check for Notion (solo si NO viene del Cloudflare Worker)
+  if (isNotion && !isCloudflareWorker) {
     try {
       const response = await fetch(event.request);
       

@@ -58,8 +58,73 @@ export const TYPE = {
       iframe && (iframe.src = '/assignments/' + manager.enc(url)),
   },
 
+  notion: {
+    create: (url, manager, tab) => {
+      // Crear iframe directo al Cloudflare Worker (ya viene con la URL convertida)
+      const f = document.createElement('iframe');
+      f.id = `iframe-${tab.id}`;
+      f.className = manager.fCss;
+      f.src = url;
+      const isActive = tab.active;
+      f.style.zIndex = isActive ? '10' : '0';
+      f.style.opacity = isActive ? '1' : '0';
+      f.style.pointerEvents = isActive ? 'auto' : 'none';
+      f.style.width = '100%';
+      f.style.height = '100%';
+      f.style.border = 'none';
+      
+      if (!manager.ic) return;
+      
+      manager.ic.appendChild(f);
+      manager.frames[tab.id] = { frame: f, url: url };
+      manager.addLoadListener(tab.id);
+      
+      setTimeout(() => {
+        manager.setFrameState(tab.id, isActive);
+      }, 0);
+      
+      // Asegurar visibilidad si el tab está activo
+      f.onload = () => {
+        if (tab.active) {
+          f.style.opacity = '1';
+          f.style.zIndex = '10';
+          f.style.pointerEvents = 'auto';
+          manager.setFrameState(tab.id, true);
+        }
+      };
+    },
+    navigate: (url, manager, tab, iframe) => {
+      if (!iframe) return;
+      
+      const currentSrc = iframe.src || '';
+      if (currentSrc !== url) {
+        iframe.src = url;
+        manager.setFrameState(tab.id, true);
+      } else if (tab.active) {
+        iframe.style.zIndex = '10';
+        iframe.style.opacity = '1';
+        iframe.style.pointerEvents = 'auto';
+        manager.setFrameState(tab.id, true);
+      }
+      
+      // Limpiar referencias a ScramJet para Notion
+      if (manager.frames[tab.id]) {
+        delete manager.frames[tab.id];
+      }
+    },
+  },
+
   auto: {
     create: (url, manager, tab) => {
+      // Detectar Notion primero (tiene prioridad sobre otros filtros)
+      const isNotion = url.includes('silent-queen-f1d8.sebdiar.workers.dev') || 
+                       url.includes('notion.so') || 
+                       url.includes('notion.com');
+      
+      if (isNotion) {
+        return TYPE.notion.create(url, manager, tab);
+      }
+      
       const matched = manager.filter?.find((f) => url.toLowerCase().includes(f.url.toLowerCase()));
       return TYPE[
         matched?.type ||
@@ -71,6 +136,15 @@ export const TYPE = {
       ].create(url, manager, tab);
     },
     navigate: (url, manager, tab, iframe) => {
+      // Detectar Notion primero (tiene prioridad sobre otros filtros)
+      const isNotion = url.includes('silent-queen-f1d8.sebdiar.workers.dev') || 
+                       url.includes('notion.so') || 
+                       url.includes('notion.com');
+      
+      if (isNotion) {
+        return TYPE.notion.navigate(url, manager, tab, iframe);
+      }
+      
       const matched = manager.filter?.find((f) => url.toLowerCase().includes(f.url.toLowerCase()));
       return TYPE[
         matched?.type ||
@@ -139,13 +213,19 @@ class TabManager {
     };
 
     if (this.ui) {
-      this.ui.value = this.tabs.length > 0 && !this.isNewTab(this.tabs[0].url) ? this.tabs[0].url : '';
+      // Mostrar URL original si es Notion, sino el URL normal
+      const firstTab = this.tabs.length > 0 ? this.tabs[0] : null;
+      if (firstTab && !this.isNewTab(firstTab.url)) {
+        this.ui.value = firstTab.originalUrl || firstTab.url;
+      } else {
+        this.ui.value = '';
+      }
       this.ui.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
           e.preventDefault();
           const val = this.ui.value.trim();
           this.updateUrl(val);
-          if (val !== 'tabs://new') this.ui.value = this.formatInputUrl(val);
+          // NO actualizar ui.value aquí - updateUrl ya lo hace correctamente
           this.ui.blur();
         }
       });
@@ -155,6 +235,63 @@ class TabManager {
       this.updateAddBtn();
       this.updateWidths();
     });
+
+    // Listen for favicon updates from Notion iframes
+    window.addEventListener('message', (e) => {
+      if (e.data && e.data.type === 'notion-favicon-update') {
+        // Find the tab that matches this URL - mejor matching
+        const messageUrl = e.data.url || '';
+        const tab = this.tabs.find(t => {
+          if (!t.url) return false;
+          const tabUrl = t.url.toLowerCase();
+          
+          // Buscar por URL completa o por dominio
+          if (tabUrl.includes('silent-queen-f1d8.sebdiar.workers.dev') || 
+              tabUrl.includes('notion.so') || 
+              tabUrl.includes('notion.com')) {
+            // Si es un tab de Notion, verificar si la URL del mensaje coincide
+            // Extraer el path de ambas URLs para comparar
+            try {
+              const tabUrlObj = new URL(tabUrl);
+              const messageUrlObj = new URL(messageUrl);
+              // Comparar paths (sin query params)
+              const tabPath = tabUrlObj.pathname;
+              const messagePath = messageUrlObj.pathname;
+              
+              // Si los paths son similares o el tab está activo, actualizar
+              if (tabPath === messagePath || 
+                  messagePath.startsWith(tabPath) || 
+                  tabPath.startsWith(messagePath) ||
+                  t.active) {
+                return true;
+              }
+            } catch {
+              // Si falla el parsing, usar matching simple
+              return tabUrl.includes('notion') || messageUrl.includes(tabUrl) || tabUrl.includes(messageUrl);
+            }
+          }
+          return false;
+        });
+        
+        if (tab && e.data.favicon) {
+          // Update tab's favicon
+          tab.favicon = e.data.favicon;
+          // Re-render to show updated favicon
+          this.render();
+        }
+      }
+    });
+
+    // Suppress emoji warnings from Notion (harmless but noisy)
+    const originalWarn = console.warn;
+    console.warn = function(...args) {
+      const message = args.join(' ');
+      // Suppress "Could not find character in emojiData" warnings
+      if (message.includes('emojiData') || message.includes('Could not find character')) {
+        return; // Suppress these warnings
+      }
+      originalWarn.apply(console, args);
+    };
 
     this.render();
     this.createIframes();
@@ -197,12 +334,52 @@ class TabManager {
     return div.innerHTML;
   };
 
-  formatInputUrl = (input, search = this.search) =>
-    /^(https?:\/\/)?([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(:\d+)?(\/[^\s]*)?$/i.test(input)
+  formatInputUrl = (input, search = this.search) => {
+    // Detectar URLs de Notion y convertir al Cloudflare Worker
+    const notionPattern = /(https?:\/\/)?([a-zA-Z0-9-]+\.)?notion\.(so|com)(\/[^\s]*)?/i;
+    if (notionPattern.test(input)) {
+      let notionUrl = input;
+      if (!/^https?:\/\//.test(notionUrl)) {
+        notionUrl = 'https://' + notionUrl;
+      }
+      
+      try {
+        const url = new URL(notionUrl);
+        // Extraer solo la ruta (pathname + search + hash)
+        const path = url.pathname + url.search + url.hash;
+        // Convertir al Cloudflare Worker manteniendo la ruta
+        return `https://silent-queen-f1d8.sebdiar.workers.dev${path}`;
+      } catch (e) {
+        // Si falla el parsing, intentar extraer la ruta manualmente
+        const match = notionUrl.match(/notion\.(so|com)(\/.*)?/i);
+        if (match && match[2]) {
+          return `https://silent-queen-f1d8.sebdiar.workers.dev${match[2]}`;
+        }
+        // Fallback: usar el formato normal
+      }
+    }
+    
+    // Para otras URLs, comportamiento normal
+    return /^(https?:\/\/)?([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(:\d+)?(\/[^\s]*)?$/i.test(input)
       ? /^https?:\/\//.test(input)
         ? input
         : 'https://' + input
       : search + encodeURIComponent(input);
+  };
+
+  // Nueva función para obtener el URL original de Notion
+  getOriginalNotionUrl = (workerUrl) => {
+    if (!workerUrl || !workerUrl.includes('silent-queen-f1d8.sebdiar.workers.dev')) {
+      return null;
+    }
+    try {
+      const url = new URL(workerUrl);
+      const path = url.pathname + url.search + url.hash;
+      return `https://www.notion.so${path}`;
+    } catch {
+      return null;
+    }
+  };
 
   domain = (url) => {
     try {
@@ -222,21 +399,21 @@ class TabManager {
     const dashboardContainer = document.getElementById(`dashboard-${tabId}`);
     
     if (f) {
-      f.style.zIndex = active ? 10 : 0;
+      f.style.zIndex = active ? '10' : '0';
       f.style.opacity = active ? '1' : '0';
       f.style.pointerEvents = active ? 'auto' : 'none';
       f.classList.toggle('f-active', active);
     }
     
     if (chatContainer) {
-      chatContainer.style.zIndex = active ? 10 : 0;
+      chatContainer.style.zIndex = active ? '10' : '0';
       chatContainer.style.opacity = active ? '1' : '0';
       chatContainer.style.pointerEvents = active ? 'auto' : 'none';
       chatContainer.classList.toggle('f-active', active);
     }
     
     if (dashboardContainer) {
-      dashboardContainer.style.zIndex = active ? 10 : 0;
+      dashboardContainer.style.zIndex = active ? '10' : '0';
       dashboardContainer.style.opacity = active ? '1' : '0';
       dashboardContainer.style.pointerEvents = active ? 'auto' : 'none';
       dashboardContainer.classList.toggle('f-active', active);
@@ -252,8 +429,37 @@ class TabManager {
     if (urlBar && activeTab) {
       const isSpecial = this.isChatUrl(activeTab.url) || activeTab.url?.startsWith('doge://ai-dashboard') || activeTab.url?.startsWith('luna://ai-dashboard');
       urlBar.style.display = isSpecial ? 'none' : 'flex';
+      
+      // Actualizar indicador del Cloudflare Worker
+      this.updateNotionWorkerIndicator(activeTab);
     } else if (urlBar && !activeTab) {
       urlBar.style.display = 'flex';
+      this.updateNotionWorkerIndicator(null);
+    }
+  };
+
+  // Nueva función para actualizar el indicador del Cloudflare Worker
+  updateNotionWorkerIndicator = (tab) => {
+    const indicator = document.getElementById('notion-worker-indicator');
+    if (!indicator) return;
+    
+    if (tab && tab.url && tab.url.includes('silent-queen-f1d8.sebdiar.workers.dev')) {
+      indicator.textContent = `Proxied via: ${tab.url}`;
+      indicator.style.display = 'block';
+      // Hacer la barra de URL más ancha
+      const urlBar = document.getElementById('d-url');
+      if (urlBar) {
+        urlBar.style.minHeight = '44px'; // Altura dinámica
+        urlBar.style.transition = 'min-height 0.2s ease';
+      }
+    } else {
+      indicator.style.display = 'none';
+      // Restaurar altura normal
+      const urlBar = document.getElementById('d-url');
+      if (urlBar) {
+        urlBar.style.minHeight = '22px';
+        urlBar.style.transition = 'min-height 0.2s ease';
+      }
     }
   };
 
@@ -438,7 +644,25 @@ class TabManager {
         }
       } else {
         // Regular iframe for browser tabs
-        if (!document.getElementById(`iframe-${t.id}`)) {
+        // IMPORTANTE: NO crear iframes de Notion aquí - se crearán cuando se activen
+        // Solo crear iframes para tabs no-Notion o si el tab está activo
+        const isNotionUrl = t.url && (t.url.includes('silent-queen-f1d8.sebdiar.workers.dev') || 
+                                       t.url.includes('notion.so') || 
+                                       t.url.includes('notion.com'));
+        // Para Notion, solo crear iframe si el tab está activo
+        if (isNotionUrl && !document.getElementById(`iframe-${t.id}`)) {
+          if (t.active) {
+            // Convertir URL de Notion al Cloudflare Worker si es necesario
+            let notionUrl = t.url;
+            if (!notionUrl.includes('silent-queen-f1d8.sebdiar.workers.dev')) {
+              // Convertir URL original de Notion al Cloudflare Worker
+              notionUrl = this.formatInputUrl(notionUrl);
+            }
+            // Usar TYPE.notion para crear el iframe directamente
+            TYPE.notion.create(notionUrl, this, t);
+          }
+          // Si no está activo, no crear el iframe todavía (se creará cuando se active)
+        } else if (!document.getElementById(`iframe-${t.id}`)) {
           const f = document.createElement('iframe');
           f.id = `iframe-${t.id}`;
           f.className = this.fCss;
@@ -474,7 +698,14 @@ class TabManager {
       const handler = TYPE[this.prType] || TYPE.scr;
       const iframe = document.getElementById(`iframe-${activeTab.id}`);
       handler.navigate(decodedUrl, this, activeTab, iframe);
-      if (this.ui) this.ui.value = decodedUrl;
+      // Mostrar URL original si es Notion, sino el URL decodificado
+      if (this.ui) {
+        if (activeTab.originalUrl) {
+          this.ui.value = activeTab.originalUrl;
+        } else {
+          this.ui.value = decodedUrl;
+        }
+      }
       this.emitNewFrame();
     }
   };
@@ -494,7 +725,14 @@ class TabManager {
       const handler = TYPE[this.prType] || TYPE.scr;
       const iframe = document.getElementById(`iframe-${activeTab.id}`);
       handler.navigate(decodedUrl, this, activeTab, iframe);
-      if (this.ui) this.ui.value = decodedUrl;
+      // Mostrar URL original si es Notion, sino el URL decodificado
+      if (this.ui) {
+        if (activeTab.originalUrl) {
+          this.ui.value = activeTab.originalUrl;
+        } else {
+          this.ui.value = decodedUrl;
+        }
+      }
       this.emitNewFrame();
     }
   };
@@ -572,7 +810,35 @@ class TabManager {
       hist.position++;
     }
 
+    // Preservar originalUrl si existe antes de actualizar
+    const preservedOriginalUrl = t.originalUrl;
+    
     t.url = newUrl;
+    
+    // Si el URL es del Cloudflare Worker pero no tiene originalUrl, generarlo
+    if (t.url && t.url.includes('silent-queen-f1d8.sebdiar.workers.dev')) {
+      // Solo generar originalUrl si no existe uno preservado
+      if (!preservedOriginalUrl) {
+        t.originalUrl = this.getOriginalNotionUrl(t.url);
+      } else {
+        // Restaurar el originalUrl preservado
+        t.originalUrl = preservedOriginalUrl;
+      }
+    } else {
+      // Si el URL cambió y ya no es del Worker, limpiar originalUrl
+      t.originalUrl = null;
+    }
+    
+    // Actualizar indicador del Cloudflare Worker si el tab está activo
+    if (t.active) {
+      this.updateNotionWorkerIndicator(t);
+      // Actualizar URL en la barra si es Notion
+      if (this.ui && t.originalUrl) {
+        this.ui.value = t.originalUrl;
+      } else if (this.ui) {
+        this.ui.value = decodedUrl;
+      }
+    }
 
     // Solo actualizar título si NO tiene un título fijo
     // Lógica: Si el título actual es igual a la URL o al dominio, es dinámico
@@ -616,9 +882,19 @@ class TabManager {
     updateTitle();
 
     if (t.active && this.ui && t.url !== this.newTabUrl) {
-      this.ui.value = decodedUrl;
+      // Mostrar URL original si es Notion, sino el URL decodificado
+      if (t.originalUrl) {
+        this.ui.value = t.originalUrl;
+      } else {
+        this.ui.value = decodedUrl;
+      }
       this.showBg(false);
       this.emitNewFrame();
+    }
+    
+    // Actualizar indicador del Cloudflare Worker si el tab está activo
+    if (t.active) {
+      this.updateNotionWorkerIndicator(t);
     }
   };
 
@@ -650,6 +926,10 @@ class TabManager {
     this.tabs.splice(i, 1);
     this.stopTrack(id);
     this.history.delete(id);
+    // Cleanup frames (ScramJet y Notion)
+    if (this.frames[id]) {
+      delete this.frames[id];
+    }
     document.getElementById(`iframe-${id}`)?.remove();
     document.getElementById(`chat-${id}`)?.remove();
     document.getElementById(`dashboard-${id}`)?.remove();
@@ -663,9 +943,16 @@ class TabManager {
         if (this.isNewTab(nextTab.url) || this.isSpecialUrl(nextTab.url)) {
           this.ui.value = '';
         } else {
-          this.ui.value = this.ex(nextTab.url);
+          // Mostrar URL original si es Notion, sino el URL decodificado
+          if (nextTab.originalUrl) {
+            this.ui.value = nextTab.originalUrl;
+          } else {
+            this.ui.value = this.ex(nextTab.url);
+          }
         }
       }
+      // Actualizar indicador del Cloudflare Worker
+      this.updateNotionWorkerIndicator(this.tabs[newIdx]);
       this.emitNewFrame();
     }
     this.render();
@@ -685,11 +972,71 @@ class TabManager {
     if (this.ui) {
       // Don't show URL for special URLs (chat, AI dashboard, etc.)
       if (activeTab && !this.isNewTab(activeTab.url) && !this.isSpecialUrl(activeTab.url)) {
-        this.ui.value = this.ex(activeTab.url);
+        // Mostrar URL original si es Notion, sino el URL decodificado
+        if (activeTab.originalUrl) {
+          this.ui.value = activeTab.originalUrl;
+        } else {
+          this.ui.value = this.ex(activeTab.url);
+        }
       } else {
         this.ui.value = '';
       }
     }
+    
+    // IMPORTANTE: Convertir URLs de Notion ANTES de cualquier otra lógica
+    // Esto asegura que detectemos Notion correctamente incluso si url es "NEWTAB.COM"
+    // Verificar también el título del tab, ya que puede contener información de Notion
+    if (activeTab) {
+      // Verificar si el tab tiene originalUrl (para tabs guardados de Notion)
+      if (activeTab.originalUrl) {
+        const notionPattern = /(https?:\/\/)?([a-zA-Z0-9-]+\.)?notion\.(so|com)(\/[^\s]*)?/i;
+        if (notionPattern.test(activeTab.originalUrl)) {
+          // Si originalUrl es Notion pero url no lo es, convertir url
+          if (!activeTab.url.includes('silent-queen-f1d8.sebdiar.workers.dev') && 
+              !activeTab.url.includes('notion.so') && 
+              !activeTab.url.includes('notion.com')) {
+            activeTab.url = this.formatInputUrl(activeTab.originalUrl);
+          }
+        }
+      }
+      
+      // Verificar si es Notion usando pattern matching (más robusto)
+      if (activeTab.url) {
+        const notionPattern = /(https?:\/\/)?([a-zA-Z0-9-]+\.)?notion\.(so|com)(\/[^\s]*)?/i;
+        const isNotionPattern = notionPattern.test(activeTab.url);
+        
+        // Si es Notion pero no tiene originalUrl, guardarlo
+        if (isNotionPattern && !activeTab.originalUrl) {
+          activeTab.originalUrl = activeTab.url.startsWith('http') ? activeTab.url : 'https://' + activeTab.url;
+        }
+        
+        // Si es Notion y no está en formato Worker, convertirla
+        if (isNotionPattern && !activeTab.url.includes('silent-queen-f1d8.sebdiar.workers.dev')) {
+          activeTab.url = this.formatInputUrl(activeTab.url);
+        }
+      }
+      
+      // Si el tab ya tiene URL del Cloudflare Worker pero no tiene originalUrl, generarlo
+      if (activeTab.url && activeTab.url.includes('silent-queen-f1d8.sebdiar.workers.dev') && !activeTab.originalUrl) {
+        activeTab.originalUrl = this.getOriginalNotionUrl(activeTab.url);
+      }
+      
+      // Verificar también el título del tab (puede contener información de Notion)
+      // Si el título sugiere que es Notion pero la URL no, intentar recuperar la URL
+      if (activeTab.title && (activeTab.title.toLowerCase().includes('notion') || activeTab.title.includes('Bas'))) {
+        // Si no tenemos una URL válida de Notion, pero el título sugiere que es Notion
+        // y tenemos originalUrl, usarlo
+        if (activeTab.originalUrl && !activeTab.url.includes('silent-queen-f1d8.sebdiar.workers.dev')) {
+          const notionPattern = /(https?:\/\/)?([a-zA-Z0-9-]+\.)?notion\.(so|com)(\/[^\s]*)?/i;
+          if (notionPattern.test(activeTab.originalUrl)) {
+            activeTab.url = this.formatInputUrl(activeTab.originalUrl);
+          }
+        }
+      }
+    }
+    
+    // Actualizar indicador del Cloudflare Worker
+    this.updateNotionWorkerIndicator(activeTab);
     
     // Auto-navigate to tab's URL if not already loaded (OPTIMIZED)
     // Si es chat, inicializar inmediatamente
@@ -715,28 +1062,85 @@ class TabManager {
     } else if (activeTab && !this.isNewTab(activeTab.url) && !this.isSpecialUrl(activeTab.url)) {
       let f = document.getElementById(`iframe-${activeTab.id}`);
       
+      // IMPORTANTE: Usar originalUrl si existe (para Notion), sino usar url
+      // Esto asegura que detectemos Notion correctamente incluso si url es "NEWTAB.COM"
+      const urlToCheck = activeTab.originalUrl || activeTab.url;
+      
+      // Detectar si es Notion para usar TYPE.notion directamente
+      // Verificar tanto la URL original como la URL actual
+      const isNotionUrl = urlToCheck && (urlToCheck.includes('silent-queen-f1d8.sebdiar.workers.dev') || 
+                                         urlToCheck.includes('notion.so') || 
+                                         urlToCheck.includes('notion.com')) ||
+                          (activeTab.url && (activeTab.url.includes('silent-queen-f1d8.sebdiar.workers.dev') || 
+                                             activeTab.url.includes('notion.so') || 
+                                             activeTab.url.includes('notion.com')));
+      
       // Si el iframe no existe, crearlo primero
-      if (!f && activeTab.url) {
-        // Crear el iframe usando createIframes (que maneja chat, dashboard, etc.)
-        this.createIframes();
-        f = document.getElementById(`iframe-${activeTab.id}`);
+      if (!f && (activeTab.url || activeTab.originalUrl)) {
+        if (isNotionUrl) {
+          // Para Notion, crear el iframe directamente usando TYPE.notion
+          let notionUrl = activeTab.url || activeTab.originalUrl;
+          // Si la URL no es del Worker, convertirla
+          if (notionUrl && !notionUrl.includes('silent-queen-f1d8.sebdiar.workers.dev')) {
+            notionUrl = this.formatInputUrl(notionUrl);
+          }
+          if (notionUrl) {
+            TYPE.notion.create(notionUrl, this, activeTab);
+            f = document.getElementById(`iframe-${activeTab.id}`);
+          }
+        } else {
+          // Para otros tipos, usar createIframes
+          this.createIframes();
+          f = document.getElementById(`iframe-${activeTab.id}`);
+        }
       }
       
-      if (f && activeTab.url) {
+      if (f && (activeTab.url || activeTab.originalUrl)) {
+        
+        // Si es Notion, convertir URL al Cloudflare Worker si es necesario
+        // Usar originalUrl si existe, sino usar url
+        let urlToNavigate = activeTab.originalUrl || activeTab.url;
+        if (isNotionUrl && urlToNavigate && !urlToNavigate.includes('silent-queen-f1d8.sebdiar.workers.dev')) {
+          urlToNavigate = this.formatInputUrl(urlToNavigate);
+        }
+        
         const currentSrc = f.src || '';
-        // Quick check: only navigate if clearly empty/placeholder
-        if (!currentSrc || currentSrc === '/new' || currentSrc === 'tabs://new') {
-          const handler = TYPE[this.prType] || TYPE.auto;
-          handler.navigate(activeTab.url, this, activeTab, f);
-        } else if (!currentSrc.includes('http') && !currentSrc.includes('scramjet') && !currentSrc.includes('uv/service')) {
-          // Only do expensive check if src doesn't look like a URL
-          const handler = TYPE[this.prType] || TYPE.auto;
-          handler.navigate(activeTab.url, this, activeTab, f);
+        // IMPORTANTE: Prevenir múltiples navegaciones para Notion
+        // Solo navegar si el iframe está vacío o si la URL cambió realmente
+        const shouldNavigate = !currentSrc || 
+                              currentSrc === '/new' || 
+                              currentSrc === 'tabs://new' || 
+                              (isNotionUrl && currentSrc !== urlToNavigate && !currentSrc.includes('silent-queen-f1d8.sebdiar.workers.dev')) ||
+                              (!isNotionUrl && !currentSrc.includes('http') && !currentSrc.includes('scramjet') && !currentSrc.includes('uv/service'));
+        
+        if (shouldNavigate) {
+          // IMPORTANTE: Para Notion, SIEMPRE usar TYPE.notion (NO TYPE.auto que podría usar ScramJet)
+          const handler = isNotionUrl ? TYPE.notion : (TYPE[this.prType] || TYPE.auto);
+          handler.navigate(urlToNavigate, this, activeTab, f);
+        } else {
+          // Si no necesita navegar, asegurar que el iframe esté visible
+          if (isNotionUrl && f.style.opacity === '0') {
+            f.style.opacity = '1';
+            f.style.zIndex = '10';
+            f.style.pointerEvents = 'auto';
+            this.setFrameState(activeTab.id, true);
+          }
         }
       } else if (activeTab.url && !f) {
         // Si aún no existe el iframe después de createIframes, crear uno directamente
-        const handler = TYPE[this.prType] || TYPE.auto;
-        handler.create(activeTab.url, this, activeTab);
+        // Detectar si es Notion para usar TYPE.notion directamente
+        const isNotionUrl = activeTab.url && (activeTab.url.includes('silent-queen-f1d8.sebdiar.workers.dev') || 
+                                               activeTab.url.includes('notion.so') || 
+                                               activeTab.url.includes('notion.com'));
+        
+        // Si es Notion, convertir URL al Cloudflare Worker si es necesario
+        let urlToCreate = activeTab.url;
+        if (isNotionUrl && !activeTab.url.includes('silent-queen-f1d8.sebdiar.workers.dev')) {
+          urlToCreate = this.formatInputUrl(activeTab.url);
+        }
+        
+        const handler = isNotionUrl ? TYPE.notion : (TYPE[this.prType] || TYPE.auto);
+        handler.create(urlToCreate, this, activeTab);
       }
     }
     
@@ -754,8 +1158,11 @@ class TabManager {
   returnMeta = () => {
     const t = this.active();
     if (!t) return { name: '', url: '' };
-    // Don't return URL for special URLs (chat, AI dashboard, etc.)
-    const url = t.url && !this.isNewTab(t.url) && !this.isSpecialUrl(t.url) ? this.ex(t.url) : '';
+    // Mostrar URL original si es Notion, sino el URL decodificado
+    let url = '';
+    if (t.url && !this.isNewTab(t.url) && !this.isSpecialUrl(t.url)) {
+      url = t.originalUrl || this.ex(t.url);
+    }
     return { name: t.title || '', url };
   };
 
@@ -815,8 +1222,24 @@ class TabManager {
     }
 
     const url = this.formatInputUrl(input);
+    
+    // Guardar URL original si es Notion
+    const notionPattern = /(https?:\/\/)?([a-zA-Z0-9-]+\.)?notion\.(so|com)(\/[^\s]*)?/i;
+    if (notionPattern.test(input)) {
+      t.originalUrl = input.startsWith('http') ? input : 'https://' + input;
+    } else {
+      t.originalUrl = null;
+    }
+    
+    // Detectar si es Notion para usar TYPE.notion directamente
+    const isNotionUrl = url.includes('silent-queen-f1d8.sebdiar.workers.dev') || 
+                        url.includes('notion.so') || 
+                        url.includes('notion.com');
+    
     this.showBg(false);
-    const handler = TYPE[this.prType] || TYPE.auto;
+    // Si es Notion, usar TYPE.notion directamente (NO TYPE.auto que podría usar ScramJet)
+    const handler = isNotionUrl ? TYPE.notion : (TYPE[this.prType] || TYPE.auto);
+    
     const f = document.getElementById(`iframe-${t.id}`);
     if (this.isNewTab(t.url)) {
       document.getElementById(`iframe-${t.id}`)?.remove();
@@ -834,6 +1257,17 @@ class TabManager {
     } catch {
       t.title = input;
     }
+    
+    // Mostrar URL original en la barra si es Notion
+    if (this.ui && t.originalUrl) {
+      this.ui.value = t.originalUrl;
+    } else if (this.ui) {
+      this.ui.value = this.ex(url);
+    }
+    
+    // Actualizar indicador del Cloudflare Worker
+    this.updateNotionWorkerIndicator(t);
+    
     this.showActive();
     this.render();
     if (t.active) this.emitNewFrame();
@@ -858,85 +1292,109 @@ class TabManager {
 
   // UNIFIED TAB TEMPLATE - usado en sidebar Y TopBar
   tabTemplate = (t, showMenu = true, isTopBar = false) => {
-      // Get icon - prioritize custom avatar over favicon
-      let iconHtml = '';
-      let hasCustomIcon = false;
-      const isChat = this.isChatUrl(t.url);
-      const isDashboard = t.url?.startsWith('luna://ai-dashboard') || t.url?.startsWith('doge://ai-dashboard');
-      
-      // Check for custom avatar first (from backend)
-      if (t.avatar_photo) {
-        iconHtml = `<img src="${t.avatar_photo}" alt="" class="w-full h-full rounded-full object-cover" />`;
-        hasCustomIcon = true;
-      } else if (t.avatar_emoji) {
-        iconHtml = `<span class="text-sm">${t.avatar_emoji}</span>`;
-        hasCustomIcon = true;
-      }
-      
-      // If no custom avatar, try favicon for regular URLs
-      if (!hasCustomIcon && !isChat && !isDashboard) {
-        try {
-          const url = t.url;
-          if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
-            const urlObj = new URL(url);
-            iconHtml = `<img src="https://www.google.com/s2/favicons?domain=${urlObj.hostname}&sz=32" alt="" class="w-4 h-4 object-contain" onerror="this.style.display='none'; if(this.nextElementSibling) this.nextElementSibling.style.display='block';" />`;
+    // Get icon - prioritize custom avatar over favicon
+    let iconHtml = '';
+    let hasCustomIcon = false;
+    const isChat = this.isChatUrl(t.url);
+    const isDashboard = t.url?.startsWith('luna://ai-dashboard') || t.url?.startsWith('doge://ai-dashboard');
+    const isNotion = t.url && (t.url.includes('notion.so') || t.url.includes('notion.com') || t.url.includes('silent-queen-f1d8.sebdiar.workers.dev'));
+    
+    // Check for custom avatar first (from backend)
+    if (t.avatar_photo) {
+      iconHtml = `<img src="${t.avatar_photo}" alt="" class="w-full h-full rounded-full object-cover" />`;
+      hasCustomIcon = true;
+    } else if (t.avatar_emoji) {
+      iconHtml = `<span class="text-sm">${t.avatar_emoji}</span>`;
+      hasCustomIcon = true;
+    }
+    
+    // If no custom avatar, try favicon for regular URLs
+    // For Notion tabs, prioritize the custom favicon from the page
+    if (!hasCustomIcon && !isChat && !isDashboard) {
+      try {
+        const url = t.url;
+        if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
+          // For Notion tabs, use the custom favicon if available
+          if (isNotion && t.favicon) {
+            const faviconSize = isTopBar ? 'w-3 h-3' : 'w-4 h-4';
+            iconHtml = `<img src="${t.favicon}" alt="" class="${faviconSize} object-contain rounded" onerror="this.style.display='none'; if(this.nextElementSibling) this.nextElementSibling.style.display='block';" />`;
+            hasCustomIcon = true;
+          } else {
+            // For other URLs, use Google's favicon service
+            // Para Notion, usar el dominio original (notion.so) en lugar del Worker
+            let domainForFavicon = url;
+            if (isNotion && t.originalUrl) {
+              domainForFavicon = t.originalUrl;
+            } else if (isNotion) {
+              // Si no hay originalUrl, usar notion.so como fallback
+              domainForFavicon = 'https://www.notion.so';
+            }
+            const urlObj = new URL(domainForFavicon);
+            // TopBar: icono más pequeño para mantener ratio con círculo w-4 h-4
+            const faviconSize = isTopBar ? 'w-3 h-3' : 'w-4 h-4';
+            iconHtml = `<img src="https://www.google.com/s2/favicons?domain=${urlObj.hostname}&sz=32" alt="" class="${faviconSize} object-contain" onerror="this.style.display='none'; if(this.nextElementSibling) this.nextElementSibling.style.display='block';" />`;
             hasCustomIcon = true;
           }
-        } catch {}
-      }
-      
-      // Special icons for chat and dashboard
-      if (isChat) {
-        iconHtml = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0 text-[#4285f4]"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`;
-        hasCustomIcon = true;
-      } else if (isDashboard) {
-        iconHtml = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0 text-[#4285f4]"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" x2="21" y1="9" y2="9"/><line x1="9" x2="9" y1="21" y2="9"/></svg>`;
-        hasCustomIcon = true;
-      }
-      
-      // Default icon if nothing else
-      if (!hasCustomIcon) {
-        iconHtml = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="flex-shrink-0"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="9" x2="15" y1="15" y2="15"/></svg>`;
-      }
-      
-      // Determine border color for icon container
-      const borderColor = t.avatar_color || '#e8eaed';
-      const iconColor = t.avatar_color || '#6b7280';
-      
-      // Tamaños adaptativos: TopBar más pequeño, sidebar compacto con círculo un poco más grande
-      const iconSize = isTopBar ? 'w-5 h-5' : 'w-6 h-6'; // Compacto: w-6 h-6 para dar más espacio al círculo
-      const textSize = isTopBar ? 'text-xs' : 'text-xs'; // Compacto: text-xs en lugar de text-sm
-      const padding = isTopBar ? 'px-2.5 py-1.5' : 'px-2 py-1.5'; // Compacto: px-2 py-1.5 en lugar de px-3 py-2.5
-      const gap = isTopBar ? 'gap-2' : 'gap-2'; // Compacto: gap-2 en lugar de gap-3
-      const maxWidth = isTopBar ? 'max-w-[100px]' : '';
-      
-      // Menu button (3 dots) - siempre disponible cuando showMenu es true
-      const menuButton = showMenu ? `
-        <button class="tab-menu-btn shrink-0 p-0.5 opacity-0 group-hover:opacity-100 hover:text-[#202124] transition-opacity relative" data-tab-id="${t.id}" ${t.backendId ? `data-backend-id="${t.backendId}"` : ''} title="Menu">
-          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="1"></circle>
-            <circle cx="12" cy="5" r="1"></circle>
-            <circle cx="12" cy="19" r="1"></circle>
-          </svg>
-        </button>
-      ` : '';
-      
-      return `
-      <div ${t.justAdded ? 'data-m="bounce-up" data-m-duration="0.2"' : ''} 
-           class="tab-item group relative flex items-center ${gap} ${padding} rounded-lg cursor-pointer transition-all ${
-             t.active
-               ? 'bg-[#4285f4]/10 text-[#4285f4] font-medium shadow-sm'
-               : 'text-[#202124] hover:bg-[#e8eaed]'
-           }" 
-           data-tab-id="${t.id}"
-           ${t.backendId ? `data-sortable-id="${t.backendId}"` : ''}>
-        <div class="${iconSize} rounded-full flex items-center justify-center flex-shrink-0" style="border: 1px solid ${borderColor}; color: ${iconColor}">
-          ${iconHtml}
-        </div>
-        <span class="flex-1 ${textSize} truncate ${maxWidth}" title="${this.escapeHTML(t.title)}">${this.escapeHTML(t.title)}</span>
-        ${menuButton}
-      </div>`.trim();
-    };
+        }
+      } catch {}
+    }
+    
+    // Special icons for chat and dashboard
+    // TopBar: iconos más pequeños (12px) para mantener ratio con círculo w-4 h-4 (16px)
+    // Sidebar: iconos normales (16px) para círculo w-6 h-6 (24px)
+    const svgSize = isTopBar ? '12' : '16';
+    if (isChat) {
+      iconHtml = `<svg xmlns="http://www.w3.org/2000/svg" width="${svgSize}" height="${svgSize}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0 text-[#4285f4]"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`;
+      hasCustomIcon = true;
+    } else if (isDashboard) {
+      iconHtml = `<svg xmlns="http://www.w3.org/2000/svg" width="${svgSize}" height="${svgSize}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0 text-[#4285f4]"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" x2="21" y1="9" y2="9"/><line x1="9" x2="9" y1="21" y2="9"/></svg>`;
+      hasCustomIcon = true;
+    }
+    
+    // Default icon if nothing else
+    if (!hasCustomIcon) {
+      const defaultSvgSize = isTopBar ? '12' : '14';
+      iconHtml = `<svg xmlns="http://www.w3.org/2000/svg" width="${defaultSvgSize}" height="${defaultSvgSize}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="flex-shrink-0"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="9" x2="15" y1="15" y2="15"/></svg>`;
+    }
+    
+    // Determine border color for icon container
+    const borderColor = t.avatar_color || '#e8eaed';
+    const iconColor = t.avatar_color || '#6b7280';
+    
+    // Tamaños adaptativos: TopBar más pequeño y minimalista, sidebar compacto con círculo un poco más grande
+    const iconSize = isTopBar ? 'w-4 h-4' : 'w-6 h-6'; // TopBar más pequeño: w-4 h-4
+    const textSize = isTopBar ? 'text-[10px]' : 'text-xs'; // TopBar más pequeño: text-[10px]
+    const padding = isTopBar ? 'px-1.5 py-0.5' : 'px-2 py-1.5'; // TopBar más compacto: px-1.5 py-0.5
+    const gap = isTopBar ? 'gap-1' : 'gap-2'; // TopBar más compacto: gap-1
+    const maxWidth = isTopBar ? 'max-w-[80px]' : '';
+    
+    // Menu button (3 dots) - siempre disponible cuando showMenu es true
+    const menuButton = showMenu ? `
+      <button class="tab-menu-btn shrink-0 p-0.5 opacity-0 group-hover:opacity-100 hover:text-[#202124] transition-opacity relative" data-tab-id="${t.id}" ${t.backendId ? `data-backend-id="${t.backendId}"` : ''} title="Menu">
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="1"></circle>
+          <circle cx="12" cy="5" r="1"></circle>
+          <circle cx="12" cy="19" r="1"></circle>
+        </svg>
+      </button>
+    ` : '';
+    
+    return `
+    <div ${t.justAdded ? 'data-m="bounce-up" data-m-duration="0.2"' : ''} 
+         class="tab-item group relative flex items-center ${gap} ${padding} rounded-lg cursor-pointer transition-all ${
+           t.active
+             ? 'bg-[#4285f4]/10 text-[#4285f4] font-medium shadow-sm'
+             : 'text-[#202124] hover:bg-[#e8eaed]'
+         }" 
+         data-tab-id="${t.id}"
+         ${t.backendId ? `data-sortable-id="${t.backendId}"` : ''}>
+      <div class="${iconSize} rounded-full flex items-center justify-center flex-shrink-0" style="border: 1px solid ${borderColor}; color: ${iconColor}">
+        ${iconHtml}
+      </div>
+      <span class="flex-1 ${textSize} truncate ${maxWidth}" title="${this.escapeHTML(t.title)}">${this.escapeHTML(t.title)}</span>
+      ${menuButton}
+    </div>`.trim();
+  };
 
   render = (() => {
     // Debounce mechanism to prevent excessive DOM updates
