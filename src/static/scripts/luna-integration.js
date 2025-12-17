@@ -2352,10 +2352,8 @@ class LunaIntegration {
             tabEl.classList.add('tab-item');
           }
           
-          // Add mx-2 for margin like sidebar tabs
-          if (!tabEl.classList.contains('mx-2')) {
-            tabEl.classList.add('mx-2');
-          }
+          // No agregar mx-2 aquí - el CSS ya maneja los márgenes con margin-left y margin-right
+          // Los tabs en More dropdown deben tener el mismo margen que en el sidebar (8px = 0.5rem)
 
           if (!isEditing) {
             tabEl.addEventListener('click', (e) => {
@@ -2373,6 +2371,52 @@ class LunaIntegration {
           container.appendChild(tabEl);
         }
       });
+      
+      // Setup menu handlers para More dropdown tabs (igual que sidebar)
+      if (!isEditing) {
+        container.querySelectorAll('.tab-menu-btn').forEach(btn => {
+          btn.onclick = async (e) => {
+            e.stopPropagation();
+            const tabId = +btn.dataset.tabId;
+            const tab = moreTabs.find(t => t.id === tabId);
+            if (tab) {
+              // Si tiene backendId, obtener datos actualizados del backend
+              if (tab.backendId) {
+                try {
+                  const response = await this.request(`/api/tabs/${tab.backendId}`);
+                  this.showTabMenu(e, response.tab);
+                } catch (err) {
+                  // Si falla, usar datos del tab actual
+                  const backendTab = {
+                    id: tab.backendId,
+                    title: tab.title,
+                    url: tab.url,
+                    bookmark_url: tab.url,
+                    avatar_emoji: tab.avatar_emoji,
+                    avatar_color: tab.avatar_color,
+                    avatar_photo: tab.avatar_photo,
+                    cookie_container_id: tab.cookie_container_id
+                  };
+                  this.showTabMenu(e, backendTab);
+                }
+              } else {
+                // Tab sin backendId (tab nuevo o local) - crear objeto temporal
+                const backendTab = {
+                  id: null,
+                  title: tab.title,
+                  url: tab.url,
+                  bookmark_url: tab.url,
+                  avatar_emoji: tab.avatar_emoji,
+                  avatar_color: tab.avatar_color,
+                  avatar_photo: tab.avatar_photo,
+                  cookie_container_id: tab.cookie_container_id
+                };
+                this.showTabMenu(e, backendTab);
+              }
+            }
+          };
+        });
+      }
     }
 
     if (isEditing) {
@@ -3757,9 +3801,10 @@ class LunaIntegration {
 
     const rect = button.getBoundingClientRect();
     const menu = document.createElement('div');
-    menu.className = 'tab-menu-dropdown absolute bg-white border border-[#e8eaed] rounded-lg shadow-lg py-1 z-50 min-w-[160px]';
+    menu.className = 'tab-menu-dropdown absolute bg-white border border-[#e8eaed] rounded-lg shadow-lg py-1 min-w-[160px]';
     menu.style.left = `${rect.left}px`;
     menu.style.top = `${rect.bottom + 4}px`;
+    menu.style.zIndex = '10001'; // Mayor que el dropdown de More (10000)
 
     // Cookie containers list (hardcoded for now, can be made dynamic later)
     const cookieContainers = [

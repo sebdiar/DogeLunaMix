@@ -4,7 +4,8 @@
 import supabase from './config/database.js';
 
 // Usuarios a eliminar (por nombre o email)
-const usersToDelete = ['demo', 'Mulham', 'Test'];
+// Puedes agregar más usuarios aquí
+const usersToDelete = ['test2', 'Test2'];
 
 async function deleteUsers() {
   console.log('🔍 Buscando usuarios a eliminar...\n');

@@ -15,6 +15,9 @@ Backend API para DogeUB con Express y Supabase.
    SUPABASE_SERVICE_KEY=tu_supabase_service_role_key
    JWT_SECRET=tu_jwt_secret_cambiar_en_produccion
    BACKEND_PORT=3001
+   NOTION_API_KEY=tu_notion_api_key  # Opcional: para sincronización con Notion
+   NOTION_DATABASE_ID=tu_notion_database_id  # Opcional: ID de la base de datos de proyectos en Notion
+   NOTION_USERS_DATABASE_ID=tu_notion_users_database_id  # Opcional: ID de la base de datos de usuarios en Notion
    ```
    
    **Nota sobre las claves de Supabase:**

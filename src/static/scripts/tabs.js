@@ -443,7 +443,10 @@ class TabManager {
     const indicator = document.getElementById('notion-worker-indicator');
     if (!indicator) return;
     
-    if (tab && tab.url && tab.url.includes('silent-queen-f1d8.sebdiar.workers.dev')) {
+    // Verificar si el usuario quiere mostrar el indicador (por defecto: false)
+    const showProxyIndicator = localStorage.getItem('showProxyIndicator') === 'true';
+    
+    if (showProxyIndicator && tab && tab.url && tab.url.includes('silent-queen-f1d8.sebdiar.workers.dev')) {
       indicator.textContent = `Proxied via: ${tab.url}`;
       indicator.style.display = 'block';
       // Hacer la barra de URL más ancha
@@ -1673,4 +1676,84 @@ window.addEventListener('load', async () => {
       );
     }
   });
+
+  // Setup menu button and popover
+  const menuBtn = document.getElementById('menu-btn');
+  const menuPopover = document.getElementById('menu-popover');
+  
+  if (menuBtn && menuPopover) {
+    // Prevent default popover behavior and use manual toggle
+    menuBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      
+      const isOpen = menuPopover.getAttribute('aria-hidden') === 'false';
+      if (isOpen) {
+        menuPopover.setAttribute('aria-hidden', 'true');
+        menuBtn.setAttribute('aria-expanded', 'false');
+      } else {
+        // Close any other open menus first
+        document.querySelectorAll('[id^="menu-popover"], [id^="tab-menu-dropdown"]').forEach(menu => {
+          if (menu !== menuPopover) {
+            menu.setAttribute('aria-hidden', 'true');
+          }
+        });
+        
+        menuPopover.setAttribute('aria-hidden', 'false');
+        menuBtn.setAttribute('aria-expanded', 'true');
+      }
+    }, true); // Use capture phase to ensure it runs first
+
+    // Close menu when clicking outside
+    const closeMenuOnOutsideClick = (e) => {
+      if (menuPopover && menuPopover.getAttribute('aria-hidden') === 'false') {
+        if (!menuBtn.contains(e.target) && !menuPopover.contains(e.target)) {
+          menuPopover.setAttribute('aria-hidden', 'true');
+          menuBtn.setAttribute('aria-expanded', 'false');
+        }
+      }
+    };
+    
+    // Use capture phase for outside click detection
+    document.addEventListener('click', closeMenuOnOutsideClick, true);
+    document.addEventListener('mousedown', closeMenuOnOutsideClick, true);
+  }
+
+  // Setup toggle for proxy indicator
+  const toggleProxyIndicator = document.getElementById('toggle-proxy-indicator');
+  const proxyIndicatorStatus = document.getElementById('proxy-indicator-status');
+  
+  // Function to update the status display
+  const updateProxyIndicatorStatus = () => {
+    const isEnabled = localStorage.getItem('showProxyIndicator') === 'true';
+    if (proxyIndicatorStatus) {
+      proxyIndicatorStatus.textContent = isEnabled ? 'ON' : 'OFF';
+      proxyIndicatorStatus.style.color = isEnabled ? '#10b981' : '#6b7280';
+    }
+    // Update indicator immediately if tab is active
+    if (tabManager && tabManager.active()) {
+      tabManager.updateNotionWorkerIndicator(tabManager.active());
+    }
+  };
+
+  if (toggleProxyIndicator) {
+    // Initialize status display
+    updateProxyIndicatorStatus();
+    
+    // Add click handler
+    toggleProxyIndicator.addEventListener('click', () => {
+      const currentValue = localStorage.getItem('showProxyIndicator') === 'true';
+      localStorage.setItem('showProxyIndicator', (!currentValue).toString());
+      updateProxyIndicatorStatus();
+      
+      // Close menu after toggle
+      if (menuPopover) {
+        menuPopover.setAttribute('aria-hidden', 'true');
+      }
+      if (menuBtn) {
+        menuBtn.setAttribute('aria-expanded', 'false');
+      }
+    });
+  }
 });

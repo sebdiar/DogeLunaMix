@@ -2,6 +2,7 @@ import express from 'express';
 import bcrypt from 'bcryptjs';
 import supabase from '../config/database.js';
 import { generateToken, authenticate } from '../middleware/auth.js';
+import { createNotionPage } from '../services/notion.js';
 
 const router = express.Router();
 
@@ -53,6 +54,61 @@ router.post('/register', async (req, res) => {
       sameSite: 'none',
       maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
     });
+    
+    // Create Notion page for user and tab (async, don't block response)
+    // This runs in background so registration doesn't wait for Notion API
+    (async () => {
+      try {
+        const apiKey = process.env.NOTION_API_KEY;
+        const usersDatabaseId = process.env.NOTION_USERS_DATABASE_ID;
+        const userName = user.name || user.email.split('@')[0];
+        
+        console.log(`[REGISTER] Processing Notion tab creation for user: ${userName} (${user.id})`);
+        console.log(`[REGISTER] API Key present: ${!!apiKey}`);
+        console.log(`[REGISTER] Users Database ID present: ${!!usersDatabaseId}`);
+        
+        if (apiKey && usersDatabaseId) {
+          console.log(`[REGISTER] Creating Notion page for user: ${userName}`);
+          
+          // Create Notion page for the user
+          const notionPage = await createNotionPage(
+            apiKey,
+            usersDatabaseId,
+            userName
+          );
+          
+          console.log(`[REGISTER] Notion page created: ${notionPage.url}`);
+          
+          // Create tab with Notion page URL
+          // Position will be automatically set (defaults to 0 or max+1)
+          const { data: newTab, error: tabError } = await supabase
+            .from('tabs')
+            .insert({
+              user_id: user.id,
+              title: userName,
+              url: notionPage.url,
+              is_expanded: true
+            })
+            .select('*')
+            .single();
+          
+          if (tabError) {
+            console.error(`[REGISTER] Error creating tab for user ${userName}:`, tabError);
+            console.error(`[REGISTER] Tab error details:`, JSON.stringify(tabError, null, 2));
+          } else {
+            console.log(`[REGISTER] Tab created successfully for user ${userName}: ${newTab.id}`);
+          }
+        } else {
+          console.log(`[REGISTER] Notion integration not configured for user ${userName}`);
+          console.log(`[REGISTER] API Key: ${apiKey ? 'SET' : 'MISSING'}`);
+          console.log(`[REGISTER] Users Database ID: ${usersDatabaseId ? 'SET' : 'MISSING'}`);
+        }
+      } catch (notionError) {
+        console.error(`[REGISTER] Failed to create Notion page or tab for user ${user.name || user.email}:`, notionError);
+        console.error(`[REGISTER] Error stack:`, notionError.stack);
+        // Don't fail registration if Notion fails
+      }
+    })();
     
     res.json({ user, token });
   } catch (error) {
