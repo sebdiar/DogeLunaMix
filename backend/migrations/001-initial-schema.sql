@@ -156,3 +156,6 @@ CREATE POLICY "Allow all on chat_messages" ON chat_messages FOR ALL USING (true)
 
 
 
+
+
+

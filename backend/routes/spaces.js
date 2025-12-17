@@ -1,7 +1,7 @@
 import express from 'express';
 import supabase from '../config/database.js';
 import { authenticate } from '../middleware/auth.js';
-import { createNotionPage, updateNotionPageName, archiveNotionPage, queryNotionPages } from '../services/notion.js';
+import { createNotionPage, updateNotionPageName, archiveNotionPage } from '../services/notion.js';
 
 const router = express.Router();
 router.use(authenticate);
@@ -11,6 +11,9 @@ router.get('/', async (req, res) => {
   try {
     const { category } = req.query;
     
+    // For projects, get both:
+    // 1. Projects owned by the user
+    // 2. Projects where the user is a member (participant in the chat)
     let query = supabase
       .from('spaces')
       .select('*')
@@ -37,210 +40,53 @@ router.get('/', async (req, res) => {
     
     let spaces = spacesData || [];
     
-    // For projects, sync with Notion if configured (using global env vars only)
+    // For projects, also include projects where user is a member (but not owner)
     if (category === 'project') {
-      try {
-        const apiKey = process.env.NOTION_API_KEY;
-        const databaseId = process.env.NOTION_DATABASE_ID;
+      // Get all chats where the user is a participant
+      const { data: userChats } = await supabase
+        .from('chat_participants')
+        .select('chat_id')
+        .eq('user_id', req.userId);
+      
+      if (userChats && userChats.length > 0) {
+        const chatIds = userChats.map(c => c.chat_id);
         
-        if (apiKey && databaseId) {
-          // Query all pages from Notion
-          const notionPages = await queryNotionPages(apiKey, databaseId);
+        // Get spaces linked to these chats
+        const { data: spaceChats } = await supabase
+          .from('space_chats')
+          .select('space_id, chat_id')
+          .in('chat_id', chatIds);
+        
+        if (spaceChats && spaceChats.length > 0) {
+          const spaceIds = spaceChats.map(sc => sc.space_id);
           
-          // Create a map of existing spaces by notion_page_id
-          const existingByNotionId = new Map();
-          spaces.forEach(space => {
-            if (space.notion_page_id) {
-              existingByNotionId.set(space.notion_page_id, space);
-            }
-          });
+          // Get these spaces (projects only, not owned by current user, not archived)
+          let memberSpacesQuery = supabase
+            .from('spaces')
+            .select('*')
+            .in('id', spaceIds)
+            .eq('category', 'project')
+            .neq('user_id', req.userId); // Exclude projects owned by user (already included above)
           
-          // Create a map of notion page ID -> local space ID for parent mapping
-          const notionIdToSpaceId = new Map();
-          spaces.forEach(space => {
-            if (space.notion_page_id) {
-              notionIdToSpaceId.set(space.notion_page_id, space.id);
-            }
-          });
-
-          // First pass: create all root-level spaces (those without parents or whose parents don't exist yet)
-          // Then second pass will handle children
-          const notionPagesToProcess = [...notionPages];
-          const processedNotionIds = new Set();
+          if (archived !== 'true') {
+            memberSpacesQuery = memberSpacesQuery.eq('archived', false);
+          }
           
-          // Process in multiple passes to handle hierarchy correctly
-          let maxPasses = 10; // Safety limit
-          let pass = 0;
+          const { data: memberSpaces, error: memberSpacesError } = await memberSpacesQuery
+            .order('position', { ascending: true, nullsFirst: false })
+            .order('created_at', { ascending: true });
           
-          while (notionPagesToProcess.length > 0 && pass < maxPasses) {
-            pass++;
-            const pagesInThisPass = notionPagesToProcess.filter(notionPage => {
-              // Skip if already processed
-              if (processedNotionIds.has(notionPage.id)) return false;
-              
-              // Skip archived
-              if (notionPage.archived) {
-                processedNotionIds.add(notionPage.id);
-                return false;
+          if (!memberSpacesError && memberSpaces) {
+            // Add member spaces to the list, avoiding duplicates
+            const existingIds = new Set(spaces.map(s => s.id));
+            memberSpaces.forEach(s => {
+              if (!existingIds.has(s.id)) {
+                spaces.push(s);
+                existingIds.add(s.id);
               }
-              
-              // Skip if already exists locally
-              if (existingByNotionId.has(notionPage.id)) {
-                processedNotionIds.add(notionPage.id);
-                const existingSpace = existingByNotionId.get(notionPage.id);
-                notionIdToSpaceId.set(notionPage.id, existingSpace.id);
-                return false;
-              }
-              
-              // Include if no parent, or parent already exists in our map
-              if (!notionPage.parent_id || notionIdToSpaceId.has(notionPage.parent_id)) {
-                return true;
-              }
-              
-              return false;
             });
-            
-            for (const notionPage of pagesInThisPass) {
-              // Find parent space ID if parent exists
-              let parentSpaceId = null;
-              if (notionPage.parent_id && notionIdToSpaceId.has(notionPage.parent_id)) {
-                parentSpaceId = notionIdToSpaceId.get(notionPage.parent_id);
-              }
-              
-              // Find max position for siblings (same parent or root level)
-              const { data: maxPosSpace } = await supabase
-                .from('spaces')
-                .select('position')
-                .eq('user_id', req.userId)
-                .eq('category', 'project')
-                .eq('parent_id', parentSpaceId || null)
-                .order('position', { ascending: false, nullsFirst: false })
-                .limit(1)
-                .single();
-              
-              const position = (maxPosSpace?.position || 0) + 1;
-              
-              // Create space from Notion page
-              const { data: newSpace } = await supabase
-                .from('spaces')
-                .insert({
-                  user_id: req.userId,
-                  name: notionPage.name,
-                  category: 'project',
-                  notion_page_id: notionPage.id,
-                  notion_page_url: notionPage.url,
-                  parent_id: parentSpaceId,
-                  archived: false,
-                  position
-                })
-                .select('*')
-                .single();
-              
-              if (newSpace) {
-                spaces.push(newSpace);
-                notionIdToSpaceId.set(notionPage.id, newSpace.id);
-                processedNotionIds.add(notionPage.id);
-                
-                // Create initial Chat tab
-                const chatUrl = `luna://chat/${newSpace.id}`;
-                await supabase
-                  .from('tabs')
-                  .insert({
-                    space_id: newSpace.id,
-                    title: 'Chat',
-                    url: chatUrl,
-                    user_id: req.userId,
-                    type: 'chat'
-                  });
-              }
-            }
-            
-            // Remove processed pages
-            notionPagesToProcess.splice(0, pagesInThisPass.length);
           }
-          
-          // Update existing spaces' parent_id if it changed in Notion
-          for (const notionPage of notionPages) {
-            if (notionPage.archived) continue;
-            
-            const existingSpace = existingByNotionId.get(notionPage.id);
-            if (existingSpace) {
-              let parentSpaceId = null;
-              if (notionPage.parent_id && notionIdToSpaceId.has(notionPage.parent_id)) {
-                parentSpaceId = notionIdToSpaceId.get(notionPage.parent_id);
-              }
-              
-              // Update parent_id if it changed
-              if (existingSpace.parent_id !== parentSpaceId) {
-                await supabase
-                  .from('spaces')
-                  .update({ parent_id: parentSpaceId })
-                  .eq('id', existingSpace.id);
-                existingSpace.parent_id = parentSpaceId;
-              }
-              
-              // Update name if it changed in Notion
-              if (existingSpace.name !== notionPage.name) {
-                await supabase
-                  .from('spaces')
-                  .update({ name: notionPage.name })
-                  .eq('id', existingSpace.id);
-                existingSpace.name = notionPage.name;
-              }
-            }
-          }
-          
-          // Update archived status for existing spaces based on Notion
-          for (const space of spaces) {
-            if (space.notion_page_id) {
-              const notionPage = notionPages.find(p => p.id === space.notion_page_id);
-              if (notionPage && space.archived !== notionPage.archived) {
-                await supabase
-                  .from('spaces')
-                  .update({ archived: notionPage.archived })
-                  .eq('id', space.id);
-                space.archived = notionPage.archived;
-              }
-            }
-          }
-          
-          // Filter: Only return spaces that come from Notion (have notion_page_id)
-          // OR spaces without notion_page_id that were created manually before Notion sync
-          // For now, let's show all spaces but prioritize Notion ones
-          const notionSpaceIds = new Set(notionPages.map(p => p.id));
-          const localNotionIds = new Set(spaces.filter(s => s.notion_page_id).map(s => s.notion_page_id));
-          
-          // Filter: Only return spaces that come from Notion (have notion_page_id)
-          // Remove local spaces that don't have notion_page_id
-          spaces = spaces.filter(s => s.notion_page_id);
-          
-          // Build hierarchy-aware sorted list (parents before children)
-          const spacesById = new Map(spaces.map(s => [s.id, s]));
-          const rootSpaces = spaces.filter(s => !s.parent_id || !spacesById.has(s.parent_id));
-          
-          function buildHierarchy(space) {
-            const result = [space];
-            const children = spaces.filter(s => s.parent_id === space.id);
-            children.sort((a, b) => (a.position || 0) - (b.position || 0));
-            for (const child of children) {
-              result.push(...buildHierarchy(child));
-            }
-            return result;
-          }
-          
-          const hierarchicalSpaces = [];
-          rootSpaces.sort((a, b) => (a.position || 0) - (b.position || 0));
-          for (const root of rootSpaces) {
-            hierarchicalSpaces.push(...buildHierarchy(root));
-          }
-          
-          // Replace spaces with hierarchical version
-          const hierarchicalSpacesArray = hierarchicalSpaces;
-          spaces = hierarchicalSpacesArray;
         }
-      } catch (notionError) {
-        console.error('Error syncing with Notion:', notionError);
-        // Continue even if Notion sync fails
       }
     }
     
@@ -462,6 +308,27 @@ router.get('/:id', async (req, res) => {
     
     let hasAccess = space.user_id === req.userId;
     
+    // For projects, check if user is a member (participant in the chat)
+    if (!hasAccess && space.category === 'project') {
+      const { data: spaceChat } = await supabase
+        .from('space_chats')
+        .select('chat_id')
+        .eq('space_id', id)
+        .maybeSingle();
+      
+      if (spaceChat) {
+        const { data: participant } = await supabase
+          .from('chat_participants')
+          .select('id')
+          .eq('chat_id', spaceChat.chat_id)
+          .eq('user_id', req.userId)
+          .single();
+        
+        hasAccess = !!participant;
+      }
+    }
+    
+    // For user spaces (DMs), check if current user is the other participant
     if (!hasAccess && space.category === 'user') {
       const { data: currentUser } = await supabase
         .from('users')
@@ -471,6 +338,26 @@ router.get('/:id', async (req, res) => {
       
       hasAccess = currentUser && 
         (space.name === currentUser.email || space.name === currentUser.name);
+      
+      // Also check if there's a chat for this space and current user is a participant
+      if (!hasAccess) {
+        const { data: spaceChat } = await supabase
+          .from('space_chats')
+          .select('chat_id')
+          .eq('space_id', id)
+          .maybeSingle();
+        
+        if (spaceChat) {
+          const { data: participant } = await supabase
+            .from('chat_participants')
+            .select('id')
+            .eq('chat_id', spaceChat.chat_id)
+            .eq('user_id', req.userId)
+            .single();
+          
+          hasAccess = !!participant;
+        }
+      }
     }
     
     if (!hasAccess) {

@@ -28,11 +28,18 @@ class LunaIntegration {
     this.chatNotificationChannel = null; // Supabase Realtime channel for chat notifications
     this.supabaseClient = null; // Supabase client for realtime
     this.chatSubscriptions = new Map(); // Map of chatId -> subscription channel
+    this.projectsRealtimeChannel = null; // Supabase Realtime channel for projects updates
     
     this.init();
   }
 
   async request(endpoint, options = {}) {
+    // Always get fresh token from localStorage in case it was updated
+    const token = localStorage.getItem('dogeub_token') || this.token;
+    if (token !== this.token) {
+      this.token = token;
+    }
+    
     const headers = {
       'Content-Type': 'application/json',
       ...(this.token && { Authorization: `Bearer ${this.token}` }),
@@ -46,7 +53,8 @@ class LunaIntegration {
       });
 
       if (!response.ok) {
-        if (response.status === 401 || response.status === 403) {
+        // For 401, always logout (authentication error)
+        if (response.status === 401) {
           localStorage.removeItem('dogeub_token');
           localStorage.removeItem('dogeub_user');
           this.token = null;
@@ -58,7 +66,51 @@ class LunaIntegration {
           }
           throw new Error('UNAUTHORIZED');
         }
-        throw new Error(`Request failed: ${response.status}`);
+        
+        // For 403, check if it's a permission error or auth error
+        if (response.status === 403) {
+          try {
+            const errorData = await response.clone().json();
+            const errorMsg = errorData.error || '';
+            // If it's a permission error (space ownership, etc), don't logout
+            if (errorMsg.includes('Not authorized') || errorMsg.includes('Access denied') || errorMsg.includes('Permission')) {
+              console.error('Permission denied:', errorMsg);
+              throw new Error(errorMsg || 'Permission denied');
+            }
+            // If it's a token/auth related 403, logout
+            if (errorMsg.includes('token') || errorMsg.includes('Invalid') || errorMsg.includes('No token')) {
+              localStorage.removeItem('dogeub_token');
+              localStorage.removeItem('dogeub_user');
+              this.token = null;
+              this.user = null;
+              if (window.parent && window.parent !== window) {
+                window.parent.postMessage({ action: 'navigate', to: '/login' }, '*');
+              } else {
+                window.location.href = '/login';
+              }
+              throw new Error('UNAUTHORIZED');
+            }
+          } catch (e) {
+            // If error was already thrown, re-throw it
+            if (e.message === 'UNAUTHORIZED' || e.message.includes('Permission') || e.message.includes('denied')) {
+              throw e;
+            }
+            // If we can't parse the error, assume it's a permission issue (don't logout for 403)
+            console.error('403 Forbidden:', e);
+            throw new Error('Permission denied');
+          }
+        }
+        
+        // For other errors, try to get error message
+        try {
+          const errorData = await response.clone().json();
+          throw new Error(errorData.error || `Request failed: ${response.status}`);
+        } catch (e) {
+          if (e.message && e.message !== `Request failed: ${response.status}`) {
+            throw e;
+          }
+          throw new Error(`Request failed: ${response.status}`);
+        }
       }
 
       return response.json();
@@ -93,8 +145,6 @@ class LunaIntegration {
           console.log('Notification permission granted');
           // Setup chat notifications after permission is granted
           await this.setupChatNotifications();
-        } else {
-          console.log('Notification permission denied');
         }
       } else if (Notification.permission === 'granted') {
         // Already granted, setup notifications
@@ -107,7 +157,6 @@ class LunaIntegration {
 
   async setupChatNotifications() {
     if (!this.user || !this.user.id) {
-      console.log('Cannot setup chat notifications: user not authenticated');
       return;
     }
 
@@ -144,7 +193,6 @@ class LunaIntegration {
         .eq('user_id', this.user.id);
 
       if (!chatParticipants || chatParticipants.length === 0) {
-        console.log('No chats found for user');
         return;
       }
 
@@ -225,7 +273,6 @@ class LunaIntegration {
 
       // Store channel for cleanup
       this.chatNotificationChannel = channel;
-      console.log('Chat notifications setup complete');
     } catch (error) {
       console.error('Failed to setup chat notifications:', error);
     }
@@ -308,6 +355,9 @@ class LunaIntegration {
     this.renderUserInfo(); // Render user info
     await this.loadPersonalTabs();
     await this.loadProjects();
+    
+    // Setup Realtime for projects sidebar updates
+    this.setupProjectsRealtime();
     
     // Initialize project settings
     this.initProjectSettings();
@@ -3481,6 +3531,7 @@ class LunaIntegration {
     topbarSpace.style.display = 'flex'; // Ensure it's displayed
     
     // Show/hide settings button based on space category (only for projects)
+    // Show for both owners and members
     if (topbarSettingsBtn) {
       if (this.activeSpace.category === 'project') {
         topbarSettingsBtn.style.display = 'flex';
@@ -3533,31 +3584,90 @@ class LunaIntegration {
     );
 
     // Filtrar tabs de TabManager que pertenecen a este espacio
+    // IMPORTANTE: Para tabs de Notion, también considerar originalUrl porque el tab puede tener
+    // la URL del Cloudflare Worker mientras que spaceTabs tiene la URL original de Notion
     let spaceTabsInTabManager = (window.tabManager?.tabs || []).filter(t => {
       const tUrl = t.url || '';
       if (!tUrl || tUrl === '/new' || tUrl === 'tabs://new') return false;
-      return spaceTabUrls.has(this.normalizeUrl(tUrl));
+      
+      // Normalizar la URL del tab
+      const normalizedTabUrl = this.normalizeUrl(tUrl);
+      
+      // Si el tab tiene originalUrl (típico de tabs de Notion), también comparar con ese
+      if (t.originalUrl) {
+        const normalizedOriginalUrl = this.normalizeUrl(t.originalUrl);
+        return spaceTabUrls.has(normalizedTabUrl) || spaceTabUrls.has(normalizedOriginalUrl);
+      }
+      
+      return spaceTabUrls.has(normalizedTabUrl);
     });
     
     // Ordenar según el orden del backend (position) - mapear cada tab de TabManager con su backend tab
+    // IMPORTANTE: Para tabs de Notion, también considerar originalUrl
     spaceTabsInTabManager = spaceTabsInTabManager.sort((a, b) => {
-      const backendTabA = this.spaceTabs.find(t => {
-        const url = t.url || t.bookmark_url;
-        return url && this.normalizeUrl(url) === this.normalizeUrl(a.url || '');
-      });
-      const backendTabB = this.spaceTabs.find(t => {
-        const url = t.url || t.bookmark_url;
-        return url && this.normalizeUrl(url) === this.normalizeUrl(b.url || '');
-      });
+      const findBackendTab = (tabManagerTab) => {
+        return this.spaceTabs.find(t => {
+          const url = t.url || t.bookmark_url;
+          if (!url) return false;
+          const normalizedBackendUrl = this.normalizeUrl(url);
+          const normalizedTabUrl = this.normalizeUrl(tabManagerTab.url || '');
+          
+          // Comparar URL directa
+          if (normalizedBackendUrl === normalizedTabUrl) return true;
+          
+          // Si el tab tiene originalUrl, también comparar con ese
+          if (tabManagerTab.originalUrl) {
+            const normalizedOriginalUrl = this.normalizeUrl(tabManagerTab.originalUrl);
+            return normalizedBackendUrl === normalizedOriginalUrl;
+          }
+          
+          return false;
+        });
+      };
+      
+      const backendTabA = findBackendTab(a);
+      const backendTabB = findBackendTab(b);
       
       const positionA = backendTabA?.position || 0;
       const positionB = backendTabB?.position || 0;
       return positionA - positionB;
     });
 
+    // DEDUPLICAR: Si hay múltiples tabs con la misma URL/backendId, mantener solo el primero
+    // Esto evita mostrar tabs duplicados visualmente en el TopBar
+    const seenUrls = new Set();
+    const seenBackendIds = new Set();
+    const deduplicatedTabs = [];
+    
+    for (const tabManagerTab of spaceTabsInTabManager) {
+      const tabUrl = tabManagerTab.url || '';
+      const normalizedTabUrl = this.normalizeUrl(tabUrl);
+      const backendId = tabManagerTab.backendId;
+      
+      // Si tiene backendId, usar eso como clave única (más confiable)
+      if (backendId && seenBackendIds.has(backendId)) {
+        continue; // Ya existe un tab con este backendId
+      }
+      
+      // Si no tiene backendId pero tiene URL, usar URL normalizada como clave
+      if (!backendId && normalizedTabUrl && seenUrls.has(normalizedTabUrl)) {
+        continue; // Ya existe un tab con esta URL
+      }
+      
+      // Marcar como visto
+      if (backendId) {
+        seenBackendIds.add(backendId);
+      }
+      if (normalizedTabUrl) {
+        seenUrls.add(normalizedTabUrl);
+      }
+      
+      deduplicatedTabs.push(tabManagerTab);
+    }
+    
     // USAR EXACTAMENTE EL MISMO tabTemplate - CÓDIGO ÚNICO
     // Estos son los MISMOS objetos de TabManager, solo cambia isTopBar=true
-    spaceTabsInTabManager.forEach(tabManagerTab => {
+    deduplicatedTabs.forEach(tabManagerTab => {
       // USAR EL OBJETO REAL DE TabManager - NO CREAR COPIA
       const tabHtml = window.tabManager.tabTemplate(tabManagerTab, true, true); // showMenu=true, isTopBar=true
       
@@ -3566,10 +3676,23 @@ class LunaIntegration {
       const tabEl = tabWrapper.firstElementChild;
       
       // Buscar el tab del backend correspondiente para los handlers
+      // IMPORTANTE: Para tabs de Notion, también considerar originalUrl
       const backendTab = this.spaceTabs.find(t => {
         const url = t.url || t.bookmark_url;
         if (!url) return false;
-        return this.normalizeUrl(url) === this.normalizeUrl(tabManagerTab.url || '');
+        const normalizedBackendUrl = this.normalizeUrl(url);
+        const normalizedTabUrl = this.normalizeUrl(tabManagerTab.url || '');
+        
+        // Comparar URL directa
+        if (normalizedBackendUrl === normalizedTabUrl) return true;
+        
+        // Si el tab tiene originalUrl, también comparar con ese
+        if (tabManagerTab.originalUrl) {
+          const normalizedOriginalUrl = this.normalizeUrl(tabManagerTab.originalUrl);
+          return normalizedBackendUrl === normalizedOriginalUrl;
+        }
+        
+        return false;
       });
       
       // Agregar data-sortable-id para drag & drop (usar backendId)
@@ -3721,16 +3844,31 @@ class LunaIntegration {
     
     // Buscar si el tab ya está abierto en TabManager (es el MISMO tab)
     // IMPORTANTE: Excluir tabs con /new o tabs://new (estos son tabs "nuevos" no inicializados)
+    // Priorizar búsqueda por backendId (más confiable) y luego por URL
     const existingTab = tabManagerTabs.find(t => {
       const tUrl = t.url || '';
       if (!tUrl || tUrl === '/new' || tUrl === 'tabs://new') return false;
-      // Comparar URLs normalizadas
-      return this.normalizeUrl(tUrl) === normalizedUrl;
+      
+      // PRIMERO: Buscar por backendId (más confiable si está disponible)
+      if (tab.id && t.backendId === tab.id) return true;
+      
+      // SEGUNDO: Comparar URLs normalizadas
+      const normalizedTabUrl = this.normalizeUrl(tUrl);
+      if (normalizedTabUrl === normalizedUrl) return true;
+      
+      // TERCERO: Si el tab tiene originalUrl, también comparar con ese
+      if (t.originalUrl) {
+        const normalizedOriginalUrl = this.normalizeUrl(t.originalUrl);
+        if (normalizedOriginalUrl === normalizedUrl) return true;
+      }
+      
+      return false;
     });
 
     if (existingTab) {
-      // Tab ya existe - solo activarlo (es el MISMO tab)
+      // Tab ya existe - activarlo (es el MISMO tab)
       window.tabManager.activate(existingTab.id);
+      
       // Si es chat, asegurar que esté inicializado INMEDIATAMENTE
       if (this.isChatUrl(url)) {
         const spaceId = url.split('/').pop();
@@ -3748,6 +3886,16 @@ class LunaIntegration {
             this.initChat(existingTab.id, spaceId);
           }
         }
+      } else {
+        // Para tabs normales (incluyendo Notion), asegurar que el iframe esté visible
+        // Usar un pequeño delay para asegurar que activate() haya terminado completamente
+        setTimeout(() => {
+          const iframe = document.getElementById(`iframe-${existingTab.id}`);
+          if (iframe && window.tabManager) {
+            // Forzar visibilidad del iframe
+            window.tabManager.setFrameState(existingTab.id, true);
+          }
+        }, 50);
       }
     } else {
       // Tab no existe - crear nuevo tab directamente con la URL correcta
@@ -4936,33 +5084,31 @@ class LunaIntegration {
       this.renderProjects();
       
       // Seleccionar automáticamente el proyecto recién creado
+      // Esto abrirá el tab Chat (primer tab) automáticamente
       await this.selectProject(space.id);
       
       // Crear automáticamente un tab de Notion "Dashboard" si el proyecto tiene notion_page_url
+      // IMPORTANTE: Crear DESPUÉS de selectProject para que Chat se abra primero
+      // El Dashboard se creará con position > 0, así que quedará después del Chat
       if (space.notion_page_url) {
         try {
-          // Crear el tab directamente en el backend
-          const { tab } = await this.request('/api/tabs', {
+          // Crear el tab directamente en el backend (pero NO seleccionarlo)
+          // Usar position: 1 para que quede después del Chat (que tiene position: 0)
+          await this.request('/api/tabs', {
             method: 'POST',
             body: JSON.stringify({
               url: space.notion_page_url,
               title: 'Dashboard',
               type: 'browser',
-              space_id: space.id
+              space_id: space.id,
+              position: 1 // Después del Chat (position 0)
             })
           });
           
-          // Recargar los tabs del espacio para incluir el nuevo tab
+          // Recargar tabs para incluir el Dashboard (pero NO cambiar el tab activo)
           const { tabs } = await this.request(`/api/spaces/${space.id}`);
           this.spaceTabs = (tabs || []).sort((a, b) => (a.position || 0) - (b.position || 0));
-          this.renderTopBar();
-          
-          // Buscar el tab de Dashboard y abrirlo
-          const dashboardTab = this.spaceTabs.find(t => t.id === tab.id);
-          if (dashboardTab) {
-            // Cargar el tab en TabManager si no está
-            await this.selectSpaceTab(dashboardTab);
-          }
+          this.renderTopBar(); // Actualizar TopBar para mostrar el nuevo tab
         } catch {
           // No mostrar error al usuario - el proyecto se creó exitosamente
         }
@@ -5586,13 +5732,7 @@ class LunaIntegration {
               }, delay);
             } else if (!isSubscribed) {
               // Max retries reached - disable Realtime for this chat permanently
-              console.error(`[Realtime] ❌ Failed to subscribe to chat ${chatId} after ${maxRetries} attempts`);
-              console.error(`[Realtime] Realtime is disabled for this chat. Possible causes:`);
-              console.error(`[Realtime] 1. Realtime is not enabled for the project in Supabase Dashboard > Settings > API`);
-              console.error(`[Realtime] 2. The table is not in the supabase_realtime publication`);
-              console.error(`[Realtime] 3. REPLICA IDENTITY is not set to FULL`);
-              console.error(`[Realtime] 4. Network/firewall is blocking WebSocket connections`);
-              console.error(`[Realtime] 5. The anon key does not have Realtime permissions`);
+              console.error(`[Realtime] Failed to subscribe to chat ${chatId} after ${maxRetries} attempts`);
               
               // Mark this chat as having Realtime disabled to prevent further attempts
               this.chatSubscriptions.set(chatId, null); // null means disabled
@@ -5604,6 +5744,59 @@ class LunaIntegration {
     
     // Start subscription attempt
     attemptSubscribe();
+  }
+  
+  async setupProjectsRealtime() {
+    // Setup Realtime subscription to listen for changes in chat_participants
+    // This will automatically refresh projects when user is added/removed from projects
+    if (!this.user?.id) return;
+    
+    try {
+      const client = await this.initSupabaseClient();
+      if (!client) return;
+      
+      // Unsubscribe from existing channel if any
+      if (this.projectsRealtimeChannel) {
+        this.projectsRealtimeChannel.unsubscribe();
+        this.projectsRealtimeChannel = null;
+      }
+      
+      const channel = client
+        .channel(`projects-updates-${this.user.id}`)
+        .on(
+          'postgres_changes',
+          {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'chat_participants',
+            filter: `user_id=eq.${this.user.id}`
+          },
+          () => {
+            this.loadProjects();
+          }
+        )
+        .on(
+          'postgres_changes',
+          {
+            event: 'DELETE',
+            schema: 'public',
+            table: 'chat_participants',
+            filter: `user_id=eq.${this.user.id}`
+          },
+          () => {
+            this.loadProjects();
+          }
+        )
+        .subscribe((status, err) => {
+          if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+            console.error('[Realtime Projects] Subscription failed:', status, err);
+          }
+        });
+      
+      this.projectsRealtimeChannel = channel;
+    } catch (error) {
+      console.error('[Realtime Projects] Failed to setup subscription:', error);
+    }
   }
   
   showRealtimeError(messagesContainer, message) {
@@ -5654,6 +5847,29 @@ class LunaIntegration {
     }
 
     messages.forEach(msg => {
+      // Detect system messages (user_id is null or message contains system keywords)
+      const isSystemMessage = msg.user_id === null || msg.message?.includes('agregó a') || msg.message?.includes('eliminó a');
+      
+      if (isSystemMessage) {
+        // System messages: centered, gray, no background, smaller text
+        const msgEl = document.createElement('div');
+        msgEl.style.cssText = 'display: flex; justify-content: center; margin: 8px 0;';
+        msgEl.innerHTML = `
+          <div style="
+            color: #9ca3af;
+            font-size: 12px;
+            text-align: center;
+            padding: 4px 12px;
+            max-width: 80%;
+          ">
+            ${this.escapeHTML(msg.message)}
+          </div>
+        `;
+        container.appendChild(msgEl);
+        return;
+      }
+      
+      // Regular user messages
       const isOwn = msg.user_id === user?.id;
       const userName = msg.user?.name || msg.user?.email || 'Unknown';
       const time = new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -6300,6 +6516,8 @@ class LunaIntegration {
 
   async openProjectSettings() {
     if (!this.activeSpace || this.activeSpace.category !== 'project') return;
+    
+    // Both owners and members can open project settings to view members
 
     const sidebar = document.getElementById('project-settings-sidebar');
     if (!sidebar) return;

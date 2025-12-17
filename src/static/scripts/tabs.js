@@ -1120,14 +1120,13 @@ class TabManager {
           // IMPORTANTE: Para Notion, SIEMPRE usar TYPE.notion (NO TYPE.auto que podría usar ScramJet)
           const handler = isNotionUrl ? TYPE.notion : (TYPE[this.prType] || TYPE.auto);
           handler.navigate(urlToNavigate, this, activeTab, f);
-        } else {
-          // Si no necesita navegar, asegurar que el iframe esté visible
-          if (isNotionUrl && f.style.opacity === '0') {
-            f.style.opacity = '1';
-            f.style.zIndex = '10';
-            f.style.pointerEvents = 'auto';
+          // Asegurar que el iframe esté visible después de navegar (especialmente importante para Notion)
+          if (isNotionUrl) {
             this.setFrameState(activeTab.id, true);
           }
+        } else {
+          // Si no necesita navegar, asegurar que el iframe esté visible
+          this.setFrameState(activeTab.id, true);
         }
       } else if (activeTab.url && !f) {
         // Si aún no existe el iframe después de createIframes, crear uno directamente

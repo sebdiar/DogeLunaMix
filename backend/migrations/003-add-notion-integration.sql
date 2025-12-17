@@ -80,3 +80,6 @@ CREATE POLICY "Allow all on notion_config" ON notion_config FOR ALL USING (true)
 
 
 
+
+
+

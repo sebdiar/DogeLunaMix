@@ -137,6 +137,21 @@ function ChatComponent({ chatData }) {
           <div className="text-center text-gray-500">No messages yet. Start the conversation!</div>
         ) : (
           messages.map((msg) => {
+            // Detect if message is a system message (member added/removed notifications)
+            const isSystemMessage = msg.message?.includes('agregó a') || msg.message?.includes('eliminó a');
+            
+            // System messages are displayed differently (centered, gray, smaller, less opacity, no user info)
+            if (isSystemMessage) {
+              return (
+                <div key={msg.id} className="flex justify-center my-1">
+                  <div className="text-xs text-gray-400 opacity-70 text-center px-3 py-1.5 max-w-md">
+                    {msg.message}
+                  </div>
+                </div>
+              );
+            }
+            
+            // Regular user messages
             const isOwn = msg.user_id === user?.id;
             return (
               <div

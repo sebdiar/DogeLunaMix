@@ -108,14 +108,13 @@ router.post('/config', async (req, res) => {
 
 // Webhook endpoint (NO requiere autenticación - Notion llama este endpoint)
 // IMPORTANTE: Este endpoint debe ser público para que Notion pueda llamarlo
+// TEMPORALMENTE DESHABILITADO: Los proyectos solo se crean desde la app, no desde webhooks
 router.post('/webhook', async (req, res) => {
   try {
-    // Notion envía un header X-Notion-Signature para verificar la autenticidad
-    // Por ahora, confiamos en que viene de Notion (en producción, verificar la firma)
-    const signature = req.headers['x-notion-signature'];
-    
-    // Log del body completo para debugging
-    console.log('Webhook received:', JSON.stringify(req.body, null, 2));
+    // WEBHOOK DESHABILITADO TEMPORALMENTE
+    // Los proyectos solo se crean cuando el usuario los crea en la app (POST /api/spaces)
+    // El webhook NO debe crear proyectos automáticamente
+    console.log('⚠️  Webhook received but IGNORED - projects are only created from the app, not from Notion webhooks');
     
     // Manejar verificación de webhook (Notion envía un verification_token)
     if (req.body.type === 'webhook.verification' || req.body.verification_token) {
@@ -125,54 +124,8 @@ router.post('/webhook', async (req, res) => {
       return res.status(200).json({ verification_token });
     }
     
-    // Obtener el evento del body
-    // Notion puede enviar el evento de diferentes formas:
-    // - { object: 'page', type: 'page.deleted', data: { id: '...' } }
-    // - { type: 'page.deleted', record: { id: '...' } }
-    const { object, type, data, record } = req.body;
-    
-    // Determinar el pageId según la estructura del evento
-    let pageId = null;
-    if (data?.id) {
-      pageId = data.id;
-    } else if (record?.id) {
-      pageId = record.id;
-    } else if (data) {
-      pageId = data;
-    }
-    
-    // Solo procesar eventos de páginas (pages)
-    if (object !== 'page' && !pageId) {
-      return res.status(200).json({ received: true, message: 'Not a page event, ignoring' });
-    }
-    
-    // Obtener configuración global de Notion
-    const apiKey = process.env.NOTION_API_KEY;
-    const databaseId = process.env.NOTION_DATABASE_ID;
-    
-    if (!apiKey || !databaseId) {
-      return res.status(200).json({ received: true, message: 'Notion not configured' });
-    }
-    
-    // Procesar según el tipo de evento
-    switch (type) {
-      case 'page.created':
-      case 'page.updated':
-        await handlePageUpdate(data || record, apiKey, databaseId);
-        break;
-      case 'page.archived':
-        await handlePageArchived(data || record || { id: pageId });
-        break;
-      case 'page.deleted':
-        // Para page.deleted, usar el pageId directamente
-        await handlePageDeleted({ id: pageId });
-        break;
-      default:
-        console.log('Unhandled webhook event type:', type);
-    }
-    
-    // Responder 200 OK inmediatamente (Notion espera respuesta rápida)
-    res.status(200).json({ received: true });
+    // Responder 200 OK pero no procesar nada (evitar creación automática de proyectos)
+    res.status(200).json({ received: true, message: 'Webhook disabled - projects only created from app' });
   } catch (error) {
     console.error('Webhook error:', error);
     // Responder 200 para que Notion no reintente infinitamente
@@ -235,42 +188,91 @@ async function handlePageUpdate(pageData, apiKey, databaseId) {
       isArchived = true;
     }
     
-    // Buscar espacio existente por notion_page_id
-    const { data: existingSpace } = await supabase
+    // Buscar TODOS los espacios existentes por notion_page_id (puede haber uno por cada usuario)
+    const { data: allExistingSpaces } = await supabase
       .from('spaces')
       .select('*')
       .eq('notion_page_id', pageId)
-      .single();
+      .eq('category', 'project')
+      .order('created_at', { ascending: true });
     
-    if (existingSpace) {
-      // Actualizar espacio existente
-      // Mapear parent_id de Notion a local
-      let parentSpaceId = null;
-      if (parentNotionPageId) {
-        const { data: parentSpace } = await supabase
-          .from('spaces')
-          .select('id')
-          .eq('notion_page_id', parentNotionPageId)
-          .single();
-        if (parentSpace) {
-          parentSpaceId = parentSpace.id;
+    // Agrupar por user_id para detectar duplicados por usuario
+    const spacesByUserId = new Map();
+    if (allExistingSpaces) {
+      for (const space of allExistingSpaces) {
+        if (!spacesByUserId.has(space.user_id)) {
+          spacesByUserId.set(space.user_id, []);
         }
+        spacesByUserId.get(space.user_id).push(space);
       }
-      
-      await supabase
-        .from('spaces')
-        .update({
-          name: pageName,
-          parent_id: parentSpaceId,
-          archived: isArchived,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', existingSpace.id);
+    }
+    
+    // Para cada usuario, eliminar duplicados (mantener solo el más antiguo)
+    const spacesToUpdate = [];
+    for (const [userId, userSpaces] of spacesByUserId.entries()) {
+      if (userSpaces.length > 1) {
+        // Hay duplicados para este usuario, eliminar los más recientes
+        userSpaces.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+        const original = userSpaces[0];
+        const duplicates = userSpaces.slice(1);
+        
+        console.log(`⚠️ Found ${duplicates.length} duplicate(s) for user ${userId} and notion_page_id ${pageId}, removing duplicates...`);
+        
+        for (const duplicate of duplicates) {
+          const { error: deleteError } = await supabase
+            .from('spaces')
+            .delete()
+            .eq('id', duplicate.id);
+          
+          if (deleteError) {
+            console.error(`Error deleting duplicate project ${duplicate.id}:`, deleteError);
+          } else {
+            console.log(`✅ Deleted duplicate project ${duplicate.id} (user: ${userId}, notion_page_id: ${pageId})`);
+          }
+        }
+        
+        spacesToUpdate.push(original);
+      } else if (userSpaces.length === 1) {
+        spacesToUpdate.push(userSpaces[0]);
+      }
+    }
+    
+    // Actualizar TODOS los espacios (uno por cada usuario) con los datos de Notion
+    if (spacesToUpdate.length > 0) {
+      // Actualizar cada espacio según su usuario
+      for (const space of spacesToUpdate) {
+        // Para parent_id, buscar el espacio del mismo usuario con el parent notion_page_id
+        let parentSpaceId = null;
+        if (parentNotionPageId) {
+          const { data: userParentSpace } = await supabase
+            .from('spaces')
+            .select('id')
+            .eq('notion_page_id', parentNotionPageId)
+            .eq('user_id', space.user_id)
+            .eq('category', 'project')
+            .maybeSingle();
+          
+          if (userParentSpace) {
+            parentSpaceId = userParentSpace.id;
+          }
+        }
+        
+        await supabase
+          .from('spaces')
+          .update({
+            name: pageName,
+            parent_id: parentSpaceId,
+            archived: isArchived,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', space.id);
+      }
     } else {
       // Página nueva en Notion que no existe localmente
-      // NO creamos automáticamente - se sincronizará cuando el usuario cargue proyectos
-      // Esto evita crear espacios para usuarios que no los necesitan
-      console.log(`New Notion page detected (${pageId}: ${pageName}), will sync on next project load`);
+      // NO creamos automáticamente - los proyectos solo se crean cuando el usuario los crea en la app
+      // El flujo es: Usuario crea proyecto en app → se crea en Notion (no al revés)
+      console.log(`New Notion page detected (${pageId}: ${pageName}), but NOT creating locally - projects are only created from the app`);
+      // No hacer nada - los proyectos se crean únicamente desde la aplicación, no desde webhooks de Notion
     }
   } catch (error) {
     console.error('Error handling page update:', error);
