@@ -38,9 +38,14 @@ async function getTaskDetails(apiKey, taskId) {
     // Extract title
     let title = 'Untitled';
     if (page.properties) {
-      // Try to find title property (usually 'Name' or first title property)
+      // Try to find title property (usually 'Name', 'Task', or first title property)
       if (page.properties.Name && page.properties.Name.title) {
         const titleArray = page.properties.Name.title;
+        if (titleArray.length > 0 && titleArray[0].text) {
+          title = titleArray[0].text.content;
+        }
+      } else if (page.properties.Task && page.properties.Task.title) {
+        const titleArray = page.properties.Task.title;
         if (titleArray.length > 0 && titleArray[0].text) {
           title = titleArray[0].text.content;
         }
@@ -60,7 +65,7 @@ async function getTaskDetails(apiKey, taskId) {
     let assignee = null;
     if (page.properties) {
       // Try common assignee property names
-      const assigneePropNames = ['Asignado', 'Assignee', 'Assigned to', 'Person', 'Responsible'];
+      const assigneePropNames = ['User', 'Asignado', 'Assignee', 'Assigned to', 'Person', 'Responsible'];
       for (const propName of assigneePropNames) {
         if (page.properties[propName] && page.properties[propName].type === 'people') {
           const people = page.properties[propName].people;
