@@ -83,6 +83,8 @@ export default function ProfileSettings() {
           setUser(updatedUser.user);
           setPreview(updatedUser.user?.avatar_photo || null);
           api.setUser(updatedUser.user);
+          // Dispatch event to update sidebar user info
+          window.dispatchEvent(new Event('userProfileUpdated'));
           setSuccess('Profile photo updated successfully');
           
           // Clear success message after 3 seconds
@@ -117,6 +119,8 @@ export default function ProfileSettings() {
       setUser(updatedUser.user);
       setPreview(null);
       api.setUser(updatedUser.user);
+      // Dispatch event to update sidebar user info
+      window.dispatchEvent(new Event('userProfileUpdated'));
       setSuccess('Profile photo removed successfully');
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {

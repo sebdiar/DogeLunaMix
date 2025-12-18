@@ -1,15 +1,5 @@
 // Luna Integration - Integrate backend tabs with TabManager
-// Determine API URL based on environment
-const getApiUrl = () => {
-  // In development, if we're in an iframe (like Notion), use the backend URL directly
-  if (window.location.hostname === 'localhost' && window.self !== window.top) {
-    return 'http://localhost:3001';
-  }
-  // Otherwise use relative URLs (proxy will handle it)
-  return '';
-};
-
-const API_URL = getApiUrl();
+const API_URL = '';
 
 class LunaIntegration {
   constructor() {
@@ -28,19 +18,11 @@ class LunaIntegration {
     this.chatNotificationChannel = null; // Supabase Realtime channel for chat notifications
     this.supabaseClient = null; // Supabase client for realtime
     this.chatSubscriptions = new Map(); // Map of chatId -> subscription channel
-    this.chatToSpaceMap = new Map(); // Map of chatId -> spaceId for quick lookups
-    this.projectsRealtimeChannel = null; // Supabase Realtime channel for projects updates
     
     this.init();
   }
 
   async request(endpoint, options = {}) {
-    // Always get fresh token from localStorage in case it was updated
-    const token = localStorage.getItem('dogeub_token') || this.token;
-    if (token !== this.token) {
-      this.token = token;
-    }
-    
     const headers = {
       'Content-Type': 'application/json',
       ...(this.token && { Authorization: `Bearer ${this.token}` }),
@@ -54,8 +36,7 @@ class LunaIntegration {
       });
 
       if (!response.ok) {
-        // For 401, always logout (authentication error)
-        if (response.status === 401) {
+        if (response.status === 401 || response.status === 403) {
           localStorage.removeItem('dogeub_token');
           localStorage.removeItem('dogeub_user');
           this.token = null;
@@ -66,52 +47,8 @@ class LunaIntegration {
             window.location.href = '/login';
           }
           throw new Error('UNAUTHORIZED');
-        }
-        
-        // For 403, check if it's a permission error or auth error
-        if (response.status === 403) {
-          try {
-            const errorData = await response.clone().json();
-            const errorMsg = errorData.error || '';
-            // If it's a permission error (space ownership, etc), don't logout
-            if (errorMsg.includes('Not authorized') || errorMsg.includes('Access denied') || errorMsg.includes('Permission')) {
-              console.error('Permission denied:', errorMsg);
-              throw new Error(errorMsg || 'Permission denied');
-            }
-            // If it's a token/auth related 403, logout
-            if (errorMsg.includes('token') || errorMsg.includes('Invalid') || errorMsg.includes('No token')) {
-              localStorage.removeItem('dogeub_token');
-              localStorage.removeItem('dogeub_user');
-              this.token = null;
-              this.user = null;
-              if (window.parent && window.parent !== window) {
-                window.parent.postMessage({ action: 'navigate', to: '/login' }, '*');
-              } else {
-                window.location.href = '/login';
-              }
-              throw new Error('UNAUTHORIZED');
-            }
-          } catch (e) {
-            // If error was already thrown, re-throw it
-            if (e.message === 'UNAUTHORIZED' || e.message.includes('Permission') || e.message.includes('denied')) {
-              throw e;
-            }
-            // If we can't parse the error, assume it's a permission issue (don't logout for 403)
-            console.error('403 Forbidden:', e);
-            throw new Error('Permission denied');
-          }
-        }
-        
-        // For other errors, try to get error message
-        try {
-          const errorData = await response.clone().json();
-          throw new Error(errorData.error || `Request failed: ${response.status}`);
-        } catch (e) {
-          if (e.message && e.message !== `Request failed: ${response.status}`) {
-            throw e;
           }
           throw new Error(`Request failed: ${response.status}`);
-        }
       }
 
       return response.json();
@@ -146,6 +83,8 @@ class LunaIntegration {
           console.log('Notification permission granted');
           // Setup chat notifications after permission is granted
           await this.setupChatNotifications();
+        } else {
+          console.log('Notification permission denied');
         }
       } else if (Notification.permission === 'granted') {
         // Already granted, setup notifications
@@ -158,6 +97,7 @@ class LunaIntegration {
 
   async setupChatNotifications() {
     if (!this.user || !this.user.id) {
+      console.log('Cannot setup chat notifications: user not authenticated');
       return;
     }
 
@@ -194,6 +134,7 @@ class LunaIntegration {
         .eq('user_id', this.user.id);
 
       if (!chatParticipants || chatParticipants.length === 0) {
+        console.log('No chats found for user');
         return;
       }
 
@@ -274,6 +215,7 @@ class LunaIntegration {
 
       // Store channel for cleanup
       this.chatNotificationChannel = channel;
+      console.log('Chat notifications setup complete');
     } catch (error) {
       console.error('Failed to setup chat notifications:', error);
     }
@@ -354,39 +296,15 @@ class LunaIntegration {
     }
 
     this.renderUserInfo(); // Render user info
-    
-    // Load preferences FIRST (needed for updateDesktopMoreTabs to know which tabs are in "More")
-    // This allows tabs to collapse into "More" immediately after loading, before projects/users
-    await this.loadPreferences();
-    
-    // OPTIMIZATION: Load tabs, projects, and users in PARALLEL (not sequentially)
-    // They are independent, so loading them together reduces total time
-    // This reduces total load time from (tabs_time + projects_time + users_time) to max(tabs_time, projects_time, users_time)
-    const [tabsResult, projectsResult, usersResult] = await Promise.allSettled([
-      this.loadPersonalTabs(),
-      this.loadProjects(),
-      this.loadUsers()
-    ]);
-    
-    // Handle any errors from parallel loading
-    if (tabsResult.status === 'rejected') {
-      console.error('Failed to load tabs:', tabsResult.reason);
-    }
-    if (projectsResult.status === 'rejected') {
-      console.error('Failed to load projects:', projectsResult.reason);
-    }
-    if (usersResult.status === 'rejected') {
-      console.error('Failed to load users:', usersResult.reason);
-    }
-    
-    // Setup Realtime for projects sidebar updates
-    this.setupProjectsRealtime();
-    
-    // Initialize project settings
-    this.initProjectSettings();
+    await this.loadPersonalTabs();
+    await this.loadProjects();
+    await this.loadUsers();
 
-    // Note: loadPreferences() and updateDesktopMoreTabs() are now called immediately after loading tabs
-    // (in loadPersonalTabs), so tabs collapse in "More" instantly (~2-3 seconds) instead of waiting 18 seconds
+    // Load preferences from backend first (this will cache them)
+    await this.loadPreferences();
+
+    // Update desktop More tabs
+    await this.updateDesktopMoreTabs();
 
     // Monitor TabManager for changes
     this.setupTabManagerMonitoring();
@@ -657,10 +575,6 @@ class LunaIntegration {
       // Sync tabs from backend to TabManager (solo si no hay espacio activo)
       if (!this.activeSpace && window.tabManager) {
         await this.syncTabsToTabManager();
-        
-        // Update desktop More tabs IMMEDIATELY after syncing tabs (before loading projects/users)
-        // This applies the cached "More" state from localStorage, making tabs collapse instantly
-        await this.updateDesktopMoreTabs(true); // skipRender=true since syncTabsToTabManager already rendered
       }
       
       this.renderPersonalTabs();
@@ -944,26 +858,7 @@ class LunaIntegration {
       const { spaces } = await this.request('/api/spaces?category=project');
       this.projects = spaces || [];
       
-      // OPTIMIZATION: Initialize unreadCount to 0 for all projects (render immediately)
-      // This allows projects to render instantly without waiting for unread counts
-      this.projects.forEach(project => {
-        if (project.unreadCount === undefined) {
-          project.unreadCount = 0;
-        }
-      });
-      
-      // Render projects IMMEDIATELY (without unread counts)
       this.renderProjects();
-      
-      // Load unread message counts in BACKGROUND (don't block UI)
-      // This will update the badges when counts are loaded
-      this.loadUnreadCounts().then(() => {
-        // Re-render projects to show updated unread counts
-        this.renderProjects();
-      }).catch(err => {
-        // Silently handle errors - projects are already rendered
-        console.error('Failed to load unread counts for projects:', err);
-      });
       
       // Crear tabs Dashboard faltantes para proyectos existentes
       this.createMissingDashboardTabs();
@@ -974,23 +869,6 @@ class LunaIntegration {
         container.innerHTML = '<div class="text-xs text-red-400 px-2 py-1">Error loading projects</div>';
       }
     }
-  }
-
-  async loadUnreadCounts() {
-    if (!this.projects || this.projects.length === 0) return;
-    
-    // Load unread counts for all projects in parallel
-    const countPromises = this.projects.map(async (project) => {
-      try {
-        const { unreadCount } = await this.request(`/api/chat/space/${project.id}/unread-count`);
-        project.unreadCount = unreadCount || 0;
-      } catch (err) {
-        console.error(`Failed to load unread count for project ${project.id}:`, err);
-        project.unreadCount = 0;
-      }
-    });
-    
-    await Promise.all(countPromises);
   }
 
   async createMissingDashboardTabs() {
@@ -2474,8 +2352,10 @@ class LunaIntegration {
             tabEl.classList.add('tab-item');
           }
           
-          // No agregar mx-2 aquí - el CSS ya maneja los márgenes con margin-left y margin-right
-          // Los tabs en More dropdown deben tener el mismo margen que en el sidebar (8px = 0.5rem)
+          // Add mx-2 for margin like sidebar tabs
+          if (!tabEl.classList.contains('mx-2')) {
+            tabEl.classList.add('mx-2');
+          }
 
           if (!isEditing) {
             tabEl.addEventListener('click', (e) => {
@@ -2493,64 +2373,6 @@ class LunaIntegration {
           container.appendChild(tabEl);
         }
       });
-      
-      // Setup menu handlers para More dropdown tabs (igual que sidebar)
-      if (!isEditing) {
-        container.querySelectorAll('.tab-menu-btn').forEach(btn => {
-          btn.onclick = async (e) => {
-            e.stopPropagation();
-            const tabId = +btn.dataset.tabId;
-            const tab = moreTabs.find(t => t.id === tabId);
-            if (tab) {
-              // IMPORTANTE: Buscar el tab en TabManager para obtener el backendId correcto
-              // porque tab.id puede ser el ID del TabManager (número) y no el UUID del backend
-              let backendId = tab.backendId;
-              if (!backendId && window.tabManager) {
-                const tabManagerTab = window.tabManager.tabs.find(t => t.id === tab.id);
-                if (tabManagerTab && tabManagerTab.backendId) {
-                  backendId = tabManagerTab.backendId;
-                }
-              }
-              
-              // Si tiene backendId, obtener datos actualizados del backend
-              if (backendId) {
-                try {
-                  const response = await this.request(`/api/tabs/${backendId}`);
-                  this.showTabMenu(e, response.tab);
-                } catch (err) {
-                  // Si falla, usar datos del tab actual pero asegurar que backendId esté correcto
-                  const backendTab = {
-                    id: backendId, // Usar el backendId encontrado
-                    backendId: backendId, // Asegurar que backendId esté disponible
-                    title: tab.title,
-                    url: tab.url,
-                    bookmark_url: tab.url,
-                    avatar_emoji: tab.avatar_emoji,
-                    avatar_color: tab.avatar_color,
-                    avatar_photo: tab.avatar_photo,
-                    cookie_container_id: tab.cookie_container_id,
-                    space_id: tab.space_id
-                  };
-                  this.showTabMenu(e, backendTab);
-                }
-              } else {
-                // Tab sin backendId (tab nuevo o local) - crear objeto temporal
-                const backendTab = {
-                  id: null,
-                  title: tab.title,
-                  url: tab.url,
-                  bookmark_url: tab.url,
-                  avatar_emoji: tab.avatar_emoji,
-                  avatar_color: tab.avatar_color,
-                  avatar_photo: tab.avatar_photo,
-                  cookie_container_id: tab.cookie_container_id
-                };
-                this.showTabMenu(e, backendTab);
-              }
-            }
-          };
-        });
-      }
     }
 
     if (isEditing) {
@@ -3078,27 +2900,7 @@ class LunaIntegration {
     try {
       const { spaces } = await this.request('/api/spaces?category=user');
       this.users = spaces || [];
-      
-      // OPTIMIZATION: Initialize unreadCount to 0 for all users (render immediately)
-      // This allows users to render instantly without waiting for unread counts
-      this.users.forEach(user => {
-        if (user.unreadCount === undefined) {
-          user.unreadCount = 0;
-        }
-      });
-      
-      // Render users IMMEDIATELY (without unread counts)
       this.renderUsers();
-      
-      // Load unread message counts in BACKGROUND (don't block UI)
-      // This will update the badges when counts are loaded
-      this.loadUnreadCountsForUsers().then(() => {
-        // Re-render users to show updated unread counts
-        this.renderUsers();
-      }).catch(err => {
-        // Silently handle errors - users are already rendered
-        console.error('Failed to load unread counts for users:', err);
-      });
     } catch (err) {
       console.error('Failed to load users:', err);
       const container = document.getElementById('users-cont');
@@ -3106,23 +2908,6 @@ class LunaIntegration {
         container.innerHTML = '<div class="text-xs text-red-400 px-2 py-1">Error loading messages</div>';
       }
     }
-  }
-
-  async loadUnreadCountsForUsers() {
-    if (!this.users || this.users.length === 0) return;
-    
-    // Load unread counts for all users in parallel
-    const countPromises = this.users.map(async (user) => {
-      try {
-        const { unreadCount } = await this.request(`/api/chat/space/${user.id}/unread-count`);
-        user.unreadCount = unreadCount || 0;
-      } catch (err) {
-        console.error(`Failed to load unread count for user ${user.id}:`, err);
-        user.unreadCount = 0;
-      }
-    });
-    
-    await Promise.all(countPromises);
   }
 
   renderPersonalTabs() {
@@ -3618,71 +3403,21 @@ class LunaIntegration {
   renderTopBar() {
     const topbarSpace = document.getElementById('topbar-space');
     const topbarSpaceName = document.getElementById('topbar-space-name');
-    const topbarSpaceAvatar = document.getElementById('topbar-space-avatar');
     const topbarTabsCont = document.getElementById('topbar-tabs-cont');
-    const topbarSettingsBtn = document.getElementById('topbar-settings-btn');
     
-    if (!topbarSpace || !topbarSpaceName || !topbarSpaceAvatar || !topbarTabsCont) return;
+    if (!topbarSpace || !topbarSpaceName || !topbarTabsCont) return;
 
     if (!this.activeSpace) {
       // Hide TopBar when no space is active
       topbarSpace.classList.add('hidden');
       topbarSpace.style.display = 'none';
-      if (topbarSettingsBtn) {
-        topbarSettingsBtn.style.display = 'none';
-      }
       return;
     }
 
     // Show TopBar
     topbarSpace.classList.remove('hidden');
     topbarSpace.style.display = 'flex'; // Ensure it's displayed
-    
-    // Show/hide settings button based on space category (only for projects)
-    // Show for both owners and members
-    if (topbarSettingsBtn) {
-      if (this.activeSpace.category === 'project') {
-        topbarSettingsBtn.style.display = 'flex';
-        // Initialize icon if not already done
-        if (window.lucide && window.lucide.createIcons) {
-          window.lucide.createIcons();
-        }
-      } else {
-        topbarSettingsBtn.style.display = 'none';
-      }
-    }
-    
-    // Set space name
     topbarSpaceName.textContent = this.activeSpace.display_name || this.activeSpace.name;
-    
-    // Set space avatar/photo
-    // For user spaces (DMs): use other_user_photo
-    // For personal notes: use current user's photo
-    // For project spaces: use avatar_photo
-    let avatarPhoto;
-    if (this.activeSpace.category === 'user') {
-      if (this.activeSpace.is_personal_notes) {
-        // Personal notes - use current user's photo
-        avatarPhoto = this.user?.avatar_photo || this.activeSpace.other_user_photo;
-      } else {
-        // DM with another user
-        avatarPhoto = this.activeSpace.other_user_photo;
-      }
-    } else {
-      // Project space
-      avatarPhoto = this.activeSpace.avatar_photo;
-    }
-    
-    if (avatarPhoto) {
-      topbarSpaceAvatar.innerHTML = `<img src="${avatarPhoto}" alt="" class="w-full h-full object-cover" />`;
-    } else if (this.activeSpace.avatar_emoji) {
-      topbarSpaceAvatar.innerHTML = `<span class="text-xs">${this.activeSpace.avatar_emoji}</span>`;
-    } else {
-      // Fallback: first letter of name
-      const displayName = this.activeSpace.display_name || this.activeSpace.name || '';
-      const firstLetter = displayName[0]?.toUpperCase() || '?';
-      topbarSpaceAvatar.innerHTML = `<span class="text-xs">${firstLetter}</span>`;
-    }
 
     // Render space tabs in TopBar
     if (!this.spaceTabs || this.spaceTabs.length === 0) {
@@ -3703,90 +3438,31 @@ class LunaIntegration {
     );
 
     // Filtrar tabs de TabManager que pertenecen a este espacio
-    // IMPORTANTE: Para tabs de Notion, también considerar originalUrl porque el tab puede tener
-    // la URL del Cloudflare Worker mientras que spaceTabs tiene la URL original de Notion
     let spaceTabsInTabManager = (window.tabManager?.tabs || []).filter(t => {
       const tUrl = t.url || '';
       if (!tUrl || tUrl === '/new' || tUrl === 'tabs://new') return false;
-      
-      // Normalizar la URL del tab
-      const normalizedTabUrl = this.normalizeUrl(tUrl);
-      
-      // Si el tab tiene originalUrl (típico de tabs de Notion), también comparar con ese
-      if (t.originalUrl) {
-        const normalizedOriginalUrl = this.normalizeUrl(t.originalUrl);
-        return spaceTabUrls.has(normalizedTabUrl) || spaceTabUrls.has(normalizedOriginalUrl);
-      }
-      
-      return spaceTabUrls.has(normalizedTabUrl);
+      return spaceTabUrls.has(this.normalizeUrl(tUrl));
     });
     
     // Ordenar según el orden del backend (position) - mapear cada tab de TabManager con su backend tab
-    // IMPORTANTE: Para tabs de Notion, también considerar originalUrl
     spaceTabsInTabManager = spaceTabsInTabManager.sort((a, b) => {
-      const findBackendTab = (tabManagerTab) => {
-        return this.spaceTabs.find(t => {
+      const backendTabA = this.spaceTabs.find(t => {
           const url = t.url || t.bookmark_url;
-          if (!url) return false;
-          const normalizedBackendUrl = this.normalizeUrl(url);
-          const normalizedTabUrl = this.normalizeUrl(tabManagerTab.url || '');
-          
-          // Comparar URL directa
-          if (normalizedBackendUrl === normalizedTabUrl) return true;
-          
-          // Si el tab tiene originalUrl, también comparar con ese
-          if (tabManagerTab.originalUrl) {
-            const normalizedOriginalUrl = this.normalizeUrl(tabManagerTab.originalUrl);
-            return normalizedBackendUrl === normalizedOriginalUrl;
-          }
-          
-          return false;
-        });
-      };
-      
-      const backendTabA = findBackendTab(a);
-      const backendTabB = findBackendTab(b);
+        return url && this.normalizeUrl(url) === this.normalizeUrl(a.url || '');
+      });
+      const backendTabB = this.spaceTabs.find(t => {
+        const url = t.url || t.bookmark_url;
+        return url && this.normalizeUrl(url) === this.normalizeUrl(b.url || '');
+      });
       
       const positionA = backendTabA?.position || 0;
       const positionB = backendTabB?.position || 0;
       return positionA - positionB;
     });
-
-    // DEDUPLICAR: Si hay múltiples tabs con la misma URL/backendId, mantener solo el primero
-    // Esto evita mostrar tabs duplicados visualmente en el TopBar
-    const seenUrls = new Set();
-    const seenBackendIds = new Set();
-    const deduplicatedTabs = [];
-    
-    for (const tabManagerTab of spaceTabsInTabManager) {
-      const tabUrl = tabManagerTab.url || '';
-      const normalizedTabUrl = this.normalizeUrl(tabUrl);
-      const backendId = tabManagerTab.backendId;
-      
-      // Si tiene backendId, usar eso como clave única (más confiable)
-      if (backendId && seenBackendIds.has(backendId)) {
-        continue; // Ya existe un tab con este backendId
-      }
-      
-      // Si no tiene backendId pero tiene URL, usar URL normalizada como clave
-      if (!backendId && normalizedTabUrl && seenUrls.has(normalizedTabUrl)) {
-        continue; // Ya existe un tab con esta URL
-      }
-      
-      // Marcar como visto
-      if (backendId) {
-        seenBackendIds.add(backendId);
-      }
-      if (normalizedTabUrl) {
-        seenUrls.add(normalizedTabUrl);
-      }
-      
-      deduplicatedTabs.push(tabManagerTab);
-    }
     
     // USAR EXACTAMENTE EL MISMO tabTemplate - CÓDIGO ÚNICO
     // Estos son los MISMOS objetos de TabManager, solo cambia isTopBar=true
-    deduplicatedTabs.forEach(tabManagerTab => {
+    spaceTabsInTabManager.forEach(tabManagerTab => {
       // USAR EL OBJETO REAL DE TabManager - NO CREAR COPIA
       const tabHtml = window.tabManager.tabTemplate(tabManagerTab, true, true); // showMenu=true, isTopBar=true
       
@@ -3795,23 +3471,10 @@ class LunaIntegration {
       const tabEl = tabWrapper.firstElementChild;
       
       // Buscar el tab del backend correspondiente para los handlers
-      // IMPORTANTE: Para tabs de Notion, también considerar originalUrl
       const backendTab = this.spaceTabs.find(t => {
         const url = t.url || t.bookmark_url;
         if (!url) return false;
-        const normalizedBackendUrl = this.normalizeUrl(url);
-        const normalizedTabUrl = this.normalizeUrl(tabManagerTab.url || '');
-        
-        // Comparar URL directa
-        if (normalizedBackendUrl === normalizedTabUrl) return true;
-        
-        // Si el tab tiene originalUrl, también comparar con ese
-        if (tabManagerTab.originalUrl) {
-          const normalizedOriginalUrl = this.normalizeUrl(tabManagerTab.originalUrl);
-          return normalizedBackendUrl === normalizedOriginalUrl;
-        }
-        
-        return false;
+        return this.normalizeUrl(url) === this.normalizeUrl(tabManagerTab.url || '');
       });
       
       // Agregar data-sortable-id para drag & drop (usar backendId)
@@ -3963,31 +3626,16 @@ class LunaIntegration {
     
     // Buscar si el tab ya está abierto en TabManager (es el MISMO tab)
     // IMPORTANTE: Excluir tabs con /new o tabs://new (estos son tabs "nuevos" no inicializados)
-    // Priorizar búsqueda por backendId (más confiable) y luego por URL
     const existingTab = tabManagerTabs.find(t => {
       const tUrl = t.url || '';
       if (!tUrl || tUrl === '/new' || tUrl === 'tabs://new') return false;
-      
-      // PRIMERO: Buscar por backendId (más confiable si está disponible)
-      if (tab.id && t.backendId === tab.id) return true;
-      
-      // SEGUNDO: Comparar URLs normalizadas
-      const normalizedTabUrl = this.normalizeUrl(tUrl);
-      if (normalizedTabUrl === normalizedUrl) return true;
-      
-      // TERCERO: Si el tab tiene originalUrl, también comparar con ese
-      if (t.originalUrl) {
-        const normalizedOriginalUrl = this.normalizeUrl(t.originalUrl);
-        if (normalizedOriginalUrl === normalizedUrl) return true;
-      }
-      
-      return false;
+      // Comparar URLs normalizadas
+      return this.normalizeUrl(tUrl) === normalizedUrl;
     });
 
     if (existingTab) {
-      // Tab ya existe - activarlo (es el MISMO tab)
+      // Tab ya existe - solo activarlo (es el MISMO tab)
       window.tabManager.activate(existingTab.id);
-      
       // Si es chat, asegurar que esté inicializado INMEDIATAMENTE
       if (this.isChatUrl(url)) {
         const spaceId = url.split('/').pop();
@@ -3996,9 +3644,6 @@ class LunaIntegration {
           // Inicializar chat inmediatamente si no está inicializado
           if (!chatContainer.querySelector('.chat-container')) {
             this.initChat(existingTab.id, spaceId);
-          } else {
-            // Chat ya está inicializado - marcar mensajes como leídos cuando se activa
-            this.markChatAsRead(spaceId);
           }
         } else {
           // Si el container no existe, crearlo e inicializar
@@ -4008,16 +3653,6 @@ class LunaIntegration {
             this.initChat(existingTab.id, spaceId);
           }
         }
-      } else {
-        // Para tabs normales (incluyendo Notion), asegurar que el iframe esté visible
-        // Usar un pequeño delay para asegurar que activate() haya terminado completamente
-        setTimeout(() => {
-          const iframe = document.getElementById(`iframe-${existingTab.id}`);
-          if (iframe && window.tabManager) {
-            // Forzar visibilidad del iframe
-            window.tabManager.setFrameState(existingTab.id, true);
-          }
-        }, 50);
       }
     } else {
       // Tab no existe - crear nuevo tab directamente con la URL correcta
@@ -4101,10 +3736,9 @@ class LunaIntegration {
 
     const rect = button.getBoundingClientRect();
     const menu = document.createElement('div');
-    menu.className = 'tab-menu-dropdown absolute bg-white border border-[#e8eaed] rounded-lg shadow-lg py-1 min-w-[160px]';
+    menu.className = 'tab-menu-dropdown absolute bg-white border border-[#e8eaed] rounded-lg shadow-lg py-1 z-50 min-w-[160px]';
     menu.style.left = `${rect.left}px`;
     menu.style.top = `${rect.bottom + 4}px`;
-    menu.style.zIndex = '10001'; // Mayor que el dropdown de More (10000)
 
     // Cookie containers list (hardcoded for now, can be made dynamic later)
     const cookieContainers = [
@@ -4265,20 +3899,9 @@ class LunaIntegration {
           // Tab personal: cerrar desde TabManager (que ya maneja el backend)
           if (window.tabManager) {
             // Buscar el tab en TabManager por backendId o URL
-            // tab.id puede ser el backendId (UUID) o el ID del TabManager (número)
-            // tab.backendId siempre es el UUID del backend si está disponible
             const tabUrl = tab.url || tab.bookmark_url;
-            const backendIdToFind = tab.backendId || tab.id; // Preferir backendId si está disponible
             const tabManagerTab = window.tabManager.tabs.find(t => {
-              // Buscar por backendId primero (más confiable)
-              if (backendIdToFind && t.backendId) {
-                if (String(t.backendId) === String(backendIdToFind)) return true;
-              }
-              // También buscar si tab.id es el backendId
-              if (tab.id && t.backendId) {
-                if (String(t.backendId) === String(tab.id)) return true;
-              }
-              // Buscar por URL como fallback
+              if (tab.id && t.backendId === tab.id) return true;
               if (tabUrl) {
                 const tUrl = t.url || '';
                 if (tUrl && tUrl !== '/new' && tUrl !== 'tabs://new') {
@@ -4289,165 +3912,30 @@ class LunaIntegration {
             });
             
             if (tabManagerTab) {
-              // OPTIMISTIC UI: Cerrar inmediatamente en TabManager (se oculta al instante)
+              // Cerrar usando TabManager.close (que ya está interceptado para manejar el backend)
               window.tabManager.close(tabManagerTab.id);
-              
-              // También remover de More dropdown si está ahí (optimistic UI)
-              if (this.desktopMoreTabs) {
-                const moreIndex = this.desktopMoreTabs.findIndex(t => 
-                  String(t.id) === String(tabManagerTab.id) || 
-                  String(t.backendId || t.id) === String(tab.backendId || tab.id)
-                );
-                if (moreIndex !== -1) {
-                  this.desktopMoreTabs.splice(moreIndex, 1);
-                  // Re-render More dropdown si está abierto
-                  const dropdown = document.getElementById('more-dropdown');
-                  if (dropdown && dropdown.classList.contains('active')) {
-                    this.renderMore(false, 'desktop');
-                  }
-                }
-              }
-              
-              // Sincronizar con backend en background (no bloquear UI)
-              // Si falla, el tab ya está oculto, solo recargar para sincronizar
-              this.loadPersonalTabs().then(() => {
-                this.syncTabsToTabManager();
-                this.updateDesktopMoreTabs();
-              }).catch(() => {
-                // Silently handle errors - tab is already hidden
-              });
             } else {
-              // Si no está en TabManager, remover de More dropdown primero (optimistic UI)
-              if (this.desktopMoreTabs) {
-                const moreIndex = this.desktopMoreTabs.findIndex(t => 
-                  String(t.backendId || t.id) === String(tab.backendId || tab.id)
-                );
-                if (moreIndex !== -1) {
-                  this.desktopMoreTabs.splice(moreIndex, 1);
-                  // Re-render More dropdown si está abierto
-                  const dropdown = document.getElementById('more-dropdown');
-                  if (dropdown && dropdown.classList.contains('active')) {
-                    this.renderMore(false, 'desktop');
-                  }
-                }
+              // Si no está en TabManager, eliminar directamente del backend
+              try {
+                await this.request(`/api/tabs/${tab.id}`, { method: 'DELETE' });
+                // Recargar tabs personales
+                await this.loadPersonalTabs();
+                await this.syncTabsToTabManager();
+              } catch (err) {
+                console.error('Failed to delete personal tab:', err);
+                alert('Failed to delete tab');
               }
-              
-              // IMPORTANTE: Siempre usar backendId si está disponible, nunca usar tab.id directamente
-              // porque tab.id puede ser el ID del TabManager (número) y no el UUID del backend
-              const tabIdToDelete = tab.backendId || (tab.id && typeof tab.id === 'string' && tab.id.includes('-') ? tab.id : null);
-              if (!tabIdToDelete) {
-                console.error('No tab ID available for deletion. Tab:', tab);
-                // Intentar buscar el tab en TabManager por URL como último recurso
-                const tabUrl = tab.url || tab.bookmark_url;
-                if (tabUrl && window.tabManager) {
-                  const tabByUrl = window.tabManager.tabs.find(t => {
-                    const tUrl = t.url || '';
-                    if (tUrl && tUrl !== '/new' && tUrl !== 'tabs://new') {
-                      return this.normalizeUrl(tUrl) === this.normalizeUrl(tabUrl);
-                    }
-                    return false;
-                  });
-                  if (tabByUrl && tabByUrl.backendId) {
-                    // Encontrar por URL, usar su backendId - hacer en background
-                    this.request(`/api/tabs/${tabByUrl.backendId}`, { method: 'DELETE' })
-                      .then(() => {
-                        this.loadPersonalTabs();
-                        this.syncTabsToTabManager();
-                        this.updateDesktopMoreTabs();
-                      })
-                      .catch((err) => {
-                        // Si es 404, el tab ya no existe - solo sincronizar
-                        if (err.message && err.message.includes('404')) {
-                          this.loadPersonalTabs();
-                          this.syncTabsToTabManager();
-                          this.updateDesktopMoreTabs();
-                        } else {
-                          console.error('Failed to delete personal tab by URL:', err);
-                        }
-                      });
-                    return;
-                  }
-                }
-                // Si no se puede encontrar, solo sincronizar (el tab ya está oculto)
-                this.loadPersonalTabs();
-                this.syncTabsToTabManager();
-                this.updateDesktopMoreTabs();
-                return;
-              }
-              
-              // Enviar petición al backend en background (no bloquear UI)
-              this.request(`/api/tabs/${tabIdToDelete}`, { method: 'DELETE' })
-                .then(() => {
-                  // Éxito: recargar para sincronizar
-                  this.loadPersonalTabs();
-                  this.syncTabsToTabManager();
-                  this.updateDesktopMoreTabs();
-                })
-                .catch((err) => {
-                  // Si el error es 404, el tab ya no existe - solo recargar para sincronizar
-                  if (err.message && err.message.includes('404')) {
-                    this.loadPersonalTabs();
-                    this.syncTabsToTabManager();
-                    this.updateDesktopMoreTabs();
-                  } else {
-                    console.error('Failed to delete personal tab:', err);
-                    // No mostrar alert - el tab ya está oculto, solo sincronizar
-                    this.loadPersonalTabs();
-                    this.syncTabsToTabManager();
-                    this.updateDesktopMoreTabs();
-                  }
-                });
             }
           } else {
-            // Fallback: remover de More dropdown primero (optimistic UI)
-            if (this.desktopMoreTabs) {
-              const moreIndex = this.desktopMoreTabs.findIndex(t => 
-                String(t.backendId || t.id) === String(tab.backendId || tab.id)
-              );
-              if (moreIndex !== -1) {
-                this.desktopMoreTabs.splice(moreIndex, 1);
-                // Re-render More dropdown si está abierto
-                const dropdown = document.getElementById('more-dropdown');
-                if (dropdown && dropdown.classList.contains('active')) {
-                  this.renderMore(false, 'desktop');
-                }
-              }
+            // Fallback: eliminar directamente del backend
+            try {
+              await this.request(`/api/tabs/${tab.id}`, { method: 'DELETE' });
+              await this.loadPersonalTabs();
+              await this.syncTabsToTabManager();
+            } catch (err) {
+              console.error('Failed to delete personal tab:', err);
+              alert('Failed to delete tab');
             }
-            
-            // IMPORTANTE: Siempre usar backendId si está disponible, nunca usar tab.id directamente
-            // porque tab.id puede ser el ID del TabManager (número) y no el UUID del backend
-            const tabIdToDelete = tab.backendId || (tab.id && typeof tab.id === 'string' && tab.id.includes('-') ? tab.id : null);
-            if (!tabIdToDelete) {
-              console.error('No tab ID available for deletion. Tab:', tab);
-              // Si no se puede encontrar, solo sincronizar (el tab ya está oculto)
-              this.loadPersonalTabs();
-              this.syncTabsToTabManager();
-              this.updateDesktopMoreTabs();
-              return;
-            }
-            
-            // Enviar petición al backend en background (no bloquear UI)
-            this.request(`/api/tabs/${tabIdToDelete}`, { method: 'DELETE' })
-              .then(() => {
-                // Éxito: recargar para sincronizar
-                this.loadPersonalTabs();
-                this.syncTabsToTabManager();
-                this.updateDesktopMoreTabs();
-              })
-              .catch((err) => {
-                // Si el error es 404, el tab ya no existe - solo recargar para sincronizar
-                if (err.message && err.message.includes('404')) {
-                  this.loadPersonalTabs();
-                  this.syncTabsToTabManager();
-                  this.updateDesktopMoreTabs();
-                } else {
-                  console.error('Failed to delete personal tab:', err);
-                  // No mostrar alert - el tab ya está oculto, solo sincronizar
-                  this.loadPersonalTabs();
-                  this.syncTabsToTabManager();
-                  this.updateDesktopMoreTabs();
-                }
-              });
           }
         }
       };
@@ -5088,14 +4576,11 @@ class LunaIntegration {
           ${iconHtml}
         </div>
         <span class="flex-1 text-xs truncate">${this.escapeHTML(project.name)}</span>
-        <div class="flex items-center gap-1.5">
           <button class="project-archive-btn opacity-0 group-hover:opacity-100 hover:text-[#4285f4] transition-opacity p-0.5 cursor-pointer" data-project-id="${project.id}" title="Archive" style="cursor: pointer;">
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="20 6 9 17 4 12"></polyline>
             </svg>
           </button>
-          ${project.unreadCount > 0 ? `<span class="unread-badge bg-red-500 text-white text-[10px] font-medium rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1.5" data-project-id="${project.id}">${project.unreadCount > 99 ? '99+' : project.unreadCount}</span>` : ''}
-        </div>
       `;
       
       // Set event listener AFTER setting innerHTML
@@ -5271,20 +4756,11 @@ class LunaIntegration {
       }`;
       userEl.setAttribute('data-sortable-id', user.id);
       
-      // For personal notes: use current user's photo
-      // For DMs: use other user's photo
-      const photoToUse = user.is_personal_notes 
-        ? (this.user?.avatar_photo || user.other_user_photo)
-        : user.other_user_photo;
-      
       userEl.innerHTML = `
         <div class="w-6 h-6 rounded-full bg-gray-200 flex items-center justify-center text-gray-600 text-xs font-medium flex-shrink-0 overflow-hidden">
-          ${photoToUse ? `<img src="${photoToUse}" alt="" class="w-full h-full object-cover" />` : `<span class="text-xs">${initial}</span>`}
+          ${user.other_user_photo ? `<img src="${user.other_user_photo}" alt="" class="w-full h-full object-cover" />` : `<span class="text-xs">${initial}</span>`}
         </div>
         <span class="flex-1 text-xs truncate">${this.escapeHTML(displayName)}</span>
-        <div class="flex items-center gap-1.5">
-          ${user.unreadCount > 0 ? `<span class="unread-badge bg-red-500 text-white text-[10px] font-medium rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1.5" data-user-id="${user.id}">${user.unreadCount > 99 ? '99+' : user.unreadCount}</span>` : ''}
-        </div>
       `;
       
       // Set event listener AFTER setting innerHTML
@@ -5364,31 +4840,33 @@ class LunaIntegration {
       this.renderProjects();
       
       // Seleccionar automáticamente el proyecto recién creado
-      // Esto abrirá el tab Chat (primer tab) automáticamente
       await this.selectProject(space.id);
       
       // Crear automáticamente un tab de Notion "Dashboard" si el proyecto tiene notion_page_url
-      // IMPORTANTE: Crear DESPUÉS de selectProject para que Chat se abra primero
-      // El Dashboard se creará con position > 0, así que quedará después del Chat
       if (space.notion_page_url) {
         try {
-          // Crear el tab directamente en el backend (pero NO seleccionarlo)
-          // Usar position: 1 para que quede después del Chat (que tiene position: 0)
-          await this.request('/api/tabs', {
+          // Crear el tab directamente en el backend
+          const { tab } = await this.request('/api/tabs', {
             method: 'POST',
             body: JSON.stringify({
               url: space.notion_page_url,
               title: 'Dashboard',
               type: 'browser',
-              space_id: space.id,
-              position: 1 // Después del Chat (position 0)
+              space_id: space.id
             })
           });
           
-          // Recargar tabs para incluir el Dashboard (pero NO cambiar el tab activo)
+          // Recargar los tabs del espacio para incluir el nuevo tab
           const { tabs } = await this.request(`/api/spaces/${space.id}`);
           this.spaceTabs = (tabs || []).sort((a, b) => (a.position || 0) - (b.position || 0));
-          this.renderTopBar(); // Actualizar TopBar para mostrar el nuevo tab
+          this.renderTopBar();
+          
+          // Buscar el tab de Dashboard y abrirlo
+          const dashboardTab = this.spaceTabs.find(t => t.id === tab.id);
+          if (dashboardTab) {
+            // Cargar el tab en TabManager si no está
+            await this.selectSpaceTab(dashboardTab);
+          }
         } catch {
           // No mostrar error al usuario - el proyecto se creó exitosamente
         }
@@ -5415,20 +4893,12 @@ class LunaIntegration {
           goBtn: !!goBtn,
           closeBtn: !!closeBtn
         });
-        // Try to show modal anyway if it exists
-        if (modal) {
-          modal.classList.add('active');
-        }
         return;
       }
 
-      // Show the modal
-      modal.classList.add('active');
-
       // Load users first
       const { users } = await this.request('/api/users');
-      // Filter out current user - they will be automatically added to groups
-      let filteredUsers = (users || []).filter(user => user.id !== this.user?.id);
+      let filteredUsers = users || [];
       let selectedUsers = [];
 
       // Clear previous state
@@ -5462,83 +4932,23 @@ class LunaIntegration {
           const name = user.name || user.email || 'Unknown';
           const email = user.email || '';
           const initials = name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2) || name[0]?.toUpperCase() || 'U';
-          const isCurrentUser = user.id === this.user?.id;
-          const avatarHtml = user.avatar_photo 
-            ? `<img src="${this.escapeHTML(user.avatar_photo)}" alt="${this.escapeHTML(name)}" style="width: 100%; height: 100%; object-fit: cover; border-radius: 50%;" />`
-            : `<div style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 500; color: #5f6368;">${initials}</div>`;
-
-          const isSelected = selectedUsers.some(u => u.id === user.id);
           
           userEl.innerHTML = `
-            <input type="checkbox" class="user-picker-checkbox" ${isSelected ? 'checked' : ''} style="margin-right: 12px; cursor: pointer; width: 18px; height: 18px; accent-color: #4285f4;" />
-            <div class="user-picker-avatar" style="overflow: hidden; border-radius: 50%;">${avatarHtml}</div>
+            <div class="user-picker-avatar">${initials}</div>
             <div class="user-picker-info">
-              <div class="user-picker-name">${this.escapeHTML(name)}${isCurrentUser ? ' <span style="color: #5f6368;">(you)</span>' : ''}</div>
+              <div class="user-picker-name">${this.escapeHTML(name)}</div>
               <div class="user-picker-email">${this.escapeHTML(email)}</div>
             </div>
           `;
 
-          const checkbox = userEl.querySelector('.user-picker-checkbox');
-          
-          // Checkbox click handler (prevent event bubbling to avoid double toggle)
-          checkbox.addEventListener('click', (e) => {
-            e.stopPropagation();
-            
-            // Only allow selecting one user at a time (DMs only, no groups)
-            if (selectedUsers.length > 0 && selectedUsers[0].id !== user.id) {
-              // Deselect previous user
-              const prevUserEl = listContainer.querySelector(`[data-user-id="${selectedUsers[0].id}"]`);
-              if (prevUserEl) {
-                prevUserEl.classList.remove('selected');
-                const prevCheckbox = prevUserEl.querySelector('.user-picker-checkbox');
-                if (prevCheckbox) prevCheckbox.checked = false;
-              }
-              selectedUsers = [];
-            }
-            
+          userEl.addEventListener('click', () => {
             const index = selectedUsers.findIndex(u => u.id === user.id);
-            if (checkbox.checked) {
-              if (index < 0) {
-                selectedUsers = [user]; // Only one user at a time
-                userEl.classList.add('selected');
-              }
-            } else {
               if (index >= 0) {
-                selectedUsers = [];
+              selectedUsers.splice(index, 1);
                 userEl.classList.remove('selected');
-              }
-            }
-            updateGoButton();
-          });
-
-          // Item click handler (toggle selection - only one user at a time)
-          userEl.addEventListener('click', (e) => {
-            // Don't toggle if clicking on checkbox (handled separately)
-            if (e.target === checkbox || e.target.closest('.user-picker-checkbox')) {
-              return;
-            }
-            
-            // Only allow selecting one user at a time (DMs only, no groups)
-            if (selectedUsers.length > 0 && selectedUsers[0].id !== user.id) {
-              // Deselect previous user
-              const prevUserEl = listContainer.querySelector(`[data-user-id="${selectedUsers[0].id}"]`);
-              if (prevUserEl) {
-                prevUserEl.classList.remove('selected');
-                const prevCheckbox = prevUserEl.querySelector('.user-picker-checkbox');
-                if (prevCheckbox) prevCheckbox.checked = false;
-              }
-              selectedUsers = [];
-            }
-            
-            const index = selectedUsers.findIndex(u => u.id === user.id);
-            if (index >= 0) {
-              selectedUsers = [];
-              userEl.classList.remove('selected');
-              checkbox.checked = false;
             } else {
-              selectedUsers = [user]; // Only one user at a time
+              selectedUsers.push(user);
               userEl.classList.add('selected');
-              checkbox.checked = true;
             }
             updateGoButton();
           });
@@ -5556,10 +4966,9 @@ class LunaIntegration {
       handlers.search = () => {
         const query = searchInput.value.toLowerCase().trim();
         if (!query) {
-          filteredUsers = (users || []).filter(user => user.id !== this.user?.id);
+          filteredUsers = users || [];
         } else {
           filteredUsers = (users || []).filter(user => {
-            if (user.id === this.user?.id) return false; // Exclude current user
             const name = (user.name || '').toLowerCase();
             const email = (user.email || '').toLowerCase();
             return name.includes(query) || email.includes(query);
@@ -5584,23 +4993,15 @@ class LunaIntegration {
         if (selectedUsers.length === 1) {
           const user = selectedUsers[0];
           try {
-            // First, reload users list to get the latest state
-            await this.loadUsers();
-            
-            // Check if space already exists (search by name, email, display_name, or other_user_id)
+            // Check if space already exists
             const existingSpace = this.users.find(
-              s => s.name === user.name || 
-                   s.name === user.email || 
-                   s.display_name === user.name ||
-                   s.display_name === user.email ||
-                   s.other_user_id === user.id
+              s => s.name === user.name || s.name === user.email || s.display_name === user.name
             );
 
             if (existingSpace) {
-              // Space exists - just select it
               this.selectUser(existingSpace.id);
             } else {
-              // Create new space (backend will check for existing spaces and return existing one if found)
+              // Create new space
               const { space } = await this.request('/api/spaces', {
                 method: 'POST',
                 body: JSON.stringify({
@@ -5609,49 +5010,23 @@ class LunaIntegration {
                 })
               });
 
-              // Reload users list to get the updated list (backend might return existing space)
-              await this.loadUsers();
-              
-              // Find the space in the updated list
-              const finalSpace = this.users.find(
-                s => s.id === space.id || 
-                     s.name === space.name ||
-                     (space.other_user_id && s.other_user_id === space.other_user_id)
-              ) || space;
-              
-              this.selectUser(finalSpace.id);
+              this.users.push(space);
+              this.renderUsers();
+              this.selectUser(space.id);
             }
 
-            // Close modal (hide it, don't remove from DOM)
-            if (modal) {
-              modal.classList.remove('active');
+            // Close modal
+            if (modal && modal.parentNode) {
+              modal.parentNode.removeChild(modal);
             }
           } catch (err) {
             console.error('Failed to create/open chat:', err);
             alert('Failed to open chat');
           }
         } else {
-          // Multiple users selected - only allow one user at a time for DMs
-          // If multiple selected, use only the first one
+          // Multiple users selected - for now, just open the first one
+          alert('Group chat functionality coming soon. Opening chat with first selected user.');
           const user = selectedUsers[0];
-          try {
-            // First, reload users list to get the latest state
-            await this.loadUsers();
-            
-            // Check if space already exists (search by name, email, display_name, or other_user_id)
-            const existingSpace = this.users.find(
-              s => s.name === user.name || 
-                   s.name === user.email || 
-                   s.display_name === user.name ||
-                   s.display_name === user.email ||
-                   s.other_user_id === user.id
-            );
-
-            if (existingSpace) {
-              // Space exists - just select it
-              this.selectUser(existingSpace.id);
-            } else {
-              // Create new space (backend will check for existing spaces and return existing one if found)
               const { space } = await this.request('/api/spaces', {
                 method: 'POST',
                 body: JSON.stringify({
@@ -5659,27 +5034,11 @@ class LunaIntegration {
                   category: 'user'
                 })
               });
-
-              // Reload users list to get the updated list (backend might return existing space)
-              await this.loadUsers();
-              
-              // Find the space in the updated list
-              const finalSpace = this.users.find(
-                s => s.id === space.id || 
-                     s.name === space.name ||
-                     (space.other_user_id && s.other_user_id === space.other_user_id)
-              ) || space;
-              
-              this.selectUser(finalSpace.id);
-            }
-
-            // Close modal (hide it, don't remove from DOM)
-            if (modal) {
-              modal.classList.remove('active');
-            }
-          } catch (err) {
-            console.error('Failed to create/open chat:', err);
-            alert('Failed to open chat');
+          this.users.push(space);
+          this.renderUsers();
+          this.selectUser(space.id);
+          if (modal && modal.parentNode) {
+            modal.parentNode.removeChild(modal);
           }
         }
       };
@@ -5873,51 +5232,10 @@ class LunaIntegration {
       if (messagesContainer) {
         messagesContainer.setAttribute('data-chat-id', chat.id);
         this.currentChatId = chat.id; // Guardar para el handler de submit
-        
-        // Cache chatId -> spaceId mapping
-        if (!this.chatToSpaceMap) {
-          this.chatToSpaceMap = new Map();
-        }
-        this.chatToSpaceMap.set(chat.id, spaceId);
       }
 
       // Cargar mensajes
-      await this.loadChatMessages(wrapper, chat.id);
-      
-      // Mark messages as read when chat is opened
-      try {
-        await this.request(`/api/chat/space/${spaceId}/mark-read`, { method: 'POST' });
-        
-        // Reload unread count to ensure accuracy (for both projects and users)
-        const project = this.projects.find(p => p.id === spaceId);
-        const user = this.users.find(u => u.id === spaceId);
-        
-        if (project) {
-          try {
-            const { unreadCount } = await this.request(`/api/chat/space/${spaceId}/unread-count`);
-            project.unreadCount = unreadCount || 0;
-            this.renderProjects(); // Update badge
-          } catch (err) {
-            console.error('Failed to reload unread count:', err);
-            // Fallback: set to 0
-            project.unreadCount = 0;
-            this.renderProjects();
-          }
-        } else if (user) {
-          try {
-            const { unreadCount } = await this.request(`/api/chat/space/${spaceId}/unread-count`);
-            user.unreadCount = unreadCount || 0;
-            this.renderUsers(); // Update badge
-          } catch (err) {
-            console.error('Failed to reload unread count:', err);
-            // Fallback: set to 0
-            user.unreadCount = 0;
-            this.renderUsers();
-          }
-        }
-      } catch (err) {
-        console.error('Failed to mark messages as read:', err);
-      }
+      this.loadChatMessages(wrapper, chat.id);
     } catch {
       // Solo mostrar error si no se ha renderizado nada todavía
       const messagesContainer = wrapper.querySelector('.chat-messages');
@@ -5928,108 +5246,6 @@ class LunaIntegration {
           </div>
         `;
       }
-    }
-  }
-
-  isChatActive(chatId) {
-    // Check if the chat tab is currently active/visible
-    if (!window.tabManager) return false;
-    
-    const activeTab = window.tabManager.tabs.find(t => t.active);
-    if (!activeTab) return false;
-    
-    // Check if active tab is a chat tab with this chatId
-    if (this.isChatUrl(activeTab.url)) {
-      // Check if currentChatId matches
-      return this.currentChatId === chatId;
-    }
-    
-    return false;
-  }
-
-  async getSpaceIdFromChatId(chatId) {
-    // Find space_id for a given chat_id
-    // Check if we have it cached
-    if (this.chatToSpaceMap && this.chatToSpaceMap.has(chatId)) {
-      return this.chatToSpaceMap.get(chatId);
-    }
-    
-    // If not cached, find it from active space
-    if (this.activeSpace && this.currentChatId === chatId) {
-      return this.activeSpace.id;
-    }
-    
-    // Try to find in projects
-    for (const project of this.projects || []) {
-      try {
-        const { chat } = await this.request(`/api/chat/space/${project.id}`);
-        if (chat && chat.id === chatId) {
-          // Cache it
-          if (!this.chatToSpaceMap) {
-            this.chatToSpaceMap = new Map();
-          }
-          this.chatToSpaceMap.set(chatId, project.id);
-          return project.id;
-        }
-      } catch (err) {
-        // Continue searching
-      }
-    }
-    
-    // Try to find in users
-    for (const user of this.users || []) {
-      try {
-        const { chat } = await this.request(`/api/chat/space/${user.id}`);
-        if (chat && chat.id === chatId) {
-          // Cache it
-          if (!this.chatToSpaceMap) {
-            this.chatToSpaceMap = new Map();
-          }
-          this.chatToSpaceMap.set(chatId, user.id);
-          return user.id;
-        }
-      } catch (err) {
-        // Continue searching
-      }
-    }
-    
-    return null;
-  }
-
-  async markChatAsRead(spaceId) {
-    // Mark messages as read when chat tab is activated
-    try {
-      await this.request(`/api/chat/space/${spaceId}/mark-read`, { method: 'POST' });
-      
-      // Reload unread count to ensure accuracy (for both projects and users)
-      const project = this.projects.find(p => p.id === spaceId);
-      const user = this.users.find(u => u.id === spaceId);
-      
-      if (project) {
-        try {
-          const { unreadCount } = await this.request(`/api/chat/space/${spaceId}/unread-count`);
-          project.unreadCount = unreadCount || 0;
-          this.renderProjects(); // Update badge
-        } catch (err) {
-          console.error('[FRONTEND] Failed to reload unread count:', err);
-          // Fallback: set to 0
-          project.unreadCount = 0;
-          this.renderProjects();
-        }
-      } else if (user) {
-        try {
-          const { unreadCount } = await this.request(`/api/chat/space/${spaceId}/unread-count`);
-          user.unreadCount = unreadCount || 0;
-          this.renderUsers(); // Update badge
-        } catch (err) {
-          console.error('[FRONTEND] Failed to reload unread count:', err);
-          // Fallback: set to 0
-          user.unreadCount = 0;
-          this.renderUsers();
-        }
-      }
-    } catch (err) {
-      console.error('[FRONTEND] Failed to mark messages as read:', err);
     }
   }
 
@@ -6088,11 +5304,8 @@ class LunaIntegration {
       // Scroll to bottom
       messagesContainer.scrollTop = messagesContainer.scrollHeight;
       
-      // Setup realtime subscription for this chat (only once)
-      const existing = this.chatSubscriptions.get(chatId);
-      if (!existing || (existing !== 'pending' && existing !== null && (!existing.state || existing.state !== 'joined'))) {
+      // Setup realtime subscription for this chat
         this.setupChatRealtime(chatId, messagesContainer);
-      }
     } catch (err) {
       console.error('Failed to load messages:', err);
     }
@@ -6102,100 +5315,53 @@ class LunaIntegration {
     if (this.supabaseClient) return this.supabaseClient;
     
     try {
+      console.log('🔧 Initializing Supabase client for realtime...');
       const config = await this.request('/api/users/supabase-config');
+      console.log('📋 Supabase config received:', { url: config?.url ? 'SET' : 'MISSING', anonKey: config?.anonKey ? 'SET' : 'MISSING' });
       
       if (config?.url && config?.anonKey) {
+        // Dynamic import of Supabase
         const { createClient } = await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm');
         this.supabaseClient = createClient(config.url, config.anonKey, {
           realtime: {
             params: {
               eventsPerSecond: 10
-            },
-            // Improved reconnection handling
-            heartbeatIntervalMs: 30000,
-            reconnectAfterMs: (tries) => {
-              // Exponential backoff: 1s, 2s, 4s, 8s, max 30s
-              return Math.min(Math.pow(2, tries) * 1000, 30000);
             }
-          },
-          // Disable auto-refresh since we're using custom JWT auth
-          auth: {
-            autoRefreshToken: false,
-            persistSession: false
           }
         });
-        // Supabase client initialized
+        console.log('✅ Supabase client created');
         return this.supabaseClient;
-      }
-      console.warn('[Realtime] Missing Supabase configuration');
+      } else {
+        console.error('❌ Missing Supabase config');
       return null;
+      }
     } catch (err) {
-      console.error('[Realtime] Failed to initialize Supabase client:', err);
+      console.error('❌ Failed to initialize Supabase:', err);
       return null;
     }
   }
   
   async setupChatRealtime(chatId, messagesContainer) {
-    // Prevent duplicate setup or if Realtime is disabled for this chat
+    // Cleanup previous subscription for this chat
     if (this.chatSubscriptions.has(chatId)) {
-      const existing = this.chatSubscriptions.get(chatId);
-      if (existing === null) {
-        // Realtime was disabled for this chat after failed attempts
-        // Realtime is disabled for chat (previous connection failed)
-        return;
-      }
-      if (existing && existing.state === 'joined') {
-        // Already subscribed and active
-        // Already subscribed to chat
-        return;
-      }
+      const oldChannel = this.chatSubscriptions.get(chatId);
+      oldChannel.unsubscribe();
+      this.chatSubscriptions.delete(chatId);
     }
-    
-    // Mark as attempting to prevent race conditions
-    this.chatSubscriptions.set(chatId, 'pending');
     
     // Initialize Supabase client if needed
     const client = await this.initSupabaseClient();
     if (!client) {
-      this.showRealtimeError(messagesContainer, 'Unable to initialize Realtime connection. Please refresh the page.');
+      console.log('⚠️ Supabase client not available, will use polling instead');
+      // Start polling as fallback
+      this.startChatPolling(chatId, messagesContainer);
       return;
     }
     
-    // Test basic connectivity first
-    try {
-      const { error: testError } = await client
-        .from('chat_messages')
-        .select('id')
-        .limit(1);
-      
-      if (testError) {
-        console.error('[Realtime] Cannot query chat_messages table:', testError);
-        this.showRealtimeError(messagesContainer, 'Cannot access chat messages. Please check your permissions.');
-        return;
-      }
-    } catch (err) {
-      console.error('[Realtime] Error testing connectivity:', err);
-      this.showRealtimeError(messagesContainer, 'Realtime connection test failed. Please refresh the page.');
-      return;
-    }
-    
+    console.log('📡 Setting up realtime subscription for chat:', chatId);
     const channelName = `chat:${chatId}`;
-    let retryCount = 0;
-    const maxRetries = 3;
-    let isSubscribed = false;
-    let isAttempting = false; // Prevent multiple simultaneous attempts
-    let retryTimeout = null;
     
-    const attemptSubscribe = () => {
-      // Prevent multiple simultaneous attempts
-      if (isSubscribed || isAttempting) {
-        return;
-      }
-      
-      isAttempting = true;
-      const currentAttempt = retryCount + 1;
-      // Setting up subscription for chat
-      
+    // Add error handler to get more details
       const channel = client
         .channel(channelName, {
           config: {
@@ -6210,354 +5376,60 @@ class LunaIntegration {
             table: 'chat_messages',
             filter: `chat_id=eq.${chatId}`
           },
-          async (payload) => {
-            const newMessage = payload.new;
-            
-            // Check if this chat is currently active/visible
-            const isChatActive = this.isChatActive(chatId);
-            
-            // If chat is active, mark new messages as read automatically
-            if (isChatActive && newMessage && newMessage.user_id !== this.user?.id) {
-              // Only mark as read if message is from another user
-              // Find the space_id for this chat
-              const spaceId = await this.getSpaceIdFromChatId(chatId);
-              if (spaceId) {
-                // Mark as read automatically when new message arrives in active chat
-                this.markChatAsRead(spaceId).catch(err => {
-                  console.error('[Realtime] Failed to auto-mark as read:', err);
-                });
-              }
-            }
-            
+        (payload) => {
+          console.log('📨📨📨 New message received via realtime:', payload);
             // Reload messages when new one arrives
-            const chatWrapper = messagesContainer.closest('.chat-wrapper');
-            if (chatWrapper) {
-              this.loadChatMessages(chatWrapper, chatId);
-            } else {
-              // Fallback: try to find by data-chat-id
-              const fallbackContainer = document.querySelector(`[data-chat-id="${chatId}"]`)?.closest('.chat-wrapper');
-              if (fallbackContainer) {
-                this.loadChatMessages(fallbackContainer, chatId);
-              }
-            }
+          this.loadChatMessages(messagesContainer.closest('.chat-wrapper'), chatId);
           }
         )
         .subscribe((status, err) => {
-          isAttempting = false; // Reset attempting flag
+        console.log('📡 Realtime subscription status:', status);
+        if (err) {
+          console.error('❌ Realtime subscription error details:', err);
+        }
           
           if (status === 'SUBSCRIBED') {
-            isSubscribed = true;
-            retryCount = 0;
-            if (retryTimeout) {
-              clearTimeout(retryTimeout);
-              retryTimeout = null;
-            }
-            this.chatSubscriptions.set(chatId, channel);
-            // Successfully subscribed to chat
-            this.hideRealtimeError(messagesContainer);
-          } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-            const errorDetails = err ? JSON.stringify(err) : 'No error details';
-            console.warn(`[Realtime] Subscription failed for chat ${chatId}:`, status, errorDetails);
-            
-            // Clean up failed channel asynchronously
-            setTimeout(() => {
-              try {
-                if (channel && channel.state !== 'closed') {
-                  channel.unsubscribe();
-                }
-              } catch (e) {
-                // Ignore cleanup errors
-              }
-            }, 100);
-            
-            // Retry with exponential backoff
-            if (retryCount < maxRetries && !isSubscribed) {
-              retryCount++;
-              const delay = Math.min(Math.pow(2, retryCount) * 1000, 10000); // 2s, 4s, 8s, max 10s
-              // Retrying subscription for chat
-              
-              // Clear any existing retry timeout
-              if (retryTimeout) {
-                clearTimeout(retryTimeout);
-              }
-              
-              retryTimeout = setTimeout(() => {
-                if (!isSubscribed && retryCount <= maxRetries) {
-                  attemptSubscribe();
-                }
-              }, delay);
-            } else if (!isSubscribed) {
-              // Max retries reached - disable Realtime for this chat permanently
-              console.error(`[Realtime] Failed to subscribe to chat ${chatId} after ${maxRetries} attempts`);
-              
-              // Mark this chat as having Realtime disabled to prevent further attempts
-              this.chatSubscriptions.set(chatId, null); // null means disabled
-              this.showRealtimeError(messagesContainer, 'Realtime connection unavailable. Messages will not update automatically. Please refresh to check for new messages.');
-            }
-          }
-        });
-    };
+          console.log('✅✅✅ Subscribed to realtime for chat:', chatId);
+        } else if (status === 'CHANNEL_ERROR') {
+          console.error('❌ Error subscribing to realtime - will use polling');
+          console.error('   This usually means:');
+          console.error('   1. Realtime is not enabled for chat_messages table');
+          console.error('   2. RLS policies are blocking the subscription');
+          console.error('   3. REPLICA IDENTITY is not set to FULL');
+          console.error('   Check Supabase Dashboard > Database > Replication');
+          this.startChatPolling(chatId, messagesContainer);
+        } else if (status === 'TIMED_OUT') {
+          console.error('❌ Realtime subscription timed out - will use polling');
+          this.startChatPolling(chatId, messagesContainer);
+        } else if (status === 'CLOSED') {
+          console.error('❌ Realtime subscription closed - will use polling');
+          this.startChatPolling(chatId, messagesContainer);
+        }
+      });
     
-    // Start subscription attempt
-    attemptSubscribe();
+    this.chatSubscriptions.set(chatId, channel);
   }
   
-  async setupProjectsRealtime() {
-    // Setup Realtime subscription to listen for changes in chat_participants
-    // This will automatically refresh projects when user is added/removed from projects
-    if (!this.user?.id) return;
-    
-    try {
-      const client = await this.initSupabaseClient();
-      if (!client) return;
-      
-      // Unsubscribe from existing channel if any
-      if (this.projectsRealtimeChannel) {
-        this.projectsRealtimeChannel.unsubscribe();
-        this.projectsRealtimeChannel = null;
-      }
-      
-      const channel = client
-        .channel(`projects-updates-${this.user.id}`)
-        .on(
-          'postgres_changes',
-          {
-            event: 'INSERT',
-            schema: 'public',
-            table: 'chat_participants',
-            filter: `user_id=eq.${this.user.id}`
-          },
-          () => {
-            this.loadProjects();
-          }
-        )
-        .on(
-          'postgres_changes',
-          {
-            event: 'DELETE',
-            schema: 'public',
-            table: 'chat_participants',
-            filter: `user_id=eq.${this.user.id}`
-          },
-          () => {
-            this.loadProjects();
-          }
-        )
-        .subscribe((status, err) => {
-          if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-            console.error('[Realtime Projects] Subscription failed:', status, err);
-          }
-        });
-      
-      this.projectsRealtimeChannel = channel;
-      
-      // Setup Realtime for unread message counts
-      this.setupUnreadCountsRealtime();
-    } catch (error) {
-      console.error('[Realtime Projects] Failed to setup subscription:', error);
+  startChatPolling(chatId, messagesContainer) {
+    // Stop any existing polling for this chat
+    const pollingKey = `chat-poll-${chatId}`;
+    if (window[pollingKey]) {
+      clearInterval(window[pollingKey]);
     }
-  }
-
-  async setupUnreadCountsRealtime() {
-    // Setup Realtime subscription to listen for new messages
-    // This will update unread counts in real-time
-    if (!this.user?.id) return;
     
-    try {
-      const client = await this.initSupabaseClient();
-      if (!client) return;
-      
-      // Unsubscribe from existing channel if any
-      if (this.unreadCountsRealtimeChannel) {
-        this.unreadCountsRealtimeChannel.unsubscribe();
-        this.unreadCountsRealtimeChannel = null;
-      }
-      
-      // Listen for new messages in all chats where user is a participant
-      const channel = this.supabaseClient
-        .channel(`unread-counts-${this.user.id}`)
-        .on(
-          'postgres_changes',
-          {
-            event: 'INSERT',
-            schema: 'public',
-            table: 'chat_messages',
-            filter: `user_id=neq.${this.user.id}` // Only messages from other users
-          },
-          async (payload) => {
-            // New message from another user - update unread count for the affected project
-            const message = payload.new;
-            
-            // Check if this chat is currently active/visible
-            const isChatActive = this.isChatActive(message.chat_id);
-            
-            // If chat is active, mark as read immediately (don't show badge)
-            if (isChatActive) {
-              const spaceId = await this.getSpaceIdFromChatId(message.chat_id);
-              if (spaceId) {
-                // Mark as read immediately - badge won't appear
-                this.markChatAsRead(spaceId).catch(err => {
-                  console.error('[Realtime Unread Counts] Failed to auto-mark as read:', err);
-                });
-                return; // Don't increment counter
-              }
-            }
-            
-            // Chat is not active - increment unread count
-            // Find which space this message belongs to
-            const { data: spaceChat } = await this.supabaseClient
-              .from('space_chats')
-              .select('space_id')
-              .eq('chat_id', message.chat_id)
-              .maybeSingle();
-            
-            if (spaceChat) {
-              const spaceId = spaceChat.space_id;
-              
-              // Get space category
-              const { data: space } = await this.supabaseClient
-                .from('spaces')
-                .select('category')
-                .eq('id', spaceId)
-                .maybeSingle();
-              
-              const spaceCategory = space?.category;
-              
-              // Update unread count for projects
-              if (spaceCategory === 'project') {
-                const project = this.projects.find(p => p.id === spaceId);
-                if (project) {
-                  // Increment unread count
-                  project.unreadCount = (project.unreadCount || 0) + 1;
-                  // Re-render projects to show updated badge
-                  this.renderProjects();
-                }
-              }
-              
-              // Update unread count for user spaces (DMs only)
-              if (spaceCategory === 'user') {
-                const userSpace = this.users.find(u => u.id === spaceId);
-                if (userSpace) {
-                  // Increment unread count
-                  userSpace.unreadCount = (userSpace.unreadCount || 0) + 1;
-                  // Re-render users to show updated badge
-                  this.renderUsers();
+    console.log('🔄 Starting polling for chat:', chatId);
+    // Poll every 2 seconds
+    window[pollingKey] = setInterval(() => {
+      const container = messagesContainer.closest('.chat-wrapper');
+      if (container) {
+        this.loadChatMessages(container, chatId);
                 } else {
-                  // Space might not be in the list yet - reload users to get it
-                  this.loadUsers().catch(err => {
-                    console.error('[Realtime Unread Counts] Failed to reload users:', err);
-                  });
-                }
-              }
-            }
-          }
-        )
-        .on(
-          'postgres_changes',
-          {
-            event: 'INSERT',
-            schema: 'public',
-            table: 'chat_message_reads',
-            filter: `user_id=eq.${this.user.id}`
-          },
-          async (payload) => {
-            // User marked messages as read - update unread count
-            const readStatus = payload.new;
-            
-            // Find which space this read status belongs to
-            const { data: spaceChat } = await this.supabaseClient
-              .from('space_chats')
-              .select('space_id')
-              .eq('chat_id', readStatus.chat_id)
-              .maybeSingle();
-            
-            if (spaceChat) {
-              const spaceId = spaceChat.space_id;
-              
-              // Get space category
-              const { data: space } = await this.supabaseClient
-                .from('spaces')
-                .select('category')
-                .eq('id', spaceId)
-                .maybeSingle();
-              
-              const spaceCategory = space?.category;
-              
-              // Reload unread count for projects
-              if (spaceCategory === 'project') {
-                const project = this.projects.find(p => p.id === spaceId);
-                if (project) {
-                  try {
-                    const { unreadCount } = await this.request(`/api/chat/space/${project.id}/unread-count`);
-                    project.unreadCount = unreadCount || 0;
-                    this.renderProjects();
-                  } catch (err) {
-                    console.error(`Failed to reload unread count for project ${project.id}:`, err);
-                  }
-                }
-              }
-              
-              // Reload unread count for user spaces (DMs only)
-              if (spaceCategory === 'user') {
-                const userSpace = this.users.find(u => u.id === spaceId);
-                if (userSpace) {
-                  try {
-                    const { unreadCount } = await this.request(`/api/chat/space/${userSpace.id}/unread-count`);
-                    userSpace.unreadCount = unreadCount || 0;
-                    this.renderUsers();
-                  } catch (err) {
-                    console.error(`Failed to reload unread count for user space ${userSpace.id}:`, err);
-                  }
-                }
-              }
-            }
-          }
-        )
-        .subscribe((status, err) => {
-          if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-            console.error('[Realtime Unread Counts] Subscription failed:', status, err);
-          }
-        });
-      
-      this.unreadCountsRealtimeChannel = channel;
-    } catch (error) {
-      console.error('[Realtime Unread Counts] Failed to setup subscription:', error);
-    }
+        // Container removed, stop polling
+        clearInterval(window[pollingKey]);
+        delete window[pollingKey];
+      }
+    }, 2000);
   }
-  
-  showRealtimeError(messagesContainer, message) {
-    const container = messagesContainer.closest('.chat-wrapper');
-    if (!container) return;
-    
-    // Remove any existing error message
-    const existingError = container.querySelector('.realtime-error');
-    if (existingError) {
-      existingError.remove();
-    }
-    
-    // Create error message
-    const errorDiv = document.createElement('div');
-    errorDiv.className = 'realtime-error';
-    errorDiv.style.cssText = 'padding: 12px 16px; background: #fff3cd; border-left: 4px solid #ffc107; color: #856404; font-size: 14px; margin-bottom: 8px;';
-    errorDiv.textContent = message;
-    
-    // Insert at the top of messages container
-    const messagesEl = container.querySelector('.chat-messages');
-    if (messagesEl && messagesEl.parentNode) {
-      messagesEl.parentNode.insertBefore(errorDiv, messagesEl);
-    }
-  }
-  
-  hideRealtimeError(messagesContainer) {
-    const container = messagesContainer.closest('.chat-wrapper');
-    if (!container) return;
-    
-    const errorDiv = container.querySelector('.realtime-error');
-    if (errorDiv) {
-      errorDiv.remove();
-    }
-  }
-  
 
   renderChatMessages(container, messages) {
     const user = this.user;
@@ -6573,29 +5445,6 @@ class LunaIntegration {
     }
 
     messages.forEach(msg => {
-      // Detect system messages (user_id is null or message contains system keywords)
-      const isSystemMessage = msg.user_id === null || msg.message?.includes('agregó a') || msg.message?.includes('eliminó a');
-      
-      if (isSystemMessage) {
-        // System messages: centered, gray, no background, smaller text
-        const msgEl = document.createElement('div');
-        msgEl.style.cssText = 'display: flex; justify-content: center; margin: 8px 0;';
-        msgEl.innerHTML = `
-          <div style="
-            color: #9ca3af;
-            font-size: 12px;
-            text-align: center;
-            padding: 4px 12px;
-            max-width: 80%;
-          ">
-            ${this.escapeHTML(msg.message)}
-          </div>
-        `;
-        container.appendChild(msgEl);
-        return;
-      }
-      
-      // Regular user messages
       const isOwn = msg.user_id === user?.id;
       const userName = msg.user?.name || msg.user?.email || 'Unknown';
       const time = new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -7137,416 +5986,14 @@ class LunaIntegration {
         body: JSON.stringify({ message })
       });
 
-      // Realtime will automatically reload messages via postgres_changes event
-      // No need to manually reload here
+      // Reload messages to show the new one
+      const chatContainer = document.querySelector(`[data-chat-id="${chatId}"]`)?.closest('.chat-wrapper');
+      if (chatContainer) {
+        this.loadChatMessages(chatContainer, chatId);
+      }
     } catch (err) {
       console.error('Failed to send message:', err);
-      alert('Failed to send message: ' + (err.message || 'Unknown error'));
-    }
-  }
-
-  initProjectSettings() {
-    // Initialize project settings sidebar
-    const settingsBtn = document.getElementById('topbar-settings-btn');
-    const settingsSidebar = document.getElementById('project-settings-sidebar');
-    const closeBtn = document.getElementById('project-settings-close');
-    const addMemberBtn = document.getElementById('add-member-btn');
-    const removeMemberBtn = document.getElementById('remove-member-btn');
-    const deleteProjectBtn = document.getElementById('delete-project-btn');
-    const addMembersClose = document.getElementById('add-members-close');
-    const addMembersCancel = document.getElementById('add-members-cancel');
-    const addMembersSubmit = document.getElementById('add-members-submit');
-    const deleteProjectCancel = document.getElementById('delete-project-cancel');
-    const deleteProjectConfirm = document.getElementById('delete-project-confirm');
-
-    if (!settingsBtn || !settingsSidebar) return;
-
-    // Open sidebar
-    settingsBtn.addEventListener('click', () => {
-      if (this.activeSpace && this.activeSpace.category === 'project') {
-        this.openProjectSettings();
-      }
-    });
-
-    // Close sidebar
-    if (closeBtn) {
-      closeBtn.addEventListener('click', () => {
-        this.closeProjectSettings();
-      });
-    }
-
-    // Add member button
-    if (addMemberBtn) {
-      addMemberBtn.addEventListener('click', () => {
-        this.openAddMembersModal();
-      });
-    }
-
-    // Remove member button
-    if (removeMemberBtn) {
-      removeMemberBtn.addEventListener('click', () => {
-        this.removeSelectedMembers();
-      });
-    }
-
-    // Delete project button
-    if (deleteProjectBtn) {
-      deleteProjectBtn.addEventListener('click', () => {
-        this.openDeleteProjectModal();
-      });
-    }
-
-    // Add members modal
-    if (addMembersClose) {
-      addMembersClose.addEventListener('click', () => {
-        this.closeAddMembersModal();
-      });
-    }
-    if (addMembersCancel) {
-      addMembersCancel.addEventListener('click', () => {
-        this.closeAddMembersModal();
-      });
-    }
-    if (addMembersSubmit) {
-      addMembersSubmit.addEventListener('click', () => {
-        this.addSelectedMembers();
-      });
-    }
-
-    // Delete project modal
-    if (deleteProjectCancel) {
-      deleteProjectCancel.addEventListener('click', () => {
-        this.closeDeleteProjectModal();
-      });
-    }
-    if (deleteProjectConfirm) {
-      deleteProjectConfirm.addEventListener('click', () => {
-        this.confirmDeleteProject();
-      });
-    }
-
-    // Close sidebar when clicking outside (on the sidebar itself, not overlay)
-    if (settingsSidebar) {
-      settingsSidebar.addEventListener('click', (e) => {
-        if (e.target === settingsSidebar) {
-          this.closeProjectSettings();
-        }
-      });
-    }
-
-    // Initialize icons
-    if (window.lucide && window.lucide.createIcons) {
-      window.lucide.createIcons();
-    }
-  }
-
-  async openProjectSettings() {
-    if (!this.activeSpace || this.activeSpace.category !== 'project') return;
-    
-    // Both owners and members can open project settings to view members
-
-    const sidebar = document.getElementById('project-settings-sidebar');
-    if (!sidebar) return;
-
-    sidebar.classList.remove('hidden');
-    
-    // Calculate top position based on TopBar height - align exactly with topbar bottom
-    const topbar = document.getElementById('topbar-space');
-    if (topbar && !topbar.classList.contains('hidden')) {
-      const topbarRect = topbar.getBoundingClientRect();
-      sidebar.style.top = `${topbarRect.bottom}px`;
-      sidebar.style.height = `calc(100vh - ${topbarRect.bottom}px)`;
-    } else {
-      sidebar.style.top = '0';
-      sidebar.style.height = '100vh';
-    }
-
-    // Load members
-    await this.loadProjectMembers();
-  }
-
-  closeProjectSettings() {
-    const sidebar = document.getElementById('project-settings-sidebar');
-    if (sidebar) {
-      sidebar.classList.add('hidden');
-    }
-    // Clear selected members
-    this.selectedMemberIds = new Set();
-    this.updateRemoveButton();
-  }
-
-  async loadProjectMembers() {
-    if (!this.activeSpace || this.activeSpace.category !== 'project') return;
-
-    try {
-      const data = await this.request(`/api/chat/space/${this.activeSpace.id}/members`);
-      this.projectMembers = data.members || [];
-      this.selectedMemberIds = new Set();
-      
-      this.renderMembers();
-      this.updateRemoveButton();
-    } catch (error) {
-      console.error('Error loading members:', error);
-      this.projectMembers = [];
-      this.renderMembers();
-    }
-  }
-
-  renderMembers() {
-    const membersList = document.getElementById('members-list');
-    const membersCount = document.getElementById('members-count');
-    
-    if (!membersList) return;
-
-    membersList.innerHTML = '';
-
-    if (membersCount) {
-      membersCount.textContent = this.projectMembers.length;
-    }
-
-    this.projectMembers.forEach(member => {
-      const memberEl = document.createElement('div');
-      memberEl.className = 'member-avatar';
-      if (this.selectedMemberIds.has(member.id)) {
-        memberEl.classList.add('selected');
-      }
-
-      if (member.avatar_photo) {
-        memberEl.innerHTML = `<img src="${member.avatar_photo}" alt="${member.name || member.email}" />`;
-      } else {
-        const initials = (member.name || member.email || 'U')[0].toUpperCase();
-        memberEl.innerHTML = `<div class="member-avatar-initials">${initials}</div>`;
-      }
-
-      memberEl.addEventListener('click', () => {
-        this.toggleMemberSelection(member.id);
-      });
-
-      membersList.appendChild(memberEl);
-    });
-  }
-
-  toggleMemberSelection(userId) {
-    if (!this.selectedMemberIds) {
-      this.selectedMemberIds = new Set();
-    }
-    if (this.selectedMemberIds.has(userId)) {
-      this.selectedMemberIds.delete(userId);
-    } else {
-      this.selectedMemberIds.add(userId);
-    }
-    this.renderMembers();
-    this.updateRemoveButton();
-  }
-
-  updateRemoveButton() {
-    const removeBtn = document.getElementById('remove-member-btn');
-    if (removeBtn) {
-      if (this.selectedMemberIds && this.selectedMemberIds.size > 0) {
-        removeBtn.style.display = 'flex';
-      } else {
-        removeBtn.style.display = 'none';
-      }
-    }
-  }
-
-  async openAddMembersModal() {
-    const modal = document.getElementById('add-members-modal');
-    if (!modal) return;
-
-    modal.classList.remove('hidden');
-    
-    // Load available users
-    await this.loadAvailableUsers();
-  }
-
-  closeAddMembersModal() {
-    const modal = document.getElementById('add-members-modal');
-    if (modal) {
-      modal.classList.add('hidden');
-    }
-    // Clear selected users
-    this.selectedUserIds = new Set();
-    const searchInput = document.getElementById('add-members-search-input');
-    if (searchInput) {
-      searchInput.value = '';
-    }
-  }
-
-  async loadAvailableUsers() {
-    try {
-      const data = await this.request('/api/users');
-      const allUsers = data.users || [];
-      
-      // Filter out users that are already members
-      const memberIds = new Set((this.projectMembers || []).map(m => m.id));
-      this.availableUsers = allUsers.filter(u => !memberIds.has(u.id));
-      
-      this.renderAvailableUsers();
-      
-      // Setup search
-      const searchInput = document.getElementById('add-members-search-input');
-      if (searchInput) {
-        searchInput.addEventListener('input', (e) => {
-          this.filterAvailableUsers(e.target.value);
-        });
-      }
-    } catch (error) {
-      console.error('Error loading users:', error);
-      this.availableUsers = [];
-      this.renderAvailableUsers();
-    }
-  }
-
-  filterAvailableUsers(query) {
-    const filtered = this.availableUsers.filter(user => {
-      const q = query.toLowerCase();
-      return (user.name || '').toLowerCase().includes(q) || 
-             (user.email || '').toLowerCase().includes(q);
-    });
-    this.renderAvailableUsers(filtered);
-  }
-
-  renderAvailableUsers(users = null) {
-    const usersList = document.getElementById('add-members-list');
-    if (!usersList) return;
-
-    const usersToRender = users || this.availableUsers;
-    usersList.innerHTML = '';
-
-    if (usersToRender.length === 0) {
-      usersList.innerHTML = '<div style="padding: 20px; text-align: center; color: #5f6368;">No users available</div>';
-      return;
-    }
-
-    // Get current user ID
-    const currentUserId = this.user?.id;
-
-    usersToRender.forEach(user => {
-      const userEl = document.createElement('div');
-      userEl.className = 'add-member-item';
-
-      const isSelected = this.selectedUserIds && this.selectedUserIds.has(user.id);
-      const isCurrentUser = user.id === currentUserId;
-
-      userEl.innerHTML = `
-        <input type="checkbox" ${isSelected ? 'checked' : ''} data-user-id="${user.id}" />
-        <div class="add-member-avatar">
-          ${user.avatar_photo 
-            ? `<img src="${user.avatar_photo}" alt="${user.name || user.email}" />`
-            : `<div class="add-member-avatar-initials">${(user.name || user.email || 'U')[0].toUpperCase()}</div>`
-          }
-        </div>
-        <div class="add-member-info">
-          <div class="add-member-name">${user.name || user.email}${isCurrentUser ? ' <span style="color: #5f6368;">(you)</span>' : ''}</div>
-          ${user.name ? `<div class="add-member-email">${user.email}</div>` : ''}
-        </div>
-      `;
-
-      const checkbox = userEl.querySelector('input[type="checkbox"]');
-      checkbox.addEventListener('change', (e) => {
-        if (!this.selectedUserIds) this.selectedUserIds = new Set();
-        if (e.target.checked) {
-          this.selectedUserIds.add(user.id);
-        } else {
-          this.selectedUserIds.delete(user.id);
-        }
-        this.updateAddMembersSubmit();
-      });
-
-      usersList.appendChild(userEl);
-    });
-
-    this.updateAddMembersSubmit();
-  }
-
-  updateAddMembersSubmit() {
-    const submitBtn = document.getElementById('add-members-submit');
-    if (submitBtn) {
-      const hasSelection = this.selectedUserIds && this.selectedUserIds.size > 0;
-      submitBtn.disabled = !hasSelection;
-    }
-  }
-
-  async addSelectedMembers() {
-    if (!this.activeSpace || !this.selectedUserIds || this.selectedUserIds.size === 0) return;
-
-    try {
-      const userIds = Array.from(this.selectedUserIds);
-      await this.request(`/api/chat/space/${this.activeSpace.id}/members`, {
-        method: 'POST',
-        body: JSON.stringify({ userIds })
-      });
-
-      // Reload members
-      await this.loadProjectMembers();
-      this.closeAddMembersModal();
-    } catch (error) {
-      console.error('Error adding members:', error);
-      alert('Failed to add members. Please try again.');
-    }
-  }
-
-  async removeSelectedMembers() {
-    if (!this.activeSpace || !this.selectedMemberIds || this.selectedMemberIds.size === 0) return;
-
-    if (!confirm(`Remove ${this.selectedMemberIds.size} member(s) from this project?`)) {
-      return;
-    }
-
-    try {
-      const userIds = Array.from(this.selectedMemberIds);
-      await this.request(`/api/chat/space/${this.activeSpace.id}/members`, {
-        method: 'DELETE',
-        body: JSON.stringify({ userIds })
-      });
-
-      // Reload members
-      await this.loadProjectMembers();
-    } catch (error) {
-      console.error('Error removing members:', error);
-      alert('Failed to remove members. Please try again.');
-    }
-  }
-
-  openDeleteProjectModal() {
-    const modal = document.getElementById('delete-project-modal');
-    if (modal) {
-      modal.classList.remove('hidden');
-    }
-  }
-
-  closeDeleteProjectModal() {
-    const modal = document.getElementById('delete-project-modal');
-    if (modal) {
-      modal.classList.add('hidden');
-    }
-  }
-
-  async confirmDeleteProject() {
-    if (!this.activeSpace || this.activeSpace.category !== 'project') return;
-
-    try {
-      await this.request(`/api/spaces/${this.activeSpace.id}`, {
-        method: 'DELETE'
-      });
-
-      // Close modals
-      this.closeDeleteProjectModal();
-      this.closeProjectSettings();
-
-      // Reload projects and clear active space
-      this.activeSpace = null;
-      await this.loadProjects();
-      this.renderTopBar();
-
-      // Show personal tabs in sidebar
-      if (window.tabManager) {
-        await this.loadPersonalTabs();
-      }
-    } catch (error) {
-      console.error('Error deleting project:', error);
-      alert('Failed to delete project. Please try again.');
+      alert('Failed to send message');
     }
   }
 }
