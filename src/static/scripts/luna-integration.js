@@ -4667,14 +4667,25 @@ class LunaIntegration {
         });
       }
       
-      // Setup delete project button
+      // Setup delete project button (only show/enable if user is owner)
       const deleteBtn = document.getElementById('delete-project-btn');
       if (deleteBtn) {
-        deleteBtn.onclick = () => {
-          if (confirm('Are you sure you want to delete this project? This action cannot be undone.')) {
-            this.deleteProject();
-          }
-        };
+        // Check if current user is the owner
+        const isOwner = this.activeSpace && this.activeSpace.user_id === this.user?.id;
+        
+        if (isOwner) {
+          deleteBtn.style.display = 'block';
+          deleteBtn.disabled = false;
+          deleteBtn.onclick = () => {
+            if (confirm('Are you sure you want to delete this project? This action cannot be undone.')) {
+              this.deleteProject();
+            }
+          };
+        } else {
+          // User is not owner - hide or disable the button
+          deleteBtn.style.display = 'none';
+          deleteBtn.disabled = true;
+        }
       }
     } catch (err) {
       console.error('Failed to load project members:', err);
@@ -4803,16 +4814,28 @@ class LunaIntegration {
   async deleteProject() {
     if (!this.activeSpace || !this.activeSpace.id) return;
     
+    // Verify user is the owner
+    if (this.activeSpace.user_id !== this.user?.id) {
+      alert('Only the project owner can delete the project');
+      return;
+    }
+    
     try {
       await this.request(`/api/spaces/${this.activeSpace.id}`, {
         method: 'DELETE'
       });
       
+      this.closeProjectSettings();
       this.clearActiveSpace();
       await this.loadProjects();
     } catch (err) {
       console.error('Failed to delete project:', err);
-      alert('Failed to delete project');
+      const errorMessage = err.message || 'Failed to delete project';
+      if (errorMessage.includes('owner')) {
+        alert('Only the project owner can delete the project');
+      } else {
+        alert('Failed to delete project: ' + errorMessage);
+      }
     }
   }
 
