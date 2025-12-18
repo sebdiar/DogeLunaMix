@@ -613,12 +613,18 @@ async function handlePageDeleted(pageData) {
 // Helper: Manejar creación de task
 async function handleTaskCreated(taskData, apiKey) {
   try {
+    process.stdout.write('\n🚀 handleTaskCreated STARTED\n');
+    process.stdout.write('  Task ID: ' + (taskData?.id || 'NULL') + '\n');
+    process.stdout.write('  API Key: ' + (apiKey ? 'SET' : 'NOT SET') + '\n');
+    
     if (!apiKey) {
+      process.stdout.write('\n❌ ERROR: No API key provided\n');
       console.error('handleTaskCreated: No API key provided');
       return;
     }
 
     const taskId = taskData.id;
+    process.stdout.write('📝 Handling task created: ' + taskId + '\n');
     console.log('📝 Handling task created:', taskId);
 
     // Get task details from Notion
