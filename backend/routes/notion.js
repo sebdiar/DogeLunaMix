@@ -299,7 +299,15 @@ router.post('/webhook', async (req, res) => {
     
     // Use the same extraction function we use for logging
     let receivedDatabaseId = extractDatabaseIdFromEvent(event);
-    let pageId = event.data?.id || null;
+    // Try different locations for page ID (Notion webhook structure varies)
+    let pageId = event.data?.id || event.entity?.id || event.data?.page_id || null;
+    
+    // Log page ID extraction for debugging
+    process.stdout.write('\n🔍 Page ID extraction:\n');
+    process.stdout.write('  event.data?.id: ' + (event.data?.id || 'NULL') + '\n');
+    process.stdout.write('  event.entity?.id: ' + (event.entity?.id || 'NULL') + '\n');
+    process.stdout.write('  event.data?.page_id: ' + (event.data?.page_id || 'NULL') + '\n');
+    process.stdout.write('  Final pageId: ' + (pageId || 'NULL') + '\n');
     
     console.log('🔍 Event analysis:', {
       eventType: event.type,
