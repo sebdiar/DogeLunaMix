@@ -10,6 +10,23 @@ const router = express.Router();
 const recentWebhookEvents = [];
 const MAX_EVENTS = 50;
 
+// Helper function to extract database ID from event
+function extractDatabaseIdFromEvent(event) {
+  if (!event || !event.data) return null;
+  
+  // Try different possible locations for database_id
+  if (event.data.parent?.database_id) {
+    return event.data.parent.database_id;
+  }
+  if (event.data.parent?.type === 'database_id' && event.data.parent.database_id) {
+    return event.data.parent.database_id;
+  }
+  if (event.object === 'database' && event.data.id) {
+    return event.data.id;
+  }
+  return null;
+}
+
 // Webhook endpoint debe ser público (sin autenticación) - Notion lo llama directamente
 // Las demás rutas requieren autenticación
 const authenticateExceptWebhook = (req, res, next) => {
