@@ -9,13 +9,64 @@ const router = express.Router();
 // Webhook endpoint debe ser público (sin autenticación) - Notion lo llama directamente
 // Las demás rutas requieren autenticación
 const authenticateExceptWebhook = (req, res, next) => {
-  // Si es el webhook endpoint, no requiere autenticación
-  if (req.path === '/webhook' && req.method === 'POST') {
+  // Si es el webhook endpoint o el test endpoint, no requiere autenticación
+  if ((req.path === '/webhook' || req.path === '/webhook-test') && req.method === 'POST') {
     return next();
   }
   // Para todas las demás rutas, usar autenticación normal
   return authenticate(req, res, next);
 };
+
+// Helper: Normalize Notion ID (remove hyphens for comparison)
+// Notion IDs can come with or without hyphens depending on context
+function normalizeNotionId(id) {
+  if (!id) return null;
+  return id.replace(/-/g, '').toLowerCase();
+}
+
+// Helper: Compare two Notion IDs (handles both formats)
+function compareNotionIds(id1, id2) {
+  if (!id1 || !id2) return false;
+  return normalizeNotionId(id1) === normalizeNotionId(id2);
+}
+
+// Test endpoint to verify webhook handler logic (for local testing)
+router.post('/webhook-test', async (req, res) => {
+  try {
+    console.log('🧪 TEST: Simulating webhook event');
+    const testEvent = req.body;
+    const tasksDatabaseId = process.env.NOTION_TASKS_DATABASE_ID;
+    
+    console.log('🧪 TEST: Tasks Database ID from env:', tasksDatabaseId);
+    console.log('🧪 TEST: Normalized Tasks ID:', tasksDatabaseId ? normalizeNotionId(tasksDatabaseId) : null);
+    console.log('🧪 TEST: Test event:', JSON.stringify(testEvent, null, 2));
+    
+    if (testEvent.parent?.database_id) {
+      const receivedId = testEvent.parent.database_id;
+      const normalizedReceived = normalizeNotionId(receivedId);
+      const normalizedExpected = normalizeNotionId(tasksDatabaseId);
+      const matches = compareNotionIds(receivedId, tasksDatabaseId);
+      
+      console.log('🧪 TEST: Comparison:', {
+        received: receivedId,
+        receivedNormalized: normalizedReceived,
+        expected: tasksDatabaseId,
+        expectedNormalized: normalizedExpected,
+        matches
+      });
+    }
+    
+    res.json({ 
+      success: true, 
+      message: 'Test completed - check server logs',
+      tasksDatabaseId,
+      normalizedTasksId: tasksDatabaseId ? normalizeNotionId(tasksDatabaseId) : null
+    });
+  } catch (error) {
+    console.error('🧪 TEST Error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
 
 router.use(authenticateExceptWebhook);
 
@@ -125,25 +176,35 @@ router.post('/webhook', async (req, res) => {
     const tasksDatabaseId = process.env.NOTION_TASKS_DATABASE_ID;
     const projectsDatabaseId = process.env.NOTION_DATABASE_ID;
     
-    // Log webhook event for debugging
-    console.log('📥 Webhook received:', {
+    // Log webhook event for debugging (full structure)
+    console.log('📥 Webhook received:', JSON.stringify({
       type: event.type,
       object: event.object,
       hasData: !!event.data,
       dataParentId: event.data?.parent?.database_id,
+      dataParentType: event.data?.parent?.type,
+      dataId: event.data?.id,
+      fullDataParent: event.data?.parent,
       tasksDatabaseId,
-      projectsDatabaseId
-    });
+      projectsDatabaseId,
+      normalizedTasksId: tasksDatabaseId ? normalizeNotionId(tasksDatabaseId) : null,
+      normalizedReceivedId: event.data?.parent?.database_id ? normalizeNotionId(event.data.parent.database_id) : null
+    }, null, 2));
     
     // Check if this is a task event (from tasks database)
     // Notion webhook structure: { type: 'page.created', object: 'page', data: { id: '...', parent: { database_id: '...' } } }
     if (tasksDatabaseId && event.type && event.type.startsWith('page.') && event.data) {
       const pageData = event.data;
+      const receivedDatabaseId = pageData.parent?.database_id;
       
-      // Verify the page belongs to tasks database
-      // Check both event.data.parent.database_id and fetch page if needed
-      if (pageData.parent?.database_id === tasksDatabaseId) {
+      // Verify the page belongs to tasks database (using normalized comparison)
+      if (receivedDatabaseId && compareNotionIds(receivedDatabaseId, tasksDatabaseId)) {
         console.log('✅ Task event detected from tasks database');
+        console.log('📋 Task details:', {
+          taskId: pageData.id,
+          databaseId: receivedDatabaseId,
+          eventType: event.type
+        });
         // This is a task event
         if (event.type === 'page.created') {
           console.log('📝 Processing task creation:', pageData.id);
@@ -156,8 +217,13 @@ router.post('/webhook', async (req, res) => {
         return res.status(200).json({ received: true, type: 'task' });
       } else {
         console.log('⚠️  Event from different database:', {
-          received: pageData.parent?.database_id,
-          expected: tasksDatabaseId
+          received: receivedDatabaseId,
+          receivedNormalized: receivedDatabaseId ? normalizeNotionId(receivedDatabaseId) : null,
+          expected: tasksDatabaseId,
+          expectedNormalized: tasksDatabaseId ? normalizeNotionId(tasksDatabaseId) : null,
+          match: receivedDatabaseId ? compareNotionIds(receivedDatabaseId, tasksDatabaseId) : false,
+          parentType: pageData.parent?.type,
+          fullParent: pageData.parent
         });
       }
     }
@@ -165,9 +231,10 @@ router.post('/webhook', async (req, res) => {
     // Check if this is a project event (from projects database)
     if (projectsDatabaseId && event.object === 'page' && event.data) {
       const pageData = event.data;
+      const receivedDatabaseId = pageData.parent?.database_id;
       
-      // Verify the page belongs to projects database
-      if (pageData.parent?.database_id === projectsDatabaseId) {
+      // Verify the page belongs to projects database (using normalized comparison)
+      if (receivedDatabaseId && compareNotionIds(receivedDatabaseId, projectsDatabaseId)) {
         // This is a project event - handle as before (currently disabled)
         console.log('⚠️  Project webhook received but IGNORED - projects are only created from the app, not from Notion webhooks');
         return res.status(200).json({ received: true, message: 'Project webhook disabled - projects only created from app' });
