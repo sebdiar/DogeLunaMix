@@ -6,6 +6,7 @@ import fastifyCookie from "@fastify/cookie";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
+import { existsSync } from "fs";
 import { logging, server as wisp } from "@mercuryworkshop/wisp-js/server";
 import { createBareServer } from "@tomphttp/bare-server-node";
 import { MasqrMiddleware } from "./masqr.js";
@@ -14,6 +15,23 @@ dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+const distPath = join(__dirname, "dist");
+const indexPath = join(distPath, "index.html");
+
+// Verify dist folder exists
+if (!existsSync(distPath)) {
+  console.error(`❌ Error: dist folder not found at ${distPath}`);
+  console.error("Please run 'npm run build' before starting the server");
+  process.exit(1);
+}
+
+if (!existsSync(indexPath)) {
+  console.error(`❌ Error: index.html not found at ${indexPath}`);
+  console.error("Please run 'npm run build' before starting the server");
+  process.exit(1);
+}
+
+console.log(`✅ Found dist folder at ${distPath}`);
 
 const port = process.env.PORT || 2345;
 const server = createServer();
@@ -58,11 +76,11 @@ app.addContentTypeParser('*', { parseAs: 'buffer' }, (req, body, done) => {
 // IMPORTANT: Define SPA routes BEFORE fastifyStatic to ensure they are handled correctly
 // SPA routes - serve index.html for all frontend routes
 // This ensures React Router can handle client-side routing
-app.get("/", (req, reply) => reply.sendFile("index.html"));
-app.get("/indev", (req, reply) => reply.sendFile("index.html"));
-app.get("/login", (req, reply) => reply.sendFile("index.html"));
-app.get("/settings", (req, reply) => reply.sendFile("index.html"));
-app.get("/new", (req, reply) => reply.sendFile("index.html"));
+app.get("/", (req, reply) => reply.sendFile("index.html", distPath));
+app.get("/indev", (req, reply) => reply.sendFile("index.html", distPath));
+app.get("/login", (req, reply) => reply.sendFile("index.html", distPath));
+app.get("/settings", (req, reply) => reply.sendFile("index.html", distPath));
+app.get("/new", (req, reply) => reply.sendFile("index.html", distPath));
 
 app.register(fastifyStatic, {
   root: join(__dirname, "dist"),
