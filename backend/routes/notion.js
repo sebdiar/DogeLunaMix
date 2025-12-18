@@ -97,6 +97,28 @@ router.post('/webhook-test', async (req, res) => {
 
 router.use(authenticateExceptWebhook);
 
+// Endpoint to check recent webhook activity (for debugging) - MUST be after middleware
+router.get('/webhook-status', (req, res) => {
+  const tasksDatabaseId = process.env.NOTION_TASKS_DATABASE_ID;
+  res.json({
+    totalEvents: recentWebhookEvents.length,
+    recentEvents: recentWebhookEvents.slice(-10).reverse(), // Last 10 events, most recent first
+    timestamp: new Date().toISOString(),
+    serverTime: new Date().toISOString(),
+    configuration: {
+      tasksDatabaseId: tasksDatabaseId || 'NOT SET',
+      tasksDatabaseIdNormalized: tasksDatabaseId ? normalizeNotionId(tasksDatabaseId) : null,
+      webhookUrl: 'https://teneriadiaz.replit.app/api/notion/webhook'
+    },
+    summary: {
+      pageCreatedEvents: recentWebhookEvents.filter(e => e.eventType === 'page.created').length,
+      pageDeletedEvents: recentWebhookEvents.filter(e => e.eventType === 'page.deleted').length,
+      matchingEvents: recentWebhookEvents.filter(e => e.willMatch === true).length,
+      nonMatchingEvents: recentWebhookEvents.filter(e => e.willMatch === false && e.receivedDatabaseId).length
+    }
+  });
+});
+
 // Get Notion config for current user
 router.get('/config', async (req, res) => {
   try {
@@ -201,6 +223,15 @@ router.post('/webhook', async (req, res) => {
     eventObject: req.body?.object,
     hasData: !!req.body?.data
   };
+  
+  // Extract database ID from event for detailed logging
+  const receivedDbId = extractDatabaseIdFromEvent(req.body);
+  eventSummary.receivedDatabaseId = receivedDbId;
+  eventSummary.receivedDatabaseIdNormalized = receivedDbId ? normalizeNotionId(receivedDbId) : null;
+  eventSummary.tasksDatabaseId = process.env.NOTION_TASKS_DATABASE_ID || null;
+  eventSummary.tasksDatabaseIdNormalized = process.env.NOTION_TASKS_DATABASE_ID ? normalizeNotionId(process.env.NOTION_TASKS_DATABASE_ID) : null;
+  eventSummary.willMatch = receivedDbId && process.env.NOTION_TASKS_DATABASE_ID ? compareNotionIds(receivedDbId, process.env.NOTION_TASKS_DATABASE_ID) : false;
+  eventSummary.fullParent = req.body?.data?.parent ? JSON.stringify(req.body.data.parent) : null;
   
   // Store in memory for debugging
   recentWebhookEvents.push(eventSummary);
