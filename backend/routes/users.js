@@ -103,10 +103,15 @@ router.get('/supabase-config', async (req, res) => {
       supabaseAnonKey = process.env.SUPABASE_KEY?.trim();
     }
     
+    // Debug: Log available env vars (without exposing values)
     if (!supabaseUrl || !supabaseAnonKey) {
+      const availableKeys = Object.keys(process.env).filter(k => 
+        k.includes('SUPABASE') || k.includes('JWT') || k.includes('BACKEND')
+      );
       console.error('Missing Supabase config for frontend:', {
         url: supabaseUrl ? 'SET' : 'MISSING',
-        anonKey: supabaseAnonKey ? 'SET' : 'MISSING'
+        anonKey: supabaseAnonKey ? 'SET' : 'MISSING',
+        availableEnvKeys: availableKeys
       });
       return res.status(500).json({ error: 'Supabase configuration missing' });
     }

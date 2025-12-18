@@ -9,7 +9,14 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 // Load .env from project root (dogeub/.env)
-dotenv.config({ path: join(__dirname, '../.env') });
+// In Replit, Secrets are already in process.env, so this is just a fallback
+// Use { override: false } to not override existing env vars (from Replit Secrets)
+try {
+  dotenv.config({ path: join(__dirname, '../.env'), override: false });
+} catch (error) {
+  // Ignore if .env file doesn't exist (normal in Replit where Secrets are used)
+  console.log('Note: .env file not found, using environment variables from Secrets');
+}
 
 import authRoutes from './routes/auth.js';
 import usersRoutes from './routes/users.js';
