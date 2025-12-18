@@ -10,15 +10,6 @@ const router = express.Router();
 const recentWebhookEvents = [];
 const MAX_EVENTS = 50;
 
-// Endpoint to check recent webhook activity (for debugging)
-router.get('/webhook-status', (req, res) => {
-  res.json({
-    totalEvents: recentWebhookEvents.length,
-    recentEvents: recentWebhookEvents.slice(-10).reverse(), // Last 10 events, most recent first
-    timestamp: new Date().toISOString()
-  });
-});
-
 // Webhook endpoint debe ser público (sin autenticación) - Notion lo llama directamente
 // Las demás rutas requieren autenticación
 const authenticateExceptWebhook = (req, res, next) => {
