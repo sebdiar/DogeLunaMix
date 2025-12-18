@@ -162,6 +162,14 @@ router.post('/config', async (req, res) => {
 // Webhook endpoint (NO requiere autenticación - Notion llama este endpoint)
 // IMPORTANTE: Este endpoint debe ser público para que Notion pueda llamarlo
 router.post('/webhook', async (req, res) => {
+  // Log immediately when webhook endpoint is hit
+  console.log('🔔 WEBHOOK ENDPOINT HIT - Request received at:', new Date().toISOString());
+  console.log('🔔 Request method:', req.method);
+  console.log('🔔 Request path:', req.path);
+  console.log('🔔 Request headers:', JSON.stringify(req.headers, null, 2));
+  console.log('🔔 Request body type:', typeof req.body);
+  console.log('🔔 Request body keys:', req.body ? Object.keys(req.body) : 'no body');
+  
   try {
     // Manejar verificación de webhook (Notion envía un verification_token)
     if (req.body.type === 'webhook.verification' || req.body.verification_token) {
