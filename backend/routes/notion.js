@@ -325,9 +325,20 @@ router.post('/webhook', async (req, res) => {
     });
     
     // Check if this is a page event from tasks database
+    process.stdout.write('\n🔍 Checking if event should be processed:\n');
+    process.stdout.write('  tasksDatabaseId: ' + (tasksDatabaseId || 'NULL') + '\n');
+    process.stdout.write('  event.type: ' + (event.type || 'NULL') + '\n');
+    process.stdout.write('  event.type.startsWith("page."): ' + (event.type && event.type.startsWith('page.') ? 'YES' : 'NO') + '\n');
+    process.stdout.write('  event.data: ' + (event.data ? 'EXISTS' : 'NULL') + '\n');
+    process.stdout.write('  receivedDatabaseId: ' + (receivedDatabaseId || 'NULL') + '\n');
+    process.stdout.write('  All conditions met: ' + (tasksDatabaseId && event.type && event.type.startsWith('page.') && event.data && receivedDatabaseId ? 'YES' : 'NO') + '\n');
+    
     if (tasksDatabaseId && event.type && event.type.startsWith('page.') && event.data && receivedDatabaseId) {
       // Verify the page belongs to tasks database (using normalized comparison)
-      if (compareNotionIds(receivedDatabaseId, tasksDatabaseId)) {
+      const matches = compareNotionIds(receivedDatabaseId, tasksDatabaseId);
+      process.stdout.write('  Database ID match: ' + (matches ? 'YES ✅' : 'NO ❌') + '\n');
+      
+      if (matches) {
         console.log('✅ Task event detected from tasks database');
         console.log('📋 Task details:', {
           taskId: pageId,
