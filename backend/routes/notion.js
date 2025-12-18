@@ -352,13 +352,21 @@ router.post('/webhook', async (req, res) => {
           console.log('📝 Processing task creation:', pageId);
           console.log('📝 Task data:', JSON.stringify(event.data, null, 2));
           console.log('📝 API Key available:', !!process.env.NOTION_API_KEY);
+          
+          // Create taskData with explicit pageId
+          const taskData = { ...event.data, id: pageId };
+          process.stdout.write('📝 Calling handleTaskCreated with taskData.id: ' + taskData.id + '\n');
+          
           // Process new task creation asynchronously (don't block webhook response)
-          // Pass pageId explicitly since event.data may not have the ID
-          handleTaskCreated({ ...event.data, id: pageId }, process.env.NOTION_API_KEY).catch(err => {
-            process.stdout.write('\n❌ ERROR HANDLING TASK CREATION: ' + err.message + '\n');
-            console.error('❌ Error handling task creation:', err);
-            console.error('❌ Error stack:', err.stack);
-          });
+          handleTaskCreated(taskData, process.env.NOTION_API_KEY)
+            .then(() => {
+              process.stdout.write('\n✅ handleTaskCreated completed successfully\n');
+            })
+            .catch(err => {
+              process.stdout.write('\n❌ ERROR HANDLING TASK CREATION: ' + err.message + '\n');
+              console.error('❌ Error handling task creation:', err);
+              console.error('❌ Error stack:', err.stack);
+            });
         }
         // Respond quickly to Notion
         return res.status(200).json({ received: true, type: 'task' });
