@@ -9,14 +9,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 // Load .env from project root (dogeub/.env)
-// In Replit, Secrets are already in process.env, so this is just a fallback
-// Use { override: false } to not override existing env vars (from Replit Secrets)
-try {
-  dotenv.config({ path: join(__dirname, '../.env'), override: false });
-} catch (error) {
-  // Ignore if .env file doesn't exist (normal in Replit where Secrets are used)
-  console.log('Note: .env file not found, using environment variables from Secrets');
-}
+dotenv.config({ path: join(__dirname, '../.env') });
 
 import authRoutes from './routes/auth.js';
 import usersRoutes from './routes/users.js';
@@ -24,8 +17,6 @@ import tabsRoutes from './routes/tabs.js';
 import spacesRoutes from './routes/spaces.js';
 import chatRoutes from './routes/chat.js';
 import notionRoutes from './routes/notion.js';
-import cron from 'node-cron';
-import { sendMorningTaskReminders } from './services/notion-tasks-reminders.js';
 
 const app = express();
 const PORT = process.env.BACKEND_PORT || 3001;
@@ -62,32 +53,41 @@ const server = app.listen(PORT, () => {
   console.log(`DogeUB Backend running on port ${PORT}`);
   
   // Initialize Notion tasks reminders cron job (after server starts)
-  try {
-    const reminderEnabled = process.env.NOTION_TASKS_REMINDER_ENABLED === 'true';
-    const reminderHour = parseInt(process.env.NOTION_TASKS_REMINDER_HOUR || '6', 10);
+  // Use dynamic import to avoid breaking server if module doesn't exist
+  import('node-cron').then(cronModule => {
+    return import('./services/notion-tasks-reminders.js').then(remindersModule => {
+      const cron = cronModule.default;
+      const sendMorningTaskReminders = remindersModule.sendMorningTaskReminders;
+      
+      try {
+        const reminderEnabled = process.env.NOTION_TASKS_REMINDER_ENABLED === 'true';
+        const reminderHour = parseInt(process.env.NOTION_TASKS_REMINDER_HOUR || '6', 10);
 
-    if (reminderEnabled) {
-      // Schedule daily reminders at specified hour (default: 6 AM)
-      // Cron format: minute hour day month day-of-week
-      const cronExpression = `0 ${reminderHour} * * *`;
-      
-      cron.schedule(cronExpression, async () => {
-        console.log(`⏰ Running daily task reminders at ${reminderHour}:00...`);
-        try {
-          await sendMorningTaskReminders();
-        } catch (error) {
-          console.error('Error running task reminders:', error);
+        if (reminderEnabled) {
+          // Schedule daily reminders at specified hour (default: 6 AM)
+          // Cron format: minute hour day month day-of-week
+          const cronExpression = `0 ${reminderHour} * * *`;
+          
+          cron.schedule(cronExpression, async () => {
+            console.log(`⏰ Running daily task reminders at ${reminderHour}:00...`);
+            try {
+              await sendMorningTaskReminders();
+            } catch (error) {
+              console.error('Error running task reminders:', error);
+            }
+          });
+          
+          console.log(`✅ Task reminders scheduled to run daily at ${reminderHour}:00`);
         }
-      });
-      
-      console.log(`✅ Task reminders scheduled to run daily at ${reminderHour}:00`);
-    } else {
-      console.log('ℹ️  Task reminders are disabled (set NOTION_TASKS_REMINDER_ENABLED=true to enable)');
-    }
-  } catch (error) {
-    console.error('Error initializing task reminders:', error);
-    // Don't crash the server if reminders fail to initialize
-  }
+      } catch (error) {
+        console.error('Error initializing task reminders:', error);
+        // Don't crash the server if reminders fail to initialize
+      }
+    });
+  }).catch(error => {
+    // Cron job modules not available - continue without it (not an error)
+    // This is normal if the Notion tasks feature is not fully configured
+  });
 });
 
 // Handle port already in use errors gracefully
