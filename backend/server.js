@@ -53,41 +53,50 @@ const server = app.listen(PORT, () => {
   console.log(`DogeUB Backend running on port ${PORT}`);
   
   // Initialize Notion tasks reminders cron job (after server starts)
+  // TEMPORARILY DISABLED to debug server startup issues
   // Use dynamic import to avoid breaking server if module doesn't exist
-  import('node-cron').then(cronModule => {
-    return import('./services/notion-tasks-reminders.js').then(remindersModule => {
-      const cron = cronModule.default;
-      const sendMorningTaskReminders = remindersModule.sendMorningTaskReminders;
-      
-      try {
-        const reminderEnabled = process.env.NOTION_TASKS_REMINDER_ENABLED === 'true';
-        const reminderHour = parseInt(process.env.NOTION_TASKS_REMINDER_HOUR || '6', 10);
+  // Run asynchronously so it doesn't block server startup
+  setTimeout(() => {
+    // Only initialize if NOTION_TASKS_REMINDER_ENABLED is explicitly set to 'true'
+    if (process.env.NOTION_TASKS_REMINDER_ENABLED !== 'true') {
+      return; // Skip initialization if not enabled
+    }
+    
+    import('node-cron').then(cronModule => {
+      return import('./services/notion-tasks-reminders.js').then(remindersModule => {
+        const cron = cronModule.default;
+        const sendMorningTaskReminders = remindersModule.sendMorningTaskReminders;
+        
+        try {
+          const reminderEnabled = process.env.NOTION_TASKS_REMINDER_ENABLED === 'true';
+          const reminderHour = parseInt(process.env.NOTION_TASKS_REMINDER_HOUR || '6', 10);
 
-        if (reminderEnabled) {
-          // Schedule daily reminders at specified hour (default: 6 AM)
-          // Cron format: minute hour day month day-of-week
-          const cronExpression = `0 ${reminderHour} * * *`;
-          
-          cron.schedule(cronExpression, async () => {
-            console.log(`⏰ Running daily task reminders at ${reminderHour}:00...`);
-            try {
-              await sendMorningTaskReminders();
-            } catch (error) {
-              console.error('Error running task reminders:', error);
-            }
-          });
-          
-          console.log(`✅ Task reminders scheduled to run daily at ${reminderHour}:00`);
+          if (reminderEnabled) {
+            // Schedule daily reminders at specified hour (default: 6 AM)
+            // Cron format: minute hour day month day-of-week
+            const cronExpression = `0 ${reminderHour} * * *`;
+            
+            cron.schedule(cronExpression, async () => {
+              console.log(`⏰ Running daily task reminders at ${reminderHour}:00...`);
+              try {
+                await sendMorningTaskReminders();
+              } catch (error) {
+                console.error('Error running task reminders:', error);
+              }
+            });
+            
+            console.log(`✅ Task reminders scheduled to run daily at ${reminderHour}:00`);
+          }
+        } catch (error) {
+          console.error('Error initializing task reminders:', error);
+          // Don't crash the server if reminders fail to initialize
         }
-      } catch (error) {
-        console.error('Error initializing task reminders:', error);
-        // Don't crash the server if reminders fail to initialize
-      }
+      });
+    }).catch(error => {
+      // Cron job modules not available - continue without it (not an error)
+      // This is normal if the Notion tasks feature is not fully configured
     });
-  }).catch(error => {
-    // Cron job modules not available - continue without it (not an error)
-    // This is normal if the Notion tasks feature is not fully configured
-  });
+  }, 1000); // Delay 1 second to ensure server is fully started
 });
 
 // Handle port already in use errors gracefully
