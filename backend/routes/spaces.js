@@ -14,6 +14,9 @@ router.get('/', async (req, res) => {
     // For projects, get both:
     // 1. Projects owned by the user
     // 2. Projects where the user is a member (participant in the chat)
+    // For user spaces, get both:
+    // 1. User spaces owned by the user
+    // 2. User spaces where the user is a participant in the chat (shared DMs)
     let query = supabase
       .from('spaces')
       .select('*')
@@ -40,8 +43,8 @@ router.get('/', async (req, res) => {
     
     let spaces = spacesData || [];
     
-    // For projects, also include projects where user is a member (but not owner)
-    if (category === 'project') {
+    // For projects and user spaces, also include spaces where user is a member (but not owner)
+    if (category === 'project' || category === 'user' || !category) {
       // Get all chats where the user is a participant
       const { data: userChats } = await supabase
         .from('chat_participants')
@@ -60,13 +63,17 @@ router.get('/', async (req, res) => {
         if (spaceChats && spaceChats.length > 0) {
           const spaceIds = spaceChats.map(sc => sc.space_id);
           
-          // Get these spaces (projects only, not owned by current user, not archived)
+          // Get these spaces (projects or user spaces, not owned by current user, not archived)
           let memberSpacesQuery = supabase
             .from('spaces')
             .select('*')
             .in('id', spaceIds)
-            .eq('category', 'project')
-            .neq('user_id', req.userId); // Exclude projects owned by user (already included above)
+            .neq('user_id', req.userId); // Exclude spaces owned by user (already included above)
+          
+          // Filter by category if specified
+          if (category) {
+            memberSpacesQuery = memberSpacesQuery.eq('category', category);
+          }
           
           if (archived !== 'true') {
             memberSpacesQuery = memberSpacesQuery.eq('archived', false);
@@ -94,72 +101,130 @@ router.get('/', async (req, res) => {
     if (category === 'user') {
       const { data: currentUser } = await supabase
         .from('users')
-        .select('email, name')
+        .select('email, name, avatar_photo')
         .eq('id', req.userId)
         .single();
       
-      // For spaces created by current user, get the other user's info
-      for (let space of spaces) {
-        // Try to find the other user by name or email
-        // First check if name is an email
-        if (space.name && space.name.includes('@')) {
-          const { data: otherUser } = await supabase
-            .from('users')
-            .select('id, name, email, avatar_photo')
-            .or(`email.eq.${space.name},name.eq.${space.name}`)
-            .neq('id', req.userId)
-            .single();
-          
-          if (otherUser) {
-            space.display_name = otherUser.name || otherUser.email;
-            space.other_user_id = otherUser.id;
-            space.other_user_photo = otherUser.avatar_photo;
-          } else {
-            space.display_name = space.name;
+      // OPTIMIZATION: Batch load all data upfront instead of individual queries in loops
+      // 1. Get all space_chats for all spaces in one query
+      const allSpaceIds = spaces.map(s => s.id);
+      const { data: allSpaceChats } = allSpaceIds.length > 0 ? await supabase
+        .from('space_chats')
+        .select('space_id, chat_id')
+        .in('space_id', allSpaceIds) : { data: [] };
+      
+      // Create map: space_id -> chat_id
+      const spaceChatMap = new Map();
+      if (allSpaceChats) {
+        allSpaceChats.forEach(sc => {
+          spaceChatMap.set(sc.space_id, sc.chat_id);
+        });
+      }
+      
+      // 2. Get all chat participants for all chats in one query
+      const allChatIds = Array.from(spaceChatMap.values());
+      const { data: allParticipants } = allChatIds.length > 0 ? await supabase
+        .from('chat_participants')
+        .select('chat_id, user_id, users!chat_participants_user_id_fkey(id, name, email, avatar_photo)')
+        .in('chat_id', allChatIds) : { data: [] };
+      
+      // Create map: chat_id -> participants[]
+      const chatParticipantsMap = new Map();
+      if (allParticipants) {
+        allParticipants.forEach(p => {
+          if (!chatParticipantsMap.has(p.chat_id)) {
+            chatParticipantsMap.set(p.chat_id, []);
           }
-        } else if (space.name) {
-          // Try to find by name (could be a name, not email)
-          const { data: otherUser } = await supabase
-            .from('users')
-            .select('id, name, email, avatar_photo')
-            .or(`name.eq.${space.name},email.eq.${space.name}`)
-            .neq('id', req.userId)
-            .maybeSingle();
+          chatParticipantsMap.get(p.chat_id).push(p);
+        });
+      }
+      
+      // 3. Collect all unique email/name values from spaces that need user lookup
+      const userLookupKeys = new Set();
+      spaces.forEach(space => {
+        const chatId = spaceChatMap.get(space.id);
+        if (!chatId && space.name) {
+          // No chat yet - need to lookup by name/email
+          userLookupKeys.add(space.name);
+        }
+      });
+      
+      // 4. Batch lookup users by email/name in one query
+      const userLookupMap = new Map(); // email/name -> user
+      if (userLookupKeys.size > 0) {
+        const lookupKeysArray = Array.from(userLookupKeys);
+        // Build OR conditions for all lookup keys
+        const orConditions = lookupKeysArray.flatMap(key => [
+          `email.eq.${key}`,
+          `name.eq.${key}`
+        ]);
+        
+        const { data: foundUsers } = await supabase
+          .from('users')
+          .select('id, name, email, avatar_photo')
+          .or(orConditions.join(','))
+          .neq('id', req.userId);
+        
+        if (foundUsers) {
+          foundUsers.forEach(user => {
+            // Map by both email and name for easy lookup
+            if (user.email) userLookupMap.set(user.email, user);
+            if (user.name) userLookupMap.set(user.name, user);
+          });
+        }
+      }
+      
+      // 5. Now enrich spaces using the pre-loaded data (no more queries in loop)
+      for (let space of spaces) {
+        const chatId = spaceChatMap.get(space.id);
+        
+        if (chatId) {
+          // Has chat - get participants from map
+          const participants = chatParticipantsMap.get(chatId) || [];
           
-          if (otherUser) {
-            space.display_name = otherUser.name || otherUser.email;
-            space.other_user_id = otherUser.id;
-            space.other_user_photo = otherUser.avatar_photo;
-          } else {
-            // If not found by name, try to get from chat participants
-            const { data: spaceChat } = await supabase
-              .from('space_chats')
-              .select('chat_id')
-              .eq('space_id', space.id)
-              .maybeSingle();
-            
-            if (spaceChat) {
-              const { data: participants } = await supabase
-                .from('chat_participants')
-                .select('user_id, users!chat_participants_user_id_fkey(id, name, email, avatar_photo)')
-                .eq('chat_id', spaceChat.chat_id)
-                .neq('user_id', req.userId)
-                .limit(1)
-                .maybeSingle();
+          if (participants.length > 0) {
+            // Only support DMs (2 participants) - no groups
+            if (participants.length === 2) {
+              // This is a DM (2 participants: current user + one other)
+              const otherParticipant = participants.find(p => p.user_id !== req.userId && p.users);
               
-              if (participants && participants.users) {
-                space.display_name = participants.users.name || participants.users.email;
-                space.other_user_id = participants.users.id;
-                space.other_user_photo = participants.users.avatar_photo;
+              if (otherParticipant && otherParticipant.users) {
+                // Show the other user's name and photo
+                space.display_name = otherParticipant.users.name || otherParticipant.users.email;
+                space.other_user_id = otherParticipant.users.id;
+                space.other_user_photo = otherParticipant.users.avatar_photo;
               } else {
+                // Fallback to space name
                 space.display_name = space.name;
               }
+            } else if (participants.length === 1 && participants[0].user_id === req.userId) {
+              // This is a personal notes chat (only current user)
+              space.display_name = space.name;
+              space.is_personal_notes = true;
+              space.other_user_photo = currentUser?.avatar_photo || null; // Use current user's photo
+            } else {
+              // Fallback to space name
+              space.display_name = space.name;
+            }
+          } else {
+            // No participants - fallback to space name
+            space.display_name = space.name;
+          }
+        } else {
+          // No chat yet - try to find by name/email from lookup map
+          if (space.name) {
+            const otherUser = userLookupMap.get(space.name);
+            
+            if (otherUser) {
+              space.display_name = otherUser.name || otherUser.email;
+              space.other_user_id = otherUser.id;
+              space.other_user_photo = otherUser.avatar_photo;
             } else {
               space.display_name = space.name;
             }
+          } else {
+            space.display_name = space.name;
           }
-        } else {
-          space.display_name = space.name;
         }
       }
       
@@ -193,50 +258,114 @@ router.get('/', async (req, res) => {
               .eq('category', 'user');
             
             if (sharedSpaces && sharedSpaces.length > 0) {
-              // Enrich with other user's info
+              // OPTIMIZATION: Batch load data for shared spaces
+              const sharedSpaceIds = sharedSpaces.map(s => s.id);
+              
+              // Get all space_chats for shared spaces
+              const { data: sharedSpaceChats } = await supabase
+                .from('space_chats')
+                .select('space_id, chat_id')
+                .in('space_id', sharedSpaceIds);
+              
+              // Update spaceChatMap with shared spaces
+              if (sharedSpaceChats) {
+                sharedSpaceChats.forEach(sc => {
+                  spaceChatMap.set(sc.space_id, sc.chat_id);
+                });
+              }
+              
+              // Get chat IDs for shared spaces
+              const sharedChatIds = sharedSpaceChats ? sharedSpaceChats.map(sc => sc.chat_id) : [];
+              
+              // Get participants for shared chats (if not already loaded)
+              const newChatIds = sharedChatIds.filter(cid => !chatParticipantsMap.has(cid));
+              if (newChatIds.length > 0) {
+                const { data: sharedParticipants } = await supabase
+                  .from('chat_participants')
+                  .select('chat_id, user_id, users!chat_participants_user_id_fkey(id, name, email, avatar_photo)')
+                  .in('chat_id', newChatIds);
+                
+                if (sharedParticipants) {
+                  sharedParticipants.forEach(p => {
+                    if (!chatParticipantsMap.has(p.chat_id)) {
+                      chatParticipantsMap.set(p.chat_id, []);
+                    }
+                    chatParticipantsMap.get(p.chat_id).push(p);
+                  });
+                }
+              }
+              
+              // Collect lookup keys for shared spaces
+              sharedSpaces.forEach(space => {
+                const chatId = spaceChatMap.get(space.id);
+                if (!chatId && space.name) {
+                  userLookupKeys.add(space.name);
+                }
+              });
+              
+              // Batch lookup users for shared spaces (if needed)
+              if (userLookupKeys.size > 0) {
+                const lookupKeysArray = Array.from(userLookupKeys);
+                const orConditions = lookupKeysArray.flatMap(key => [
+                  `email.eq.${key}`,
+                  `name.eq.${key}`
+                ]);
+                
+                const { data: foundUsers } = await supabase
+                  .from('users')
+                  .select('id, name, email, avatar_photo')
+                  .or(orConditions.join(','))
+                  .neq('id', req.userId);
+                
+                if (foundUsers) {
+                  foundUsers.forEach(user => {
+                    if (user.email) userLookupMap.set(user.email, user);
+                    if (user.name) userLookupMap.set(user.name, user);
+                  });
+                }
+              }
+              
+              // Enrich shared spaces using pre-loaded data
               for (let space of sharedSpaces) {
                 // For spaces owned by other users, the "other user" is the owner
                 if (space.user_id !== req.userId) {
                   space.display_name = space.owner?.name || space.owner?.email || space.name;
                   space.other_user_id = space.user_id;
                   space.other_user_photo = space.owner?.avatar_photo;
-                } else if (space.name && space.name.includes('@')) {
-                  // For spaces owned by current user, find the other user by name
-                  const { data: otherUser } = await supabase
-                    .from('users')
-                    .select('id, name, email, avatar_photo')
-                    .or(`email.eq.${space.name},name.eq.${space.name}`)
-                    .neq('id', req.userId)
-                    .single();
-                  
-                  if (otherUser) {
-                    space.display_name = otherUser.name || otherUser.email;
-                    space.other_user_id = otherUser.id;
-                    space.other_user_photo = otherUser.avatar_photo;
-                  } else {
-                    space.display_name = space.name;
-                  }
                 } else {
-                  // Try to find other user from chat participants
-                  const { data: spaceChat } = await supabase
-                    .from('space_chats')
-                    .select('chat_id')
-                    .eq('space_id', space.id)
-                    .single();
+                  const chatId = spaceChatMap.get(space.id);
                   
-                  if (spaceChat) {
-                    const { data: participants } = await supabase
-                      .from('chat_participants')
-                      .select('user_id, users!chat_participants_user_id_fkey(id, name, email, avatar_photo)')
-                      .eq('chat_id', spaceChat.chat_id)
-                      .neq('user_id', req.userId)
-                      .limit(1)
-                      .single();
+                  if (chatId) {
+                    // Has chat - get participants from map
+                    const participants = chatParticipantsMap.get(chatId) || [];
                     
-                    if (participants && participants.users) {
-                      space.display_name = participants.users.name || participants.users.email;
-                      space.other_user_id = participants.users.id;
-                      space.other_user_photo = participants.users.avatar_photo;
+                    if (participants.length > 0) {
+                      // Only support DMs (2 participants) - no groups
+                      if (participants.length === 2) {
+                        // This is a DM (2 participants)
+                        const otherParticipant = participants.find(p => p.user_id !== req.userId && p.users);
+                        
+                        if (otherParticipant && otherParticipant.users) {
+                          space.display_name = otherParticipant.users.name || otherParticipant.users.email;
+                          space.other_user_id = otherParticipant.users.id;
+                          space.other_user_photo = otherParticipant.users.avatar_photo;
+                        } else {
+                          space.display_name = space.name;
+                        }
+                      } else {
+                        space.display_name = space.name;
+                      }
+                    } else {
+                      space.display_name = space.name;
+                    }
+                  } else if (space.name) {
+                    // No chat yet - try to find by name/email from lookup map
+                    const otherUser = userLookupMap.get(space.name);
+                    
+                    if (otherUser) {
+                      space.display_name = otherUser.name || otherUser.email;
+                      space.other_user_id = otherUser.id;
+                      space.other_user_photo = otherUser.avatar_photo;
                     } else {
                       space.display_name = space.name;
                     }
@@ -247,13 +376,55 @@ router.get('/', async (req, res) => {
               }
               
               // Add shared spaces to the list, avoiding duplicates
+              // Also check for duplicate chats (same chat_id) to avoid showing the same chat twice
               const existingIds = new Set(spaces.map(s => s.id));
-              sharedSpaces.forEach(s => {
-                if (!existingIds.has(s.id)) {
-                  spaces.push(s);
-                  existingIds.add(s.id); // Update set to prevent duplicates
+              const existingChatIds = new Map(); // Map chat_id -> space_id to track which space represents each chat
+              
+              // Use pre-loaded spaceChatMap instead of querying again
+              for (const space of spaces) {
+                const chatId = spaceChatMap.get(space.id);
+                if (chatId) {
+                  existingChatIds.set(chatId, space.id);
                 }
-              });
+              }
+              
+              // Only add shared spaces that don't duplicate existing chats
+              for (const s of sharedSpaces) {
+                if (!existingIds.has(s.id)) {
+                  // Check if this space's chat is already represented (using pre-loaded map)
+                  const chatId = spaceChatMap.get(s.id);
+                  
+                  if (chatId) {
+                    const existingSpaceId = existingChatIds.get(chatId);
+                    if (existingSpaceId) {
+                      // This chat is already represented by another space
+                      // Prefer the space owned by the current user if available
+                      const existingSpace = spaces.find(sp => sp.id === existingSpaceId);
+                      if (existingSpace && existingSpace.user_id === req.userId) {
+                        // Keep the existing space (owned by current user) - skip this one
+                        continue;
+                      } else if (s.user_id === req.userId) {
+                        // Replace with the current user's space
+                        const index = spaces.findIndex(sp => sp.id === existingSpaceId);
+                        if (index !== -1) {
+                          spaces[index] = s;
+                          existingIds.delete(existingSpaceId);
+                          existingIds.add(s.id);
+                          existingChatIds.set(chatId, s.id);
+                        }
+                        continue;
+                      } else {
+                        // Keep the existing one - skip this one
+                        continue;
+                      }
+                    }
+                    existingChatIds.set(chatId, s.id);
+                  }
+                  
+                  spaces.push(s);
+                  existingIds.add(s.id);
+                }
+              }
             }
           }
         }
@@ -282,6 +453,46 @@ router.get('/', async (req, res) => {
           });
         }
       }
+    }
+    
+    // Final deduplication: remove spaces that share the same chat_id
+    // Keep only one space per chat_id (prefer spaces owned by current user)
+    if (category === 'user' && spaces.length > 0) {
+      const chatIdToSpace = new Map();
+      const spacesToKeep = [];
+      
+      // First pass: collect all spaces with their chat_ids
+      for (const space of spaces) {
+        const { data: spaceChat } = await supabase
+          .from('space_chats')
+          .select('chat_id')
+          .eq('space_id', space.id)
+          .maybeSingle();
+        
+        if (spaceChat) {
+          const existingSpace = chatIdToSpace.get(spaceChat.chat_id);
+          if (!existingSpace) {
+            chatIdToSpace.set(spaceChat.chat_id, space);
+            spacesToKeep.push(space);
+          } else {
+            // Prefer space owned by current user
+            if (space.user_id === req.userId && existingSpace.user_id !== req.userId) {
+              // Replace with current user's space
+              const index = spacesToKeep.findIndex(s => s.id === existingSpace.id);
+              if (index !== -1) {
+                spacesToKeep[index] = space;
+                chatIdToSpace.set(spaceChat.chat_id, space);
+              }
+            }
+            // Otherwise keep the existing one
+          }
+        } else {
+          // Space without chat - keep it (might be a personal notes space)
+          spacesToKeep.push(space);
+        }
+      }
+      
+      spaces = spacesToKeep;
     }
     
     res.json({ spaces: spaces || [] });
@@ -409,102 +620,141 @@ router.get('/:id', async (req, res) => {
 // Create space
 router.post('/', async (req, res) => {
   try {
-    const { name, category, avatar_emoji, avatar_color, avatar_photo } = req.body;
+    const { name, category, avatar_emoji, avatar_color, avatar_photo, participant_ids } = req.body;
     
     if (!name || !category) {
       return res.status(400).json({ error: 'Name and category are required' });
     }
     
+    // Groups are not supported - only DMs (one-on-one chats)
+    // Ignore participant_ids if provided (for backward compatibility)
+    
     // For user spaces (DMs), check if a space already exists between these two users
+    let otherUser = null;
     if (category === 'user') {
       try {
         // Find the other user by name/email
-        const { data: otherUser, error: otherUserError } = await supabase
+        const { data: foundOtherUser, error: otherUserError } = await supabase
           .from('users')
           .select('id, email, name, avatar_photo')
           .or(`email.eq.${name},name.eq.${name}`)
           .neq('id', req.userId)
           .single();
         
-        if (!otherUserError && otherUser) {
-          // Get current user info
-          const { data: currentUser } = await supabase
-            .from('users')
-            .select('email, name')
-            .eq('id', req.userId)
-            .single();
+        if (!otherUserError && foundOtherUser) {
+          otherUser = foundOtherUser;
+        }
+        
+        // Get current user info
+        const { data: currentUser } = await supabase
+          .from('users')
+          .select('email, name')
+          .eq('id', req.userId)
+          .single();
+        
+        if (otherUser && currentUser) {
+          // Check ALL user spaces between these two users
+          // This is the most reliable method - verifies both users are chat participants
+          const { data: allUserSpaces, error: allSpacesError } = await supabase
+            .from('spaces')
+            .select('*')
+            .eq('category', 'user')
+            .eq('archived', false)
+            .or(`user_id.eq.${req.userId},user_id.eq.${otherUser.id}`);
           
-          if (currentUser) {
-            // Check ALL user spaces between these two users
-            // This is the most reliable method - verifies both users are chat participants
-            const { data: allUserSpaces, error: allSpacesError } = await supabase
-              .from('spaces')
-              .select('*')
-              .eq('category', 'user')
-              .eq('archived', false)
-              .or(`user_id.eq.${req.userId},user_id.eq.${otherUser.id}`);
-            
-            if (!allSpacesError && allUserSpaces && allUserSpaces.length > 0) {
-              // Check each space to see if it's a DM between these two users
-              for (const space of allUserSpaces) {
-                const { data: spaceChat } = await supabase
-                  .from('space_chats')
-                  .select('chat_id')
-                  .eq('space_id', space.id)
-                  .maybeSingle();
+          if (!allSpacesError && allUserSpaces && allUserSpaces.length > 0) {
+            // Check each space to see if it's a DM between these two users
+            for (const space of allUserSpaces) {
+              const { data: spaceChat } = await supabase
+                .from('space_chats')
+                .select('chat_id')
+                .eq('space_id', space.id)
+                .maybeSingle();
+              
+              if (spaceChat) {
+                // Check if both users are participants in this chat
+                const { data: participants } = await supabase
+                  .from('chat_participants')
+                  .select('user_id')
+                  .eq('chat_id', spaceChat.chat_id)
+                  .in('user_id', [req.userId, otherUser.id]);
                 
-                if (spaceChat) {
-                  // Check if both users are participants in this chat
-                  const { data: participants } = await supabase
-                    .from('chat_participants')
-                    .select('user_id')
-                    .eq('chat_id', spaceChat.chat_id)
-                    .in('user_id', [req.userId, otherUser.id]);
-                  
-                  const participantIds = participants?.map(p => p.user_id) || [];
-                  const hasBothUsers = participantIds.includes(req.userId) && participantIds.includes(otherUser.id);
-                  
-                  if (hasBothUsers) {
-                    // Both users are participants - this is the DM we're looking for
-                    return res.json({ space: space });
-                  }
+                const participantIds = participants?.map(p => p.user_id) || [];
+                const hasBothUsers = participantIds.includes(req.userId) && participantIds.includes(otherUser.id);
+                
+                if (hasBothUsers) {
+                  // Both users are participants - this is the DM we're looking for
+                  return res.json({ space: space });
                 }
               }
             }
-            
-            // Fallback: Check for existing space by name match
-            const { data: existingSpace1 } = await supabase
-              .from('spaces')
-              .select('*')
-              .eq('user_id', req.userId)
-              .eq('category', 'user')
-              .eq('archived', false)
-              .or(`name.eq.${otherUser.email},name.eq.${otherUser.name}`)
-              .limit(1)
+          }
+          
+          // Fallback: Check for existing space by name match
+          const { data: existingSpace1 } = await supabase
+            .from('spaces')
+            .select('*')
+            .eq('user_id', req.userId)
+            .eq('category', 'user')
+            .eq('archived', false)
+            .or(`name.eq.${otherUser.email},name.eq.${otherUser.name}`)
+            .limit(1)
+            .maybeSingle();
+          
+          if (existingSpace1) {
+            existingSpace1.other_user_photo = otherUser.avatar_photo;
+            return res.json({ space: existingSpace1 });
+          }
+          
+          // Check for existing space owned by other user
+          const { data: existingSpace2 } = await supabase
+            .from('spaces')
+            .select('*')
+            .eq('user_id', otherUser.id)
+            .eq('category', 'user')
+            .eq('archived', false)
+            .or(`name.eq.${currentUser.email},name.eq.${currentUser.name}`)
+            .limit(1)
+            .maybeSingle();
+          
+          if (existingSpace2) {
+            // El otro usuario ya tiene un espacio con un chat compartido
+            // Retornar el MISMO espacio (no crear uno nuevo)
+            // Ambos usuarios verán el mismo espacio y los mismos tabs
+            const { data: spaceChat } = await supabase
+              .from('space_chats')
+              .select('chat_id')
+              .eq('space_id', existingSpace2.id)
               .maybeSingle();
             
-            if (existingSpace1) {
-              existingSpace1.other_user_photo = otherUser.avatar_photo;
-              return res.json({ space: existingSpace1 });
-            }
-            
-            // Check for existing space owned by other user
-            const { data: existingSpace2 } = await supabase
-              .from('spaces')
-              .select('*')
-              .eq('user_id', otherUser.id)
-              .eq('category', 'user')
-              .eq('archived', false)
-              .or(`name.eq.${currentUser.email},name.eq.${currentUser.name}`)
-              .limit(1)
-              .maybeSingle();
-            
-            if (existingSpace2) {
+            if (spaceChat) {
+              // Verificar que el usuario actual es participante
+              const { data: participant } = await supabase
+                .from('chat_participants')
+                .select('id')
+                .eq('chat_id', spaceChat.chat_id)
+                .eq('user_id', req.userId)
+                .maybeSingle();
+              
+              if (!participant) {
+                // El usuario no es participante - agregarlo al chat
+                await supabase
+                  .from('chat_participants')
+                  .insert({ chat_id: spaceChat.chat_id, user_id: req.userId });
+              }
+              
+              // Enriquecer con información del otro usuario (desde la perspectiva del usuario actual)
+              existingSpace2.display_name = otherUser.name || otherUser.email;
+              existingSpace2.other_user_id = otherUser.id;
               existingSpace2.other_user_photo = otherUser.avatar_photo;
+              
+              // Retornar el mismo espacio existente
               return res.json({ space: existingSpace2 });
             }
+            // Si no hay chat, continuar para crear uno nuevo normalmente
           }
         }
+        // If user not found, continue to create space anyway (might be a personal notes space)
       } catch (searchError) {
         console.error('Error during space search:', searchError);
         // Continue to create new space if search fails
@@ -537,7 +787,8 @@ router.post('/', async (req, res) => {
       }
     }
     
-    const { data: maxPosSpace } = await supabase
+    // Get max position for this category
+    const { data: maxPosSpace, error: maxPosError } = await supabase
       .from('spaces')
       .select('position')
       .eq('user_id', req.userId)
@@ -545,9 +796,10 @@ router.post('/', async (req, res) => {
       .is('parent_id', null)
       .order('position', { ascending: false, nullsFirst: false })
       .limit(1)
-      .single();
+      .maybeSingle();
     
-    const position = (maxPosSpace?.position || 0) + 1;
+    // If error or no spaces found, start at position 0
+    const position = maxPosError || !maxPosSpace ? 0 : (maxPosSpace.position || 0) + 1;
     
     const { data: space, error } = await supabase
       .from('spaces')
@@ -583,9 +835,80 @@ router.post('/', async (req, res) => {
         type: 'chat'
       });
     
-    // For user spaces, add other_user_photo if it's a DM
-    if (space.category === 'user' && otherUser) {
-      space.other_user_photo = otherUser.avatar_photo;
+    // For user spaces, create the chat immediately when creating the space
+    // This prevents multiple chats from being created by concurrent requests
+    if (space.category === 'user') {
+      // Only support DMs (one-on-one chats) - no groups
+      let allParticipantIds = [];
+      if (otherUser) {
+        // DM: just current user and other user
+        allParticipantIds = [req.userId, otherUser.id];
+      } else {
+        // Personal notes: just current user
+        allParticipantIds = [req.userId];
+      }
+      
+      // For DMs (2 participants), check if a chat already exists
+      let sharedChatId = null;
+      if (otherUser) {
+        // For DMs, check if there's already a shared chat with the other user
+        const { data: userChats } = await supabase
+          .from('chat_participants')
+          .select('chat_id')
+          .eq('user_id', req.userId);
+        
+        if (userChats && userChats.length > 0) {
+          const chatIds = userChats.map(c => c.chat_id);
+          
+          // Check which of these chats also has the other user as participant
+          const { data: sharedChats } = await supabase
+            .from('chat_participants')
+            .select('chat_id')
+            .in('chat_id', chatIds)
+            .eq('user_id', otherUser.id);
+          
+          if (sharedChats && sharedChats.length > 0) {
+            // Found a shared chat - use it
+            sharedChatId = sharedChats[0].chat_id;
+          }
+        }
+      }
+      
+      // Create or use existing chat
+      let chatId;
+      if (sharedChatId) {
+        chatId = sharedChatId;
+      } else {
+        // Create new chat
+        const { data: chat } = await supabase
+          .from('chats')
+          .insert({})
+          .select('id')
+          .single();
+        
+        if (chat) {
+          chatId = chat.id;
+        }
+      }
+      
+      if (chatId) {
+        // Link space to chat
+        await supabase
+          .from('space_chats')
+          .insert({ space_id: space.id, chat_id: chatId });
+        
+        // Add all participants to the chat
+        for (const participantId of allParticipantIds) {
+          await supabase
+            .from('chat_participants')
+            .insert({ chat_id: chatId, user_id: participantId });
+        }
+      }
+      
+      // Add other_user_photo if it's a DM
+      if (otherUser) {
+        space.other_user_photo = otherUser.avatar_photo;
+      }
     }
     
     res.json({ space });
