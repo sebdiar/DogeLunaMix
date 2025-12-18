@@ -172,8 +172,7 @@ router.post('/config', async (req, res) => {
 // Webhook endpoint (NO requiere autenticación - Notion llama este endpoint)
 // IMPORTANTE: Este endpoint debe ser público para que Notion pueda llamarlo
 router.post('/webhook', async (req, res) => {
-  // IMPORTANT: Respond immediately to Notion to avoid timeouts
-  // Process asynchronously after responding
+  // Log immediately when webhook endpoint is hit - FORCE FLUSH
   const timestamp = new Date().toISOString();
   const eventSummary = {
     timestamp,
@@ -195,20 +194,20 @@ router.post('/webhook', async (req, res) => {
   process.stdout.write('\n🔔🔔🔔🔔🔔 WEBHOOK ENDPOINT HIT - ' + timestamp + ' 🔔🔔🔔🔔🔔\n');
   process.stdout.write('🔔 Request method: ' + req.method + '\n');
   process.stdout.write('🔔 Request path: ' + req.path + '\n');
+  process.stdout.write('🔔 Request body type: ' + typeof req.body + '\n');
+  process.stdout.write('🔔 Request body keys: ' + (req.body ? Object.keys(req.body).join(', ') : 'no body') + '\n');
   process.stdout.write('🔔 Event type: ' + (req.body?.type || 'none') + '\n');
   process.stdout.write('🔔 Event object: ' + (req.body?.object || 'none') + '\n');
   
   // Also use console.log as backup
   console.log('🔔 WEBHOOK ENDPOINT HIT - Request received at:', timestamp);
+  console.log('🔔 Request method:', req.method);
+  console.log('🔔 Request path:', req.path);
   console.log('🔔 Event type:', req.body?.type);
   console.log('🔔 Event object:', req.body?.object);
+  console.log('🔔 Request body keys:', req.body ? Object.keys(req.body) : 'no body');
   
-  // Respond immediately to Notion (don't wait for processing)
-  res.status(200).json({ received: true, timestamp });
-  
-  // Process asynchronously (don't block response)
-  setImmediate(async () => {
-    try {
+  try {
     // Manejar verificación de webhook (Notion envía un verification_token)
     if (req.body.type === 'webhook.verification' || req.body.verification_token) {
       const { verification_token } = req.body;
@@ -223,20 +222,18 @@ router.post('/webhook', async (req, res) => {
     const projectsDatabaseId = process.env.NOTION_DATABASE_ID;
     
     // Log webhook event for debugging (FULL event structure)
-    console.log('📥 Webhook received - FULL EVENT:', JSON.stringify(event, null, 2));
+    const receivedDbId = event.data?.parent?.database_id;
     console.log('📥 Webhook received - Summary:', {
       type: event.type,
       object: event.object,
       hasData: !!event.data,
-      dataKeys: event.data ? Object.keys(event.data) : null,
-      dataParentId: event.data?.parent?.database_id,
-      dataParentType: event.data?.parent?.type,
-      dataId: event.data?.id,
-      fullDataParent: event.data?.parent,
+      receivedDatabaseId: receivedDbId,
+      receivedDatabaseIdNormalized: receivedDbId ? normalizeNotionId(receivedDbId) : null,
       tasksDatabaseId,
-      projectsDatabaseId,
-      normalizedTasksId: tasksDatabaseId ? normalizeNotionId(tasksDatabaseId) : null,
-      normalizedReceivedId: event.data?.parent?.database_id ? normalizeNotionId(event.data.parent.database_id) : null
+      tasksDatabaseIdNormalized: tasksDatabaseId ? normalizeNotionId(tasksDatabaseId) : null,
+      willMatch: receivedDbId && tasksDatabaseId ? compareNotionIds(receivedDbId, tasksDatabaseId) : false,
+      dataParentType: event.data?.parent?.type,
+      fullDataParent: JSON.stringify(event.data?.parent)
     });
     
     // Check if this is a task event (from tasks database)
@@ -274,9 +271,14 @@ router.post('/webhook', async (req, res) => {
       eventType: event.type,
       eventObject: event.object,
       receivedDatabaseId,
+      receivedDatabaseIdNormalized: receivedDatabaseId ? normalizeNotionId(receivedDatabaseId) : null,
       pageId,
       dataStructure: event.data ? Object.keys(event.data) : null,
-      parentStructure: event.data?.parent ? Object.keys(event.data.parent) : null
+      parentStructure: event.data?.parent ? Object.keys(event.data.parent) : null,
+      fullParent: event.data?.parent,
+      tasksDatabaseId,
+      tasksDatabaseIdNormalized: tasksDatabaseId ? normalizeNotionId(tasksDatabaseId) : null,
+      willMatch: receivedDatabaseId && tasksDatabaseId ? compareNotionIds(receivedDatabaseId, tasksDatabaseId) : false
     });
     
     // Check if this is a page event from tasks database
@@ -297,8 +299,8 @@ router.post('/webhook', async (req, res) => {
             console.error('❌ Error handling task creation:', err);
           });
         }
-        // Already responded, just log
-        console.log('✅ Task event processed, response already sent');
+        // Respond quickly to Notion
+        return res.status(200).json({ received: true, type: 'task' });
       } else {
         console.log('⚠️  Event from different database:', {
           received: receivedDatabaseId,
@@ -318,7 +320,7 @@ router.post('/webhook', async (req, res) => {
       if (compareNotionIds(receivedDatabaseId, tasksDatabaseId)) {
         console.log('⚠️  Database event received for tasks database, but we need a page.created event to process tasks');
         console.log('💡 This might indicate a task was created, but we need the page event to get task details');
-        console.log('⚠️  Database event received, waiting for page event (already responded)');
+        return res.status(200).json({ received: true, type: 'database', message: 'Database event received, waiting for page event' });
       }
     }
     
@@ -331,7 +333,7 @@ router.post('/webhook', async (req, res) => {
       if (receivedDatabaseId && compareNotionIds(receivedDatabaseId, projectsDatabaseId)) {
         // This is a project event - handle as before (currently disabled)
         console.log('⚠️  Project webhook received but IGNORED - projects are only created from the app, not from Notion webhooks');
-        console.log('⚠️  Project webhook received but IGNORED (already responded)');
+        return res.status(200).json({ received: true, message: 'Project webhook disabled - projects only created from app' });
       }
     }
     
