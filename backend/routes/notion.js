@@ -6,6 +6,19 @@ import { getOrCreateChatForSpace } from './chat.js';
 
 const router = express.Router();
 
+// Store recent webhook events in memory (for debugging)
+const recentWebhookEvents = [];
+const MAX_EVENTS = 50;
+
+// Endpoint to check recent webhook activity (for debugging)
+router.get('/webhook-status', (req, res) => {
+  res.json({
+    totalEvents: recentWebhookEvents.length,
+    recentEvents: recentWebhookEvents.slice(-10).reverse(), // Last 10 events, most recent first
+    timestamp: new Date().toISOString()
+  });
+});
+
 // Webhook endpoint debe ser público (sin autenticación) - Notion lo llama directamente
 // Las demás rutas requieren autenticación
 const authenticateExceptWebhook = (req, res, next) => {
@@ -167,18 +180,37 @@ router.post('/config', async (req, res) => {
 router.post('/webhook', async (req, res) => {
   // Log immediately when webhook endpoint is hit - FORCE FLUSH
   const timestamp = new Date().toISOString();
+  const eventSummary = {
+    timestamp,
+    method: req.method,
+    path: req.path,
+    bodyType: typeof req.body,
+    bodyKeys: req.body ? Object.keys(req.body) : [],
+    eventType: req.body?.type,
+    eventObject: req.body?.object,
+    hasData: !!req.body?.data
+  };
+  
+  // Store in memory for debugging
+  recentWebhookEvents.push(eventSummary);
+  if (recentWebhookEvents.length > MAX_EVENTS) {
+    recentWebhookEvents.shift(); // Remove oldest
+  }
+  
   process.stdout.write('\n🔔🔔🔔🔔🔔 WEBHOOK ENDPOINT HIT - ' + timestamp + ' 🔔🔔🔔🔔🔔\n');
   process.stdout.write('🔔 Request method: ' + req.method + '\n');
   process.stdout.write('🔔 Request path: ' + req.path + '\n');
   process.stdout.write('🔔 Request body type: ' + typeof req.body + '\n');
   process.stdout.write('🔔 Request body keys: ' + (req.body ? Object.keys(req.body).join(', ') : 'no body') + '\n');
+  process.stdout.write('🔔 Event type: ' + (req.body?.type || 'none') + '\n');
+  process.stdout.write('🔔 Event object: ' + (req.body?.object || 'none') + '\n');
   
   // Also use console.log as backup
   console.log('🔔 WEBHOOK ENDPOINT HIT - Request received at:', timestamp);
   console.log('🔔 Request method:', req.method);
   console.log('🔔 Request path:', req.path);
-  console.log('🔔 Request headers:', JSON.stringify(req.headers, null, 2));
-  console.log('🔔 Request body type:', typeof req.body);
+  console.log('🔔 Event type:', req.body?.type);
+  console.log('🔔 Event object:', req.body?.object);
   console.log('🔔 Request body keys:', req.body ? Object.keys(req.body) : 'no body');
   
   try {
