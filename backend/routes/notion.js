@@ -32,14 +32,17 @@ function compareNotionIds(id1, id2) {
 
 // Test endpoint to verify webhook handler logic (for local testing)
 router.post('/webhook-test', async (req, res) => {
+  // Force flush logs immediately
+  console.log('🧪🧪🧪🧪🧪 TEST ENDPOINT HIT - ' + new Date().toISOString() + ' 🧪🧪🧪🧪🧪');
+  process.stdout.write('🧪 TEST: Simulating webhook event\n');
+  
   try {
-    console.log('🧪 TEST: Simulating webhook event');
     const testEvent = req.body;
     const tasksDatabaseId = process.env.NOTION_TASKS_DATABASE_ID;
     
-    console.log('🧪 TEST: Tasks Database ID from env:', tasksDatabaseId);
-    console.log('🧪 TEST: Normalized Tasks ID:', tasksDatabaseId ? normalizeNotionId(tasksDatabaseId) : null);
-    console.log('🧪 TEST: Test event:', JSON.stringify(testEvent, null, 2));
+    process.stdout.write('🧪 TEST: Tasks Database ID from env: ' + tasksDatabaseId + '\n');
+    process.stdout.write('🧪 TEST: Normalized Tasks ID: ' + (tasksDatabaseId ? normalizeNotionId(tasksDatabaseId) : null) + '\n');
+    process.stdout.write('🧪 TEST: Test event: ' + JSON.stringify(testEvent, null, 2) + '\n');
     
     if (testEvent.parent?.database_id) {
       const receivedId = testEvent.parent.database_id;
@@ -162,8 +165,16 @@ router.post('/config', async (req, res) => {
 // Webhook endpoint (NO requiere autenticación - Notion llama este endpoint)
 // IMPORTANTE: Este endpoint debe ser público para que Notion pueda llamarlo
 router.post('/webhook', async (req, res) => {
-  // Log immediately when webhook endpoint is hit
-  console.log('🔔 WEBHOOK ENDPOINT HIT - Request received at:', new Date().toISOString());
+  // Log immediately when webhook endpoint is hit - FORCE FLUSH
+  const timestamp = new Date().toISOString();
+  process.stdout.write('\n🔔🔔🔔🔔🔔 WEBHOOK ENDPOINT HIT - ' + timestamp + ' 🔔🔔🔔🔔🔔\n');
+  process.stdout.write('🔔 Request method: ' + req.method + '\n');
+  process.stdout.write('🔔 Request path: ' + req.path + '\n');
+  process.stdout.write('🔔 Request body type: ' + typeof req.body + '\n');
+  process.stdout.write('🔔 Request body keys: ' + (req.body ? Object.keys(req.body).join(', ') : 'no body') + '\n');
+  
+  // Also use console.log as backup
+  console.log('🔔 WEBHOOK ENDPOINT HIT - Request received at:', timestamp);
   console.log('🔔 Request method:', req.method);
   console.log('🔔 Request path:', req.path);
   console.log('🔔 Request headers:', JSON.stringify(req.headers, null, 2));
