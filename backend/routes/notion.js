@@ -176,11 +176,13 @@ router.post('/webhook', async (req, res) => {
     const tasksDatabaseId = process.env.NOTION_TASKS_DATABASE_ID;
     const projectsDatabaseId = process.env.NOTION_DATABASE_ID;
     
-    // Log webhook event for debugging (full structure)
-    console.log('📥 Webhook received:', JSON.stringify({
+    // Log webhook event for debugging (FULL event structure)
+    console.log('📥 Webhook received - FULL EVENT:', JSON.stringify(event, null, 2));
+    console.log('📥 Webhook received - Summary:', {
       type: event.type,
       object: event.object,
       hasData: !!event.data,
+      dataKeys: event.data ? Object.keys(event.data) : null,
       dataParentId: event.data?.parent?.database_id,
       dataParentType: event.data?.parent?.type,
       dataId: event.data?.id,
@@ -189,27 +191,63 @@ router.post('/webhook', async (req, res) => {
       projectsDatabaseId,
       normalizedTasksId: tasksDatabaseId ? normalizeNotionId(tasksDatabaseId) : null,
       normalizedReceivedId: event.data?.parent?.database_id ? normalizeNotionId(event.data.parent.database_id) : null
-    }, null, 2));
+    });
     
     // Check if this is a task event (from tasks database)
-    // Notion webhook structure: { type: 'page.created', object: 'page', data: { id: '...', parent: { database_id: '...' } } }
-    if (tasksDatabaseId && event.type && event.type.startsWith('page.') && event.data) {
-      const pageData = event.data;
-      const receivedDatabaseId = pageData.parent?.database_id;
-      
+    // Notion webhook structure can be:
+    // - { type: 'page.created', object: 'page', data: { id: '...', parent: { database_id: '...' } } }
+    // - { type: 'database.updated', object: 'database', data: { id: '...' } } (when database changes)
+    // - { type: 'page.created', object: 'page', data: { id: '...', parent: { type: 'database_id', database_id: '...' } } }
+    
+    // First, try to get the database ID from different possible locations
+    let receivedDatabaseId = null;
+    let pageId = null;
+    
+    if (event.data) {
+      // For page events: event.data.parent.database_id
+      if (event.data.parent?.database_id) {
+        receivedDatabaseId = event.data.parent.database_id;
+        pageId = event.data.id;
+      }
+      // For page events: event.data.parent.type === 'database_id' and database_id property
+      else if (event.data.parent?.type === 'database_id' && event.data.parent.database_id) {
+        receivedDatabaseId = event.data.parent.database_id;
+        pageId = event.data.id;
+      }
+      // For database events: event.data.id might be the database ID
+      else if (event.object === 'database' && event.data.id) {
+        receivedDatabaseId = event.data.id;
+      }
+      // Try to get page ID from event.data.id
+      if (event.data.id && !pageId) {
+        pageId = event.data.id;
+      }
+    }
+    
+    console.log('🔍 Event analysis:', {
+      eventType: event.type,
+      eventObject: event.object,
+      receivedDatabaseId,
+      pageId,
+      dataStructure: event.data ? Object.keys(event.data) : null,
+      parentStructure: event.data?.parent ? Object.keys(event.data.parent) : null
+    });
+    
+    // Check if this is a page event from tasks database
+    if (tasksDatabaseId && event.type && event.type.startsWith('page.') && event.data && receivedDatabaseId) {
       // Verify the page belongs to tasks database (using normalized comparison)
-      if (receivedDatabaseId && compareNotionIds(receivedDatabaseId, tasksDatabaseId)) {
+      if (compareNotionIds(receivedDatabaseId, tasksDatabaseId)) {
         console.log('✅ Task event detected from tasks database');
         console.log('📋 Task details:', {
-          taskId: pageData.id,
+          taskId: pageId,
           databaseId: receivedDatabaseId,
           eventType: event.type
         });
         // This is a task event
         if (event.type === 'page.created') {
-          console.log('📝 Processing task creation:', pageData.id);
+          console.log('📝 Processing task creation:', pageId);
           // Process new task creation asynchronously (don't block webhook response)
-          handleTaskCreated(pageData, process.env.NOTION_API_KEY).catch(err => {
+          handleTaskCreated(event.data, process.env.NOTION_API_KEY).catch(err => {
             console.error('❌ Error handling task creation:', err);
           });
         }
@@ -222,9 +260,19 @@ router.post('/webhook', async (req, res) => {
           expected: tasksDatabaseId,
           expectedNormalized: tasksDatabaseId ? normalizeNotionId(tasksDatabaseId) : null,
           match: receivedDatabaseId ? compareNotionIds(receivedDatabaseId, tasksDatabaseId) : false,
-          parentType: pageData.parent?.type,
-          fullParent: pageData.parent
+          parentType: event.data?.parent?.type,
+          fullParent: event.data?.parent
         });
+      }
+    }
+    
+    // Also check for database events that might indicate a task was created
+    // Sometimes Notion sends database.updated when a page is added
+    if (tasksDatabaseId && event.type && (event.type === 'database.updated' || event.object === 'database') && receivedDatabaseId) {
+      if (compareNotionIds(receivedDatabaseId, tasksDatabaseId)) {
+        console.log('⚠️  Database event received for tasks database, but we need a page.created event to process tasks');
+        console.log('💡 This might indicate a task was created, but we need the page event to get task details');
+        return res.status(200).json({ received: true, type: 'database', message: 'Database event received, waiting for page event' });
       }
     }
     
