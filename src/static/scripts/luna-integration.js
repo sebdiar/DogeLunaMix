@@ -253,6 +253,10 @@ class LunaIntegration {
     // tab-btn handler will be set up in setupTabManagerMonitoring after TabManager initializes
     
     document.getElementById('close-space-btn')?.addEventListener('click', () => this.clearActiveSpace());
+    
+    // Project settings button and sidebar
+    document.getElementById('topbar-settings-btn')?.addEventListener('click', () => this.openProjectSettings());
+    document.getElementById('project-settings-close')?.addEventListener('click', () => this.closeProjectSettings());
 
     // Desktop More dropdown handlers
     const moreBtn = document.getElementById('sidebar-more-btn');
@@ -2357,10 +2361,44 @@ class LunaIntegration {
             tabEl.classList.add('mx-2');
           }
 
+          // Setup menu button handler (3 dots) - EXACTLY THE SAME CODE AS TOPBAR AND SIDEBAR
+          const menuBtn = tabEl.querySelector('.tab-menu-btn');
+          if (menuBtn) {
+            menuBtn.onclick = async (e) => {
+              e.stopPropagation();
+              e.stopImmediatePropagation();
+              
+              // If tab has backendId, get updated data from backend
+              if (tab.backendId) {
+                try {
+                  const response = await this.request(`/api/tabs/${tab.backendId}`);
+                  this.showTabMenu(e, response.tab);
+                  return;
+                } catch {
+                  // If fails, use current tab data
+                }
+              }
+              
+              // Use current tab data (fallback or if no backendId)
+              const tabData = {
+                id: tab.backendId || tab.id,
+                title: tab.title,
+                url: tab.url || tab.bookmark_url,
+                bookmark_url: tab.bookmark_url,
+                avatar_emoji: tab.avatar_emoji,
+                avatar_color: tab.avatar_color,
+                avatar_photo: tab.avatar_photo,
+                cookie_container_id: tab.cookie_container_id,
+                space_id: tab.space_id
+              };
+              this.showTabMenu(e, tabData);
+            };
+          }
+
           if (!isEditing) {
             tabEl.addEventListener('click', (e) => {
-              // Don't trigger if clicking on menu button
-              if (e.target.closest('.tab-menu-btn')) {
+              // Don't trigger if clicking on menu button or menu dropdown
+              if (e.target.closest('.tab-menu-btn') || e.target.closest('.tab-menu-dropdown')) {
                 return;
               }
               if (window.tabManager) {
@@ -3404,6 +3442,7 @@ class LunaIntegration {
     const topbarSpace = document.getElementById('topbar-space');
     const topbarSpaceName = document.getElementById('topbar-space-name');
     const topbarTabsCont = document.getElementById('topbar-tabs-cont');
+    const topbarSettingsBtn = document.getElementById('topbar-settings-btn');
     
     if (!topbarSpace || !topbarSpaceName || !topbarTabsCont) return;
 
@@ -3411,6 +3450,10 @@ class LunaIntegration {
       // Hide TopBar when no space is active
       topbarSpace.classList.add('hidden');
       topbarSpace.style.display = 'none';
+      // Hide settings button
+      if (topbarSettingsBtn) {
+        topbarSettingsBtn.style.display = 'none';
+      }
       return;
     }
 
@@ -3418,6 +3461,11 @@ class LunaIntegration {
     topbarSpace.classList.remove('hidden');
     topbarSpace.style.display = 'flex'; // Ensure it's displayed
     topbarSpaceName.textContent = this.activeSpace.display_name || this.activeSpace.name;
+    
+    // Show settings button when space is active
+    if (topbarSettingsBtn) {
+      topbarSettingsBtn.style.display = 'block';
+    }
 
     // Render space tabs in TopBar
     if (!this.spaceTabs || this.spaceTabs.length === 0) {
@@ -3736,9 +3784,10 @@ class LunaIntegration {
 
     const rect = button.getBoundingClientRect();
     const menu = document.createElement('div');
-    menu.className = 'tab-menu-dropdown absolute bg-white border border-[#e8eaed] rounded-lg shadow-lg py-1 z-50 min-w-[160px]';
+    menu.className = 'tab-menu-dropdown absolute bg-white border border-[#e8eaed] rounded-lg shadow-lg py-1 min-w-[160px]';
     menu.style.left = `${rect.left}px`;
     menu.style.top = `${rect.bottom + 4}px`;
+    menu.style.zIndex = '10001'; // Higher than more-dropdown (10000) to appear on top
 
     // Cookie containers list (hardcoded for now, can be made dynamic later)
     const cookieContainers = [
@@ -3768,7 +3817,7 @@ class LunaIntegration {
             <polyline points="9 18 15 12 9 6"></polyline>
           </svg>
         </button>
-        <div class="tab-container-submenu hidden absolute left-full top-0 ml-1 bg-white border border-[#e8eaed] rounded-lg shadow-lg py-1 min-w-[140px]">
+        <div class="tab-container-submenu hidden absolute left-full top-0 ml-1 bg-white border border-[#e8eaed] rounded-lg shadow-lg py-1 min-w-[140px]" style="z-index: 10002;">
           ${cookieContainers.map(container => `
             <button class="tab-container-option w-full flex items-center gap-2 px-3 py-2 text-sm text-[#202124] hover:bg-[#f5f7fa] transition-colors text-left ${tab.cookie_container_id === container.id ? 'bg-[#4285f4]/10 text-[#4285f4]' : ''}" data-tab-id="${tab.id}" data-container-id="${container.id}">
               <span>${this.escapeHTML(container.name)}</span>
@@ -4479,6 +4528,8 @@ class LunaIntegration {
     this.activeSpace = null;
     this.spaceTabs = [];
     this.renderProjects();
+    // Close project settings if open
+    this.closeProjectSettings();
     this.renderUsers();
     this.renderTopBar(); // Esto oculta el TopBar
     
@@ -4488,6 +4539,252 @@ class LunaIntegration {
     }
   }
 
+  async openProjectSettings() {
+    if (!this.activeSpace) return;
+    
+    const sidebar = document.getElementById('project-settings-sidebar');
+    if (!sidebar) return;
+    
+    // Show sidebar
+    sidebar.classList.remove('hidden');
+    
+    // Load members for this space
+    await this.loadProjectMembers();
+    
+    // Initialize lucide icons if needed
+    if (window.lucide) {
+      window.lucide.createIcons();
+    }
+  }
+
+  closeProjectSettings() {
+    const sidebar = document.getElementById('project-settings-sidebar');
+    if (sidebar) {
+      sidebar.classList.add('hidden');
+    }
+  }
+
+  async loadProjectMembers() {
+    if (!this.activeSpace || !this.activeSpace.id) return;
+    
+    try {
+      const { members } = await this.request(`/api/spaces/${this.activeSpace.id}/members`);
+      const membersList = document.getElementById('members-list');
+      const membersCount = document.getElementById('members-count');
+      
+      if (membersCount) {
+        membersCount.textContent = members?.length || 0;
+      }
+      
+      if (membersList) {
+        membersList.innerHTML = '';
+        
+        if (members && members.length > 0) {
+          members.forEach(member => {
+            const memberEl = document.createElement('div');
+            memberEl.className = 'member-item';
+            memberEl.dataset.userId = member.user_id;
+            
+            const avatar = member.avatar_photo || member.avatar_url || '';
+            const name = member.display_name || member.name || member.email || 'Unknown';
+            
+            memberEl.innerHTML = `
+              <div class="member-avatar">
+                ${avatar ? `<img src="${avatar}" alt="${name}" />` : `<div class="member-avatar-placeholder">${name.charAt(0).toUpperCase()}</div>`}
+              </div>
+              <span class="member-name">${name}</span>
+              <input type="checkbox" class="member-checkbox" />
+            `;
+            
+            membersList.appendChild(memberEl);
+          });
+        }
+      }
+      
+      // Setup search functionality
+      const searchInput = document.getElementById('members-search-input');
+      if (searchInput) {
+        searchInput.oninput = (e) => {
+          const query = e.target.value.toLowerCase();
+          const items = membersList.querySelectorAll('.member-item');
+          items.forEach(item => {
+            const name = item.querySelector('.member-name')?.textContent.toLowerCase() || '';
+            item.style.display = name.includes(query) ? '' : 'none';
+          });
+        };
+      }
+      
+      // Setup add/remove member buttons
+      const addMemberBtn = document.getElementById('add-member-btn');
+      const removeMemberBtn = document.getElementById('remove-member-btn');
+      
+      if (addMemberBtn) {
+        addMemberBtn.onclick = () => this.showAddMembersModal();
+      }
+      
+      if (removeMemberBtn) {
+        removeMemberBtn.onclick = () => this.removeSelectedMembers();
+        
+        // Show/hide remove button based on checked members
+        const checkboxes = membersList.querySelectorAll('.member-checkbox');
+        checkboxes.forEach(checkbox => {
+          checkbox.onchange = () => {
+            const checked = membersList.querySelectorAll('.member-checkbox:checked').length;
+            if (removeMemberBtn) {
+              removeMemberBtn.style.display = checked > 0 ? 'flex' : 'none';
+            }
+          };
+        });
+      }
+      
+      // Setup delete project button
+      const deleteBtn = document.getElementById('delete-project-btn');
+      if (deleteBtn) {
+        deleteBtn.onclick = () => {
+          if (confirm('Are you sure you want to delete this project? This action cannot be undone.')) {
+            this.deleteProject();
+          }
+        };
+      }
+    } catch (err) {
+      console.error('Failed to load project members:', err);
+    }
+  }
+
+  async showAddMembersModal() {
+    const modal = document.getElementById('add-members-modal');
+    if (!modal) return;
+    
+    modal.classList.remove('hidden');
+    
+    // Load all users (excluding current project members)
+    try {
+      const { users } = await this.request('/api/users');
+      const { members } = await this.request(`/api/spaces/${this.activeSpace.id}/members`);
+      const memberUserIds = new Set(members?.map(m => m.user_id) || []);
+      
+      const availableUsers = users?.filter(u => 
+        u.id !== this.user?.id && !memberUserIds.has(u.id)
+      ) || [];
+      
+      const list = document.getElementById('add-members-list');
+      if (list) {
+        list.innerHTML = '';
+        availableUsers.forEach(user => {
+          const item = document.createElement('div');
+          item.className = 'add-member-item';
+          item.dataset.userId = user.id;
+          
+          const avatar = user.avatar_photo || user.avatar_url || '';
+          const name = user.display_name || user.name || user.email || 'Unknown';
+          
+          item.innerHTML = `
+            <div class="add-member-avatar">
+              ${avatar ? `<img src="${avatar}" alt="${name}" />` : `<div class="add-member-avatar-placeholder">${name.charAt(0).toUpperCase()}</div>`}
+            </div>
+            <span class="add-member-name">${name}</span>
+            <input type="checkbox" class="add-member-checkbox" />
+          `;
+          
+          list.appendChild(item);
+        });
+      }
+      
+      // Setup search
+      const searchInput = document.getElementById('add-members-search-input');
+      if (searchInput) {
+        searchInput.oninput = (e) => {
+          const query = e.target.value.toLowerCase();
+          const items = list.querySelectorAll('.add-member-item');
+          items.forEach(item => {
+            const name = item.querySelector('.add-member-name')?.textContent.toLowerCase() || '';
+            item.style.display = name.includes(query) ? '' : 'none';
+          });
+        };
+      }
+      
+      // Setup close button
+      const closeBtn = document.getElementById('add-members-close');
+      if (closeBtn) {
+        closeBtn.onclick = () => {
+          modal.classList.add('hidden');
+        };
+      }
+      
+      // Setup add button
+      const addBtn = document.getElementById('add-members-add-btn');
+      if (addBtn) {
+        addBtn.onclick = async () => {
+          const checked = list.querySelectorAll('.add-member-checkbox:checked');
+          const userIds = Array.from(checked).map(cb => cb.closest('.add-member-item').dataset.userId);
+          
+          if (userIds.length > 0) {
+            await this.addMembersToProject(userIds);
+            modal.classList.add('hidden');
+            await this.loadProjectMembers();
+          }
+        };
+      }
+    } catch (err) {
+      console.error('Failed to load users for add members:', err);
+    }
+  }
+
+  async addMembersToProject(userIds) {
+    if (!this.activeSpace || !this.activeSpace.id) return;
+    
+    try {
+      await this.request(`/api/spaces/${this.activeSpace.id}/members`, {
+        method: 'POST',
+        body: JSON.stringify({ user_ids: userIds })
+      });
+    } catch (err) {
+      console.error('Failed to add members:', err);
+      alert('Failed to add members');
+    }
+  }
+
+  async removeSelectedMembers() {
+    if (!this.activeSpace || !this.activeSpace.id) return;
+    
+    const membersList = document.getElementById('members-list');
+    if (!membersList) return;
+    
+    const checked = membersList.querySelectorAll('.member-checkbox:checked');
+    const userIds = Array.from(checked).map(cb => cb.closest('.member-item').dataset.userId);
+    
+    if (userIds.length === 0) return;
+    
+    if (!confirm(`Are you sure you want to remove ${userIds.length} member(s)?`)) return;
+    
+    try {
+      await this.request(`/api/spaces/${this.activeSpace.id}/members`, {
+        method: 'DELETE',
+        body: JSON.stringify({ user_ids: userIds })
+      });
+      
+      await this.loadProjectMembers();
+    } catch (err) {
+      console.error('Failed to remove members:', err);
+      alert('Failed to remove members');
+    }
+  }
+
+  async deleteProject() {
+    if (!this.activeSpace || !this.activeSpace.id) return;
+    
+    try {
+      await this.request(`/api/spaces/${this.activeSpace.id}`, {
+        method: 'DELETE'
+      });
+      
+      this.clearActiveSpace();
+      await this.loadProjects();
+    } catch (err) {
+      console.error('Failed to delete project:', err);
+      alert('Failed to delete project');
+    }
+  }
 
   renderProjects() {
     const container = document.getElementById('projects-cont');
