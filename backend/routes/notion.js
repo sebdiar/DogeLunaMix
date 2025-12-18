@@ -297,30 +297,9 @@ router.post('/webhook', async (req, res) => {
     // - { type: 'database.updated', object: 'database', data: { id: '...' } } (when database changes)
     // - { type: 'page.created', object: 'page', data: { id: '...', parent: { type: 'database_id', database_id: '...' } } }
     
-    // First, try to get the database ID from different possible locations
-    let receivedDatabaseId = null;
-    let pageId = null;
-    
-    if (event.data) {
-      // For page events: event.data.parent.database_id
-      if (event.data.parent?.database_id) {
-        receivedDatabaseId = event.data.parent.database_id;
-        pageId = event.data.id;
-      }
-      // For page events: event.data.parent.type === 'database_id' and database_id property
-      else if (event.data.parent?.type === 'database_id' && event.data.parent.database_id) {
-        receivedDatabaseId = event.data.parent.database_id;
-        pageId = event.data.id;
-      }
-      // For database events: event.data.id might be the database ID
-      else if (event.object === 'database' && event.data.id) {
-        receivedDatabaseId = event.data.id;
-      }
-      // Try to get page ID from event.data.id
-      if (event.data.id && !pageId) {
-        pageId = event.data.id;
-      }
-    }
+    // Use the same extraction function we use for logging
+    let receivedDatabaseId = extractDatabaseIdFromEvent(event);
+    let pageId = event.data?.id || null;
     
     console.log('🔍 Event analysis:', {
       eventType: event.type,
