@@ -22,8 +22,11 @@ router.get('/webhook-status', (req, res) => {
 // Webhook endpoint debe ser público (sin autenticación) - Notion lo llama directamente
 // Las demás rutas requieren autenticación
 const authenticateExceptWebhook = (req, res, next) => {
-  // Si es el webhook endpoint o el test endpoint, no requiere autenticación
+  // Si es el webhook endpoint, test endpoint, o status endpoint, no requiere autenticación
   if ((req.path === '/webhook' || req.path === '/webhook-test') && req.method === 'POST') {
+    return next();
+  }
+  if (req.path === '/webhook-status' && req.method === 'GET') {
     return next();
   }
   // Para todas las demás rutas, usar autenticación normal
