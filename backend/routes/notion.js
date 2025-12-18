@@ -309,6 +309,7 @@ router.post('/webhook', async (req, res) => {
     process.stdout.write('  event.data?.id: ' + (event.data?.id || 'NULL') + '\n');
     process.stdout.write('  event.data?.page_id: ' + (event.data?.page_id || 'NULL') + '\n');
     process.stdout.write('  Final pageId: ' + (pageId || 'NULL') + '\n');
+    process.stdout.write('\n✅ Page ID extraction completed, continuing to event analysis...\n');
     
     console.log('🔍 Event analysis:', {
       eventType: event.type,
