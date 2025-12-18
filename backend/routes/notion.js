@@ -1,6 +1,8 @@
 import express from 'express';
 import supabase from '../config/database.js';
 import { authenticate } from '../middleware/auth.js';
+import { getTaskDetails } from '../services/notion-tasks.js';
+import { getOrCreateChatForSpace } from './chat.js';
 
 const router = express.Router();
 
@@ -108,14 +110,8 @@ router.post('/config', async (req, res) => {
 
 // Webhook endpoint (NO requiere autenticación - Notion llama este endpoint)
 // IMPORTANTE: Este endpoint debe ser público para que Notion pueda llamarlo
-// TEMPORALMENTE DESHABILITADO: Los proyectos solo se crean desde la app, no desde webhooks
 router.post('/webhook', async (req, res) => {
   try {
-    // WEBHOOK DESHABILITADO TEMPORALMENTE
-    // Los proyectos solo se crean cuando el usuario los crea en la app (POST /api/spaces)
-    // El webhook NO debe crear proyectos automáticamente
-    console.log('⚠️  Webhook received but IGNORED - projects are only created from the app, not from Notion webhooks');
-    
     // Manejar verificación de webhook (Notion envía un verification_token)
     if (req.body.type === 'webhook.verification' || req.body.verification_token) {
       const { verification_token } = req.body;
@@ -124,8 +120,62 @@ router.post('/webhook', async (req, res) => {
       return res.status(200).json({ verification_token });
     }
     
-    // Responder 200 OK pero no procesar nada (evitar creación automática de proyectos)
-    res.status(200).json({ received: true, message: 'Webhook disabled - projects only created from app' });
+    // Get webhook event data
+    const event = req.body;
+    const tasksDatabaseId = process.env.NOTION_TASKS_DATABASE_ID;
+    const projectsDatabaseId = process.env.NOTION_DATABASE_ID;
+    
+    // Log webhook event for debugging
+    console.log('📥 Webhook received:', {
+      type: event.type,
+      object: event.object,
+      hasData: !!event.data,
+      dataParentId: event.data?.parent?.database_id,
+      tasksDatabaseId,
+      projectsDatabaseId
+    });
+    
+    // Check if this is a task event (from tasks database)
+    // Notion webhook structure: { type: 'page.created', object: 'page', data: { id: '...', parent: { database_id: '...' } } }
+    if (tasksDatabaseId && event.type && event.type.startsWith('page.') && event.data) {
+      const pageData = event.data;
+      
+      // Verify the page belongs to tasks database
+      // Check both event.data.parent.database_id and fetch page if needed
+      if (pageData.parent?.database_id === tasksDatabaseId) {
+        console.log('✅ Task event detected from tasks database');
+        // This is a task event
+        if (event.type === 'page.created') {
+          console.log('📝 Processing task creation:', pageData.id);
+          // Process new task creation asynchronously (don't block webhook response)
+          handleTaskCreated(pageData, process.env.NOTION_API_KEY).catch(err => {
+            console.error('❌ Error handling task creation:', err);
+          });
+        }
+        // Respond quickly to Notion
+        return res.status(200).json({ received: true, type: 'task' });
+      } else {
+        console.log('⚠️  Event from different database:', {
+          received: pageData.parent?.database_id,
+          expected: tasksDatabaseId
+        });
+      }
+    }
+    
+    // Check if this is a project event (from projects database)
+    if (projectsDatabaseId && event.object === 'page' && event.data) {
+      const pageData = event.data;
+      
+      // Verify the page belongs to projects database
+      if (pageData.parent?.database_id === projectsDatabaseId) {
+        // This is a project event - handle as before (currently disabled)
+        console.log('⚠️  Project webhook received but IGNORED - projects are only created from the app, not from Notion webhooks');
+        return res.status(200).json({ received: true, message: 'Project webhook disabled - projects only created from app' });
+      }
+    }
+    
+    // Unknown event type - respond OK anyway
+    res.status(200).json({ received: true });
   } catch (error) {
     console.error('Webhook error:', error);
     // Responder 200 para que Notion no reintente infinitamente
@@ -333,6 +383,108 @@ async function handlePageDeleted(pageData) {
     console.log(`✅ Space "${space.name}" archived from deleted Notion page`);
   } catch (error) {
     console.error('Error handling page deleted:', error);
+    throw error;
+  }
+}
+
+// Helper: Manejar creación de task
+async function handleTaskCreated(taskData, apiKey) {
+  try {
+    if (!apiKey) {
+      console.error('handleTaskCreated: No API key provided');
+      return;
+    }
+
+    const taskId = taskData.id;
+    console.log('📝 Handling task created:', taskId);
+
+    // Get task details from Notion
+    const taskDetails = await getTaskDetails(apiKey, taskId);
+    
+    console.log('📋 Task details:', {
+      title: taskDetails.title,
+      projectId: taskDetails.projectId,
+      assignee: taskDetails.assignee,
+      dueDate: taskDetails.dueDate
+    });
+    
+    if (!taskDetails.projectId) {
+      console.log('⚠️  Task has no project relation, skipping');
+      return;
+    }
+
+    // Find project by notion_page_id
+    console.log('🔍 Searching for project with Notion ID:', taskDetails.projectId);
+    const { data: project, error: projectError } = await supabase
+      .from('spaces')
+      .select('id, name, user_id, notion_page_id')
+      .eq('notion_page_id', taskDetails.projectId)
+      .eq('category', 'project')
+      .maybeSingle();
+
+    if (projectError) {
+      console.error('❌ Error searching for project:', projectError);
+      return;
+    }
+    
+    if (!project) {
+      console.log(`⚠️  Project with Notion ID ${taskDetails.projectId} not found in database`);
+      // Log all projects to help debug
+      const { data: allProjects } = await supabase
+        .from('spaces')
+        .select('id, name, notion_page_id')
+        .eq('category', 'project')
+        .limit(10);
+      console.log('📊 Available projects:', allProjects?.map(p => ({ name: p.name, notion_page_id: p.notion_page_id })));
+      return;
+    }
+    
+    console.log('✅ Found project:', project.name);
+
+    // Get or create chat for the project
+    // Use the project owner's user_id
+    const chatId = await getOrCreateChatForSpace(project.id, project.user_id);
+    
+    if (!chatId) {
+      console.error('Failed to get or create chat for project:', project.id);
+      return;
+    }
+
+    // Build message text
+    let messageText = `Nueva tarea: ${taskDetails.title}`;
+    
+    const parts = [];
+    if (taskDetails.assignee) {
+      parts.push(`Asignado: ${taskDetails.assignee}`);
+    }
+    if (taskDetails.dueDate) {
+      // Format date as DD/MM/YYYY
+      const date = new Date(taskDetails.dueDate);
+      const formattedDate = `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}/${date.getFullYear()}`;
+      parts.push(`Vence: ${formattedDate}`);
+    }
+    
+    if (parts.length > 0) {
+      messageText += '\n' + parts.join(' | ');
+    }
+
+    // Send system message to chat
+    const { error: messageError } = await supabase
+      .from('chat_messages')
+      .insert({
+        chat_id: chatId,
+        user_id: null, // null = system message
+        message: messageText
+      });
+
+    if (messageError) {
+      console.error('Error sending task message to chat:', messageError);
+      throw messageError;
+    }
+
+    console.log(`✅ Task message sent to project "${project.name}" chat`);
+  } catch (error) {
+    console.error('Error handling task created:', error);
     throw error;
   }
 }

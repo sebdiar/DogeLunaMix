@@ -17,6 +17,8 @@ import tabsRoutes from './routes/tabs.js';
 import spacesRoutes from './routes/spaces.js';
 import chatRoutes from './routes/chat.js';
 import notionRoutes from './routes/notion.js';
+import cron from 'node-cron';
+import { sendMorningTaskReminders } from './services/notion-tasks-reminders.js';
 
 const app = express();
 const PORT = process.env.BACKEND_PORT || 3001;
@@ -51,6 +53,34 @@ app.use((err, req, res, next) => {
 // Start server
 const server = app.listen(PORT, () => {
   console.log(`DogeUB Backend running on port ${PORT}`);
+  
+  // Initialize Notion tasks reminders cron job (after server starts)
+  try {
+    const reminderEnabled = process.env.NOTION_TASKS_REMINDER_ENABLED === 'true';
+    const reminderHour = parseInt(process.env.NOTION_TASKS_REMINDER_HOUR || '6', 10);
+
+    if (reminderEnabled) {
+      // Schedule daily reminders at specified hour (default: 6 AM)
+      // Cron format: minute hour day month day-of-week
+      const cronExpression = `0 ${reminderHour} * * *`;
+      
+      cron.schedule(cronExpression, async () => {
+        console.log(`⏰ Running daily task reminders at ${reminderHour}:00...`);
+        try {
+          await sendMorningTaskReminders();
+        } catch (error) {
+          console.error('Error running task reminders:', error);
+        }
+      });
+      
+      console.log(`✅ Task reminders scheduled to run daily at ${reminderHour}:00`);
+    } else {
+      console.log('ℹ️  Task reminders are disabled (set NOTION_TASKS_REMINDER_ENABLED=true to enable)');
+    }
+  } catch (error) {
+    console.error('Error initializing task reminders:', error);
+    // Don't crash the server if reminders fail to initialize
+  }
 });
 
 // Handle port already in use errors gracefully
@@ -58,16 +88,20 @@ server.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
     console.error(`Port ${PORT} is already in use. Killing existing process...`);
     // Try to find and kill the process using the port
-    const { exec } = require('child_process');
-    exec(`lsof -ti:${PORT} | xargs kill -9`, (error) => {
-      if (error) {
-        console.error('Could not kill existing process:', error.message);
-        console.error('Please manually kill the process using port', PORT);
-        process.exit(1);
-      } else {
-        console.log('Killed existing process. Restart the server.');
-        process.exit(0);
-      }
+    import('child_process').then(({ exec }) => {
+      exec(`lsof -ti:${PORT} | xargs kill -9`, (error) => {
+        if (error) {
+          console.error('Could not kill existing process:', error.message);
+          console.error('Please manually kill the process using port', PORT);
+          process.exit(1);
+        } else {
+          console.log('Killed existing process. Restart the server.');
+          process.exit(0);
+        }
+      });
+    }).catch(() => {
+      console.error('Please manually kill the process using port', PORT);
+      process.exit(1);
     });
   } else {
     throw err;

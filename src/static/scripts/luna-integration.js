@@ -140,7 +140,7 @@ class LunaIntegration {
 
       const chatIds = chatParticipants.map(p => p.chat_id);
 
-      // Subscribe to new messages in user's chats
+      // Subscribe to new messages in user's chats (including system messages)
       const channel = supabase
         .channel(`chat-notifications-${this.user.id}`)
         .on(
@@ -149,7 +149,8 @@ class LunaIntegration {
             event: 'INSERT',
             schema: 'public',
             table: 'chat_messages',
-            filter: `user_id=neq.${this.user.id}` // Only messages from other users
+            // Include system messages (user_id is null) and messages from other users
+            // We'll filter by chat_id in the handler
           },
           async (payload) => {
             const message = payload.new;
@@ -170,14 +171,30 @@ class LunaIntegration {
               return;
             }
 
-            // Get sender info
-            const { data: sender } = await supabase
-              .from('users')
-              .select('name, email')
-              .eq('id', message.user_id)
-              .single();
+            // Skip if this is a message from the current user (not system message)
+            if (message.user_id && message.user_id === this.user.id) {
+              return;
+            }
 
-            const senderName = sender?.name || sender?.email || 'Someone';
+            // Determine sender info and notification title
+            let senderName = 'Sistema';
+            let notificationTitle = 'Nueva notificación';
+            
+            if (message.user_id) {
+              // Regular message from another user
+              const { data: sender } = await supabase
+                .from('users')
+                .select('name, email')
+                .eq('id', message.user_id)
+                .single();
+
+              senderName = sender?.name || sender?.email || 'Alguien';
+              notificationTitle = senderName;
+            } else {
+              // System message
+              notificationTitle = 'Notificación del sistema';
+            }
+            
             const messageText = message.message || '';
 
             // Check if app is in foreground and if current chat is active
@@ -189,7 +206,7 @@ class LunaIntegration {
               // Show notification
               if ('serviceWorker' in navigator) {
                 const registration = await navigator.serviceWorker.ready;
-                registration.showNotification(`${senderName}`, {
+                registration.showNotification(notificationTitle, {
                   body: messageText.length > 100 ? messageText.substring(0, 100) + '...' : messageText,
                   icon: '/icon.svg',
                   badge: '/icon.svg',
@@ -202,7 +219,7 @@ class LunaIntegration {
                   requireInteraction: false
                 });
               } else if (Notification.permission === 'granted') {
-                new Notification(`${senderName}`, {
+                new Notification(notificationTitle, {
                   body: messageText,
                   icon: '/icon.svg',
                   tag: `chat-${message.chat_id}`
@@ -3375,7 +3392,8 @@ class LunaIntegration {
           
           const normalizedUrl = this.normalizeUrl(url);
           const exists = window.tabManager.tabs.some(t => {
-            const tUrl = t.url || '';
+            // Para tabs de Notion, usar originalUrl si está disponible (es la URL guardada en el backend)
+            const tUrl = (t.originalUrl || t.url || '').trim();
             if (!tUrl || tUrl === '/new' || tUrl === 'tabs://new') return false;
             return this.normalizeUrl(tUrl) === normalizedUrl;
           });
@@ -3400,9 +3418,11 @@ class LunaIntegration {
         }
         
         // Buscar si hay algún tab activo del espacio en TabManager
+        // IMPORTANTE: Para tabs de Notion, usar originalUrl si está disponible para la comparación
         const activeSpaceTab = window.tabManager.tabs.find(t => {
           if (!t.active) return false;
-          const tUrl = t.url || '';
+          // Para tabs de Notion, usar originalUrl si está disponible (es la URL guardada en el backend)
+          const tUrl = (t.originalUrl || t.url || '').trim();
           if (!tUrl || tUrl === '/new' || tUrl === 'tabs://new') return false;
           return spaceTabUrls.has(this.normalizeUrl(tUrl));
         });
@@ -3486,21 +3506,27 @@ class LunaIntegration {
     );
 
     // Filtrar tabs de TabManager que pertenecen a este espacio
+    // IMPORTANTE: Para tabs de Notion, usar originalUrl si está disponible para la comparación
     let spaceTabsInTabManager = (window.tabManager?.tabs || []).filter(t => {
-      const tUrl = t.url || '';
+      // Para tabs de Notion, usar originalUrl si está disponible (es la URL guardada en el backend)
+      const tUrl = (t.originalUrl || t.url || '').trim();
       if (!tUrl || tUrl === '/new' || tUrl === 'tabs://new') return false;
       return spaceTabUrls.has(this.normalizeUrl(tUrl));
     });
     
     // Ordenar según el orden del backend (position) - mapear cada tab de TabManager con su backend tab
+    // IMPORTANTE: Para tabs de Notion, usar originalUrl si está disponible para la comparación
     spaceTabsInTabManager = spaceTabsInTabManager.sort((a, b) => {
+      const aUrl = (a.originalUrl || a.url || '').trim();
+      const bUrl = (b.originalUrl || b.url || '').trim();
+      
       const backendTabA = this.spaceTabs.find(t => {
           const url = t.url || t.bookmark_url;
-        return url && this.normalizeUrl(url) === this.normalizeUrl(a.url || '');
+        return url && this.normalizeUrl(url) === this.normalizeUrl(aUrl);
       });
       const backendTabB = this.spaceTabs.find(t => {
         const url = t.url || t.bookmark_url;
-        return url && this.normalizeUrl(url) === this.normalizeUrl(b.url || '');
+        return url && this.normalizeUrl(url) === this.normalizeUrl(bUrl);
       });
       
       const positionA = backendTabA?.position || 0;
@@ -3519,10 +3545,12 @@ class LunaIntegration {
       const tabEl = tabWrapper.firstElementChild;
       
       // Buscar el tab del backend correspondiente para los handlers
+      // IMPORTANTE: Para tabs de Notion, usar originalUrl si está disponible para la comparación
+      const tabUrlForComparison = (tabManagerTab.originalUrl || tabManagerTab.url || '').trim();
       const backendTab = this.spaceTabs.find(t => {
         const url = t.url || t.bookmark_url;
         if (!url) return false;
-        return this.normalizeUrl(url) === this.normalizeUrl(tabManagerTab.url || '');
+        return this.normalizeUrl(url) === this.normalizeUrl(tabUrlForComparison);
       });
       
       // Agregar data-sortable-id para drag & drop (usar backendId)
@@ -3674,8 +3702,10 @@ class LunaIntegration {
     
     // Buscar si el tab ya está abierto en TabManager (es el MISMO tab)
     // IMPORTANTE: Excluir tabs con /new o tabs://new (estos son tabs "nuevos" no inicializados)
+    // IMPORTANTE: Para tabs de Notion, usar originalUrl si está disponible para la comparación
     const existingTab = tabManagerTabs.find(t => {
-      const tUrl = t.url || '';
+      // Para tabs de Notion, usar originalUrl si está disponible (es la URL guardada en el backend)
+      const tUrl = (t.originalUrl || t.url || '').trim();
       if (!tUrl || tUrl === '/new' || tUrl === 'tabs://new') return false;
       // Comparar URLs normalizadas
       return this.normalizeUrl(tUrl) === normalizedUrl;

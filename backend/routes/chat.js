@@ -129,6 +129,8 @@ async function getOrCreateChatForSpace(spaceId, userId) {
       .eq('space_id', spaceId)
       .maybeSingle();
     
+    let isNewChat = false;
+    
     if (doubleCheckSpaceChat) {
       // Another request created a chat - use it
       chatId = doubleCheckSpaceChat.chat_id;
@@ -142,6 +144,7 @@ async function getOrCreateChatForSpace(spaceId, userId) {
       
       if (!chat) return null;
       chatId = chat.id;
+      isNewChat = true;
       
       // Check one more time before inserting (race condition protection)
       const { data: finalCheckSpaceChat } = await supabase
@@ -153,6 +156,7 @@ async function getOrCreateChatForSpace(spaceId, userId) {
       if (finalCheckSpaceChat) {
         // Another request created a chat while we were creating ours - use theirs
         chatId = finalCheckSpaceChat.chat_id;
+        isNewChat = false;
         // Delete the chat we just created (it's not needed)
         await supabase
           .from('chats')
@@ -180,6 +184,7 @@ async function getOrCreateChatForSpace(spaceId, userId) {
           
           if (existingSpaceChat) {
             chatId = existingSpaceChat.chat_id;
+            isNewChat = false;
             // Delete the chat we just created
             await supabase
               .from('chats')
@@ -187,6 +192,55 @@ async function getOrCreateChatForSpace(spaceId, userId) {
               .eq('id', chat.id);
           }
         }
+      }
+    }
+    
+    // Send system message when a new chat is created
+    if (isNewChat) {
+      let messageText = '';
+      if (space.category === 'project') {
+        // Get current user info for message
+        const { data: currentUser } = await supabase
+          .from('users')
+          .select('name, email')
+          .eq('id', userId)
+          .single();
+        
+        const userName = currentUser?.name || currentUser?.email || 'Alguien';
+        messageText = `${userName} creó el proyecto "${space.name}"`;
+      } else if (space.category === 'user') {
+        // Get both users info for DM message
+        const { data: currentUser } = await supabase
+          .from('users')
+          .select('name, email')
+          .eq('id', userId)
+          .single();
+        
+        const { data: otherUser } = await supabase
+          .from('users')
+          .select('id, name, email')
+          .or(`email.eq.${space.name},name.eq.${space.name}`)
+          .neq('id', userId)
+          .maybeSingle();
+        
+        if (otherUser) {
+          const userName1 = currentUser?.name || currentUser?.email || 'Alguien';
+          const userName2 = otherUser.name || otherUser.email || 'Alguien';
+          messageText = `${userName1} y ${userName2} iniciaron una conversación`;
+        } else {
+          const userName = currentUser?.name || currentUser?.email || 'Alguien';
+          messageText = `${userName} inició una conversación`;
+        }
+      }
+      
+      if (messageText) {
+        await supabase
+          .from('chat_messages')
+          .insert({
+            chat_id: chatId,
+            user_id: null, // null = system message
+            message: messageText
+          });
       }
     }
   }
@@ -1007,6 +1061,7 @@ router.delete('/space/:spaceId/members', async (req, res) => {
 });
 
 export default router;
+export { getOrCreateChatForSpace };
 
 
 
