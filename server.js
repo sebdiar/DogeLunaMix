@@ -123,6 +123,13 @@ app.get("/return", async (req, reply) =>
     : reply.code(401).send({ error: "query parameter?" })
 );
 
+// SPA routes - serve index.html for all frontend routes
+// This ensures React Router can handle client-side routing
+app.get("/indev", (req, reply) => reply.sendFile("index.html"));
+app.get("/login", (req, reply) => reply.sendFile("index.html"));
+app.get("/settings", (req, reply) => reply.sendFile("index.html"));
+app.get("/new", (req, reply) => reply.sendFile("index.html"));
+
 // Proxy para el backend API (necesario en Replit donde solo un puerto es público)
 const backendPort = process.env.BACKEND_PORT || 3001;
 const backendUrl = process.env.BACKEND_URL || `http://localhost:${backendPort}`;
