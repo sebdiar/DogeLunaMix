@@ -348,10 +348,15 @@ router.post('/webhook', async (req, res) => {
         });
         // This is a task event
         if (event.type === 'page.created') {
+          process.stdout.write('\n📝 PROCESSING TASK CREATION: ' + pageId + '\n');
           console.log('📝 Processing task creation:', pageId);
+          console.log('📝 Task data:', JSON.stringify(event.data, null, 2));
+          console.log('📝 API Key available:', !!process.env.NOTION_API_KEY);
           // Process new task creation asynchronously (don't block webhook response)
           handleTaskCreated(event.data, process.env.NOTION_API_KEY).catch(err => {
+            process.stdout.write('\n❌ ERROR HANDLING TASK CREATION: ' + err.message + '\n');
             console.error('❌ Error handling task creation:', err);
+            console.error('❌ Error stack:', err.stack);
           });
         }
         // Respond quickly to Notion
