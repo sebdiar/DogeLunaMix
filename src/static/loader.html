@@ -247,6 +247,8 @@
         position: absolute;
         top: 0;
         left: 0;
+        width: 100%;
+        height: 100%;
       }
 
       [role="menuitem"] {
@@ -731,6 +733,37 @@
         /* Adjust main content for mobile */
         .flex.h-screen > .flex-1 {
           margin-bottom: 60px;
+        }
+
+        /* Ensure iframe container takes full height in mobile */
+        /* Account for top bar and bottom bar */
+        #fcn {
+          height: 100% !important;
+          min-height: 100% !important;
+          max-height: 100% !important;
+          position: relative !important;
+        }
+
+        /* When TopBar is visible, adjust iframe container height */
+        body:has(#topbar-space:not(.hidden)) #fcn {
+          height: calc(100vh - var(--topbar-height, 0px) - 72px - env(safe-area-inset-bottom, 0)) !important;
+          min-height: calc(100vh - var(--topbar-height, 0px) - 72px - env(safe-area-inset-bottom, 0)) !important;
+          max-height: calc(100vh - var(--topbar-height, 0px) - 72px - env(safe-area-inset-bottom, 0)) !important;
+        }
+
+        /* When TopBar is not visible, still account for bottom bar */
+        body:not(:has(#topbar-space:not(.hidden))) #fcn {
+          height: calc(100vh - 72px - env(safe-area-inset-bottom, 0)) !important;
+          min-height: calc(100vh - 72px - env(safe-area-inset-bottom, 0)) !important;
+          max-height: calc(100vh - 72px - env(safe-area-inset-bottom, 0)) !important;
+        }
+
+        /* Ensure iframes take full height in mobile */
+        #fcn iframe {
+          height: 100% !important;
+          min-height: 100% !important;
+          max-height: 100% !important;
+          width: 100% !important;
         }
       }
 
