@@ -264,13 +264,10 @@
         /* Remove rounded corners and padding from main content container in mobile */
         /* But respect safe areas for iPhone notch and bottom bar */
         .flex-1.flex.flex-col {
-          padding-top: 0 !important;
-          padding-bottom: 0 !important;
+          padding-top: env(safe-area-inset-top, 0) !important;
+          padding-bottom: calc(72px + env(safe-area-inset-bottom, 0)) !important;
           padding-left: 0 !important;
           padding-right: 0 !important;
-          height: 100vh !important;
-          min-height: 100vh !important;
-          max-height: 100vh !important;
         }
 
         .flex-1.flex.flex-col > div.bg-white.rounded-2xl {
@@ -738,46 +735,13 @@
           margin-bottom: 60px;
         }
 
-        /* Ensure main content area takes full height */
-        .flex.h-screen {
-          height: 100vh !important;
-          height: 100dvh !important;
-          min-height: 100vh !important;
-          min-height: 100dvh !important;
-          padding-top: env(safe-area-inset-top, 0) !important;
-          padding-bottom: calc(72px + env(safe-area-inset-bottom, 0)) !important;
-        }
-
         /* Ensure iframe container takes full height in mobile */
-        /* Account for top bar and bottom bar */
+        /* Use flex to fill available space */
         #fcn {
-          height: 100% !important;
-          min-height: 100% !important;
-          max-height: 100% !important;
+          flex: 1 1 0 !important;
           position: relative !important;
-          flex: 1 1 0 !important;
           overflow: hidden !important;
-        }
-
-        /* Calculate available height dynamically */
-        /* TopBar height varies, so we calculate from parent container */
-        .flex-1.flex.flex-col {
-          display: flex !important;
-          flex-direction: column !important;
-          flex: 1 1 0 !important;
-          overflow: hidden !important;
-        }
-
-        /* When TopBar is visible */
-        body:has(#topbar-space:not(.hidden)) .flex-1.flex.flex-col #fcn {
-          height: calc(100% - var(--topbar-height, 50px) - 22px) !important;
-          min-height: calc(100% - var(--topbar-height, 50px) - 22px) !important;
-        }
-
-        /* When TopBar is not visible */
-        body:not(:has(#topbar-space:not(.hidden))) .flex-1.flex.flex-col #fcn {
-          height: calc(100% - 22px) !important; /* 22px for URL bar */
-          min-height: calc(100% - 22px) !important;
+          min-height: 0 !important; /* Allow flex item to shrink */
         }
 
         /* Ensure iframes take full height in mobile */
