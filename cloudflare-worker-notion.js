@@ -456,8 +456,9 @@ export default {
           if (!name || !value) return;
           
           // Crear cookie con dominio del worker, SameSite=None, Secure, y Max-Age largo
+          // Max-Age de 10 años (315360000 segundos) para que duren mucho tiempo
           // Usar el dominio sin el punto inicial porque ya lo agregamos con "."
-          const cookieString = `${name}=${value}; Domain=.${workerDomain}; Path=/; SameSite=None; Secure; Max-Age=31536000`;
+          const cookieString = `${name}=${value}; Domain=.${workerDomain}; Path=/; SameSite=None; Secure; Max-Age=315360000`;
           modifiedResponse.headers.append('Set-Cookie', cookieString);
         });
       }
@@ -516,8 +517,8 @@ export default {
               const importantNotionCookies = ['notion_user_id', 'notion_session', 'notion_browser_id', 'token_v2', 'notion_experiment_device_id', 'notion_locale', 'notion_theme'];
               
               if (importantNotionCookies.some(name => cookieName.includes(name.replace(/_/g, '')) || cookieName === name)) {
-                // Cookie importante: darle 1 año de vida para persistir entre sesiones
-                modifiedCookie += '; Max-Age=31536000'; // 1 año en segundos
+                // Cookie importante: darle 10 años de vida para persistir mucho tiempo
+                modifiedCookie += '; Max-Age=315360000'; // 10 años en segundos
               } else {
                 // Cookie regular: darle 30 días
                 modifiedCookie += '; Max-Age=2592000'; // 30 días
@@ -532,7 +533,7 @@ export default {
                   const cookieName = modifiedCookie.split(';')[0].split('=')[0].toLowerCase();
                   const importantNotionCookies = ['notion_user_id', 'notion_session', 'notion_browser_id', 'token_v2'];
                   if (importantNotionCookies.some(name => cookieName.includes(name.replace(/_/g, '')) || cookieName === name)) {
-                    modifiedCookie = modifiedCookie.replace(/Max-Age\s*=\s*\d+/i, 'Max-Age=31536000'); // 1 año
+                    modifiedCookie = modifiedCookie.replace(/Max-Age\s*=\s*\d+/i, 'Max-Age=315360000'); // 10 años
                   }
                 }
               }
