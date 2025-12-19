@@ -261,19 +261,50 @@
           display: none !important;
         }
 
-        /* Remove rounded corners and padding from main content container in mobile */
-        /* But respect safe areas for iPhone notch and bottom bar */
+        /* Remove ALL padding and margins from main content container in mobile */
+        /* This ensures the content takes full screen space when used as app */
         .flex-1.flex.flex-col {
           padding-top: env(safe-area-inset-top, 0) !important;
-          padding-bottom: 0 !important; /* Remove padding-bottom - bottom bar is fixed */
+          padding-bottom: 0 !important;
           padding-left: 0 !important;
           padding-right: 0 !important;
-          margin-bottom: 0 !important; /* Remove any margin */
+          margin-bottom: 0 !important;
+          margin-top: 0 !important;
+          margin-left: 0 !important;
+          margin-right: 0 !important;
         }
         
-        /* Override inline style padding-bottom in mobile only */
-        .flex-1.flex.flex-col[style*="padding-bottom"] {
+        /* Override ALL inline style padding in mobile only */
+        .flex-1.flex.flex-col[style*="padding"] {
+          padding-top: env(safe-area-inset-top, 0) !important;
           padding-bottom: 0 !important;
+          padding-left: 0 !important;
+          padding-right: 0 !important;
+        }
+        
+        /* Also remove padding from parent containers in mobile */
+        body {
+          padding-top: env(safe-area-inset-top, 0) !important;
+          padding-bottom: env(safe-area-inset-bottom, 0) !important;
+          padding-left: 0 !important;
+          padding-right: 0 !important;
+        }
+        
+        /* Remove all padding from main flex container in mobile */
+        .flex.h-screen.mobile-no-padding {
+          padding: 0 !important;
+          margin: 0 !important;
+        }
+        
+        /* Remove background color from main container in mobile to avoid gray spaces */
+        .flex.h-screen.mobile-no-padding {
+          background-color: transparent !important;
+        }
+        
+        /* Ensure the white content card takes full space */
+        .flex-1.flex.flex-col > div.bg-white.rounded-2xl {
+          margin: 0 !important;
+          border-radius: 0 !important;
         }
 
         .flex-1.flex.flex-col > div.bg-white.rounded-2xl {
