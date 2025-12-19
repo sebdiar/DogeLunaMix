@@ -168,6 +168,13 @@ export default defineConfig(({ command }) => {
     },
     server: {
       port: 5173, // Vite default port
+      host: '0.0.0.0', // Allow external connections
+      allowedHosts: [
+        '.trycloudflare.com', // Allow all Cloudflare Tunnel subdomains
+        'localhost',
+        '127.0.0.1',
+        '.local'
+      ],
       proxy: {
         '/api': {
           target: 'http://localhost:3001',
