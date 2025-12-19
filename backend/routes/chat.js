@@ -305,6 +305,55 @@ async function getOrCreateChatForSpace(spaceId, userId) {
   return chatId;
 }
 
+// Get user's chat IDs (for realtime subscriptions)
+router.get('/my-chats', async (req, res) => {
+  try {
+    const { data: chatParticipants, error } = await supabase
+      .from('chat_participants')
+      .select('chat_id')
+      .eq('user_id', req.userId);
+    
+    if (error) {
+      console.error('Error fetching user chats:', error);
+      return res.status(500).json({ error: 'Failed to fetch chats' });
+    }
+    
+    const chatIds = chatParticipants ? chatParticipants.map(p => p.chat_id) : [];
+    return res.json({ chatIds });
+  } catch (error) {
+    console.error('Error in /my-chats:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Get space_id for a given chat_id
+router.get('/:chatId/space', async (req, res) => {
+  try {
+    const { chatId } = req.params;
+    
+    // Find the space associated with this chat
+    const { data: spaceChat, error } = await supabase
+      .from('space_chats')
+      .select('space_id')
+      .eq('chat_id', chatId)
+      .maybeSingle();
+    
+    if (error) {
+      console.error('Error fetching space for chat:', error);
+      return res.status(500).json({ error: 'Failed to fetch space' });
+    }
+    
+    if (!spaceChat) {
+      return res.status(404).json({ error: 'Space not found for chat' });
+    }
+    
+    return res.json({ spaceId: spaceChat.space_id });
+  } catch (error) {
+    console.error('Error in /:chatId/space:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Get project members (participants in the chat for a space)
 // IMPORTANT: This route must come BEFORE /space/:spaceId to avoid route conflicts
 router.get('/space/:spaceId/members', async (req, res) => {
@@ -527,6 +576,162 @@ router.get('/space/:spaceId/unread-count', async (req, res) => {
   } catch (error) {
     console.error('Get unread count error:', error);
     res.status(500).json({ error: 'Failed to get unread count' });
+  }
+});
+
+// Get total unread message count for user DMs only (not projects)
+router.get('/unread-count/users-only', async (req, res) => {
+  try {
+    // Get all spaces of category "user" (DMs)
+    const { data: userSpaces, error: spacesError } = await supabase
+      .from('spaces')
+      .select('id')
+      .eq('category', 'user');
+
+    if (spacesError || !userSpaces || userSpaces.length === 0) {
+      return res.json({ unreadCount: 0 });
+    }
+
+    const userSpaceIds = userSpaces.map(s => s.id);
+
+    // Get chat_ids for these spaces
+    const { data: spaceChats, error: spaceChatsError } = await supabase
+      .from('space_chats')
+      .select('chat_id, space_id')
+      .in('space_id', userSpaceIds);
+
+    if (spaceChatsError || !spaceChats || spaceChats.length === 0) {
+      return res.json({ unreadCount: 0 });
+    }
+
+    const userDmChatIds = spaceChats.map(sc => sc.chat_id);
+
+    // Filter to only chats where the user is a participant
+    const { data: userParticipations, error: participationsError } = await supabase
+      .from('chat_participants')
+      .select('chat_id')
+      .eq('user_id', req.userId)
+      .in('chat_id', userDmChatIds);
+
+    if (participationsError || !userParticipations || userParticipations.length === 0) {
+      return res.json({ unreadCount: 0 });
+    }
+
+    const participantChatIds = userParticipations.map(p => p.chat_id);
+
+    let totalUnread = 0;
+
+    // Get read status for user DM chats
+    const { data: readStatuses } = await supabase
+      .from('chat_message_reads')
+      .select('chat_id, last_read_message_id')
+      .eq('user_id', req.userId)
+      .in('chat_id', participantChatIds);
+
+    const readStatusMap = new Map();
+    if (readStatuses) {
+      readStatuses.forEach(rs => {
+        readStatusMap.set(rs.chat_id, rs.last_read_message_id);
+      });
+    }
+
+    // Count unread messages for each DM chat
+    for (const chatId of participantChatIds) {
+      const lastReadMessageId = readStatusMap.get(chatId);
+
+      let query = supabase
+        .from('chat_messages')
+        .select('id', { count: 'exact', head: true })
+        .eq('chat_id', chatId)
+        .neq('user_id', req.userId);
+
+      if (lastReadMessageId) {
+        const { data: lastReadMessage } = await supabase
+          .from('chat_messages')
+          .select('created_at')
+          .eq('id', lastReadMessageId)
+          .maybeSingle();
+
+        if (lastReadMessage) {
+          query = query.gt('created_at', lastReadMessage.created_at);
+        }
+      }
+
+      const { count } = await query;
+      totalUnread += (count || 0);
+    }
+
+    res.json({ unreadCount: totalUnread });
+  } catch (error) {
+    console.error('Get user DMs unread count error:', error);
+    res.status(500).json({ error: 'Failed to get unread count' });
+  }
+});
+
+// Get total unread message count across all user chats
+router.get('/unread-count', async (req, res) => {
+  try {
+    // Get all chats where user is a participant
+    const { data: chatParticipants } = await supabase
+      .from('chat_participants')
+      .select('chat_id')
+      .eq('user_id', req.userId);
+
+    if (!chatParticipants || chatParticipants.length === 0) {
+      return res.json({ unreadCount: 0 });
+    }
+
+    const chatIds = chatParticipants.map(p => p.chat_id);
+    let totalUnread = 0;
+
+    // Get read status for all chats
+    const { data: readStatuses } = await supabase
+      .from('chat_message_reads')
+      .select('chat_id, last_read_message_id')
+      .eq('user_id', req.userId)
+      .in('chat_id', chatIds);
+
+    const readStatusMap = new Map();
+    if (readStatuses) {
+      readStatuses.forEach(status => {
+        readStatusMap.set(status.chat_id, status.last_read_message_id);
+      });
+    }
+
+    // For each chat, count unread messages
+    for (const chatId of chatIds) {
+      const lastReadMessageId = readStatusMap.get(chatId);
+      
+      let query = supabase
+        .from('chat_messages')
+        .select('id', { count: 'exact', head: true })
+        .eq('chat_id', chatId)
+        .neq('user_id', req.userId); // Only count messages from other users
+
+      if (lastReadMessageId) {
+        // Get the timestamp of the last read message
+        const { data: lastReadMessage } = await supabase
+          .from('chat_messages')
+          .select('created_at')
+          .eq('id', lastReadMessageId)
+          .maybeSingle();
+        
+        if (lastReadMessage) {
+          query = query.gt('created_at', lastReadMessage.created_at);
+        }
+      }
+      // If no read status, count all messages from other users
+
+      const { count, error } = await query;
+      if (!error && count) {
+        totalUnread += count;
+      }
+    }
+
+    res.json({ unreadCount: totalUnread });
+  } catch (error) {
+    console.error('Get total unread count error:', error);
+    res.status(500).json({ error: 'Failed to get total unread count' });
   }
 });
 

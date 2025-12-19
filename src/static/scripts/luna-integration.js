@@ -5,6 +5,7 @@ class LunaIntegration {
   constructor() {
     this.token = localStorage.getItem('dogeub_token');
     this.user = JSON.parse(localStorage.getItem('dogeub_user') || 'null');
+    
     this.activeSpace = null;
     this.projects = [];
     this.users = [];
@@ -19,7 +20,9 @@ class LunaIntegration {
     this.supabaseClient = null; // Supabase client for realtime
     this.chatSubscriptions = new Map(); // Map of chatId -> subscription channel
     
-    this.init();
+    this.init().catch(err => {
+      console.error('❌ Error initializing LunaIntegration:', err);
+    });
   }
 
   async request(endpoint, options = {}) {
@@ -60,6 +63,73 @@ class LunaIntegration {
     }
   }
 
+  async updateUnreadBadge() {
+    try {
+      // Use the users-only endpoint to count only DM messages, not project messages
+      const response = await this.request('/api/chat/unread-count/users-only');
+      const unreadCount = response.unreadCount || 0;
+      
+      // Update mobile badge (for "Users" tab in bottom bar)
+      const badge = document.getElementById('mobile-messenger-badge');
+      if (badge) {
+        if (unreadCount > 0) {
+          badge.textContent = unreadCount > 99 ? '99+' : String(unreadCount);
+          badge.style.display = 'block';
+        } else {
+          badge.style.display = 'none';
+        }
+      }
+    } catch (error) {
+      console.error('Failed to update total unread badge:', error);
+    }
+  }
+
+  async updateSpaceBadge(spaceId) {
+    try {
+      const response = await this.request(`/api/chat/space/${spaceId}/unread-count`);
+      const unreadCount = response.unreadCount || 0;
+      
+      // Find ALL badges using data-space-id (both desktop and mobile)
+      const badges = document.querySelectorAll(`.space-unread-badge[data-space-id="${spaceId}"]`);
+      
+      badges.forEach((badge) => {
+        if (unreadCount > 0) {
+          badge.textContent = unreadCount > 99 ? '99+' : String(unreadCount);
+          badge.style.display = 'flex';
+          badge.style.visibility = 'visible';
+        } else {
+          badge.textContent = '';
+          badge.style.display = 'none';
+          badge.style.visibility = 'hidden';
+        }
+      });
+    } catch (err) {
+      // On error, hide ALL badges
+      const badges = document.querySelectorAll(`.space-unread-badge[data-space-id="${spaceId}"]`);
+      badges.forEach(badge => {
+        badge.textContent = '';
+        badge.style.display = 'none';
+        badge.style.visibility = 'hidden';
+      });
+    }
+  }
+
+  async updateSpaceUnreadBadges() {
+    try {
+      // Update badges for all projects
+      for (const project of this.projects || []) {
+        await this.updateSpaceBadge(project.id);
+      }
+      
+      // Update badges for all users
+      for (const user of this.users || []) {
+        await this.updateSpaceBadge(user.id);
+      }
+    } catch (error) {
+      console.error('Failed to update space unread badges:', error);
+    }
+  }
+
   async initNotifications() {
     // Initialize PWA notifications service worker
     if (!('serviceWorker' in navigator) || !('Notification' in window)) {
@@ -97,15 +167,14 @@ class LunaIntegration {
 
   async setupChatNotifications() {
     if (!this.user || !this.user.id) {
-      console.log('Cannot setup chat notifications: user not authenticated');
       return;
     }
 
     try {
-      // Get Supabase config from backend
+      // Get Supabase config
       const config = await this.request('/api/users/supabase-config');
+      
       if (!config.url || !config.anonKey) {
-        console.warn('Supabase config not available');
         return;
       }
 
@@ -114,35 +183,30 @@ class LunaIntegration {
       const { createClient } = await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm');
       
       // Create Supabase client with public credentials
-      // Use JWT token in headers for RLS policies
       const supabase = createClient(config.url, config.anonKey, {
-        global: {
-          headers: {
-            Authorization: this.token ? `Bearer ${this.token}` : ''
-          }
-        },
         auth: {
           persistSession: false,
           autoRefreshToken: false
         }
       });
+      
+      // Store client for later use
+      this.supabaseClient = supabase;
 
-      // Get current user's chats
-      const { data: chatParticipants } = await supabase
-        .from('chat_participants')
-        .select('chat_id')
-        .eq('user_id', this.user.id);
+      // Get current user's chats from backend API
+      const chatsResponse = await this.request('/api/chat/my-chats');
 
-      if (!chatParticipants || chatParticipants.length === 0) {
-        console.log('No chats found for user');
+      if (!chatsResponse.chatIds || chatsResponse.chatIds.length === 0) {
         return;
       }
 
-      const chatIds = chatParticipants.map(p => p.chat_id);
+      const chatIds = chatsResponse.chatIds;
 
-      // Subscribe to new messages in user's chats (including system messages)
+      // Subscribe to new messages in user's chats
+      const channelName = `chat-notifications-${this.user.id}`;
+      
       const channel = supabase
-        .channel(`chat-notifications-${this.user.id}`)
+        .channel(channelName)
         .on(
           'postgres_changes',
           {
@@ -160,71 +224,35 @@ class LunaIntegration {
               return;
             }
 
-            // Verify user has access to this chat
-            const { data: participants } = await supabase
-              .from('chat_participants')
-              .select('user_id')
-              .eq('chat_id', message.chat_id);
-
-            const hasAccess = participants?.some(p => p.user_id === this.user.id);
-            if (!hasAccess) {
-              return;
-            }
-
             // Skip if this is a message from the current user (not system message)
             if (message.user_id && message.user_id === this.user.id) {
               return;
             }
 
-            // Determine sender info and notification title
-            let senderName = 'Sistema';
-            let notificationTitle = 'Nueva notificación';
-            
-            if (message.user_id) {
-              // Regular message from another user
-              const { data: sender } = await supabase
-                .from('users')
-                .select('name, email')
-                .eq('id', message.user_id)
-                .single();
-
-              senderName = sender?.name || sender?.email || 'Alguien';
-              notificationTitle = senderName;
-            } else {
-              // System message
-              notificationTitle = 'Notificación del sistema';
-            }
-            
-            const messageText = message.message || '';
-
-            // Check if app is in foreground and if current chat is active
-            const isAppInForeground = document.visibilityState === 'visible';
-            const isCurrentChat = this.currentChatId === message.chat_id;
-
-            // Only show notification if app is in background OR user is not viewing this chat
-            if (!isAppInForeground || !isCurrentChat) {
-              // Show notification
-              if ('serviceWorker' in navigator) {
-                const registration = await navigator.serviceWorker.ready;
-                registration.showNotification(notificationTitle, {
-                  body: messageText.length > 100 ? messageText.substring(0, 100) + '...' : messageText,
-                  icon: '/icon.svg',
-                  badge: '/icon.svg',
-                  tag: `chat-${message.chat_id}`,
-                  data: {
-                    url: `/indev?chat=${message.chat_id}`,
-                    chatId: message.chat_id,
-                    type: 'chat_message'
-                  },
-                  requireInteraction: false
-                });
-              } else if (Notification.permission === 'granted') {
-                new Notification(notificationTitle, {
-                  body: messageText,
-                  icon: '/icon.svg',
-                  tag: `chat-${message.chat_id}`
+            // Get the space_id for this chat_id from backend
+            try {
+              const spaceResponse = await this.request(`/api/chat/${message.chat_id}/space`);
+              const spaceId = spaceResponse.spaceId;
+              
+              if (spaceId) {
+                // Update the total unread badge
+                this.updateUnreadBadge();
+                
+                // Update only the badge for this specific space
+                this.updateSpaceBadge(spaceId);
+              } else {
+                // Fallback: update all badges
+                this.updateUnreadBadge();
+                this.users.forEach(user => {
+                  this.updateSpaceBadge(user.id);
                 });
               }
+            } catch (error) {
+              // Fallback: update all badges
+              this.updateUnreadBadge();
+              this.users.forEach(user => {
+                this.updateSpaceBadge(user.id);
+              });
             }
           }
         )
@@ -232,14 +260,16 @@ class LunaIntegration {
 
       // Store channel for cleanup
       this.chatNotificationChannel = channel;
-      console.log('Chat notifications setup complete');
+      
+      // Initial badge update (only once on setup)
+      await this.updateUnreadBadge();
+      await this.updateSpaceUnreadBadges();
     } catch (error) {
       console.error('Failed to setup chat notifications:', error);
     }
   }
 
   async init() {
-    
     // Wait for TabManager to be ready
     const waitForTabManager = () => {
       return new Promise((resolve) => {
@@ -320,6 +350,9 @@ class LunaIntegration {
     await this.loadPersonalTabs();
     await this.loadProjects();
     await this.loadUsers();
+
+    // Setup global chat notifications (listens to ALL user chats)
+    await this.setupChatNotifications();
 
     // Load preferences from backend first (this will cache them)
     await this.loadPreferences();
@@ -467,6 +500,18 @@ class LunaIntegration {
           } else if (this.activeSpace) {
             // Active space exists but no active tab, update top bar
             this.renderTopBar();
+          }
+          
+          // Check if activated tab is a chat tab - if so, mark messages as read
+          if (activeTab && this.isChatUrl(activeTab.url)) {
+            const spaceId = activeTab.url.split('/').pop();
+            if (spaceId) {
+              this.markChatAsReadIfVisible(spaceId);
+              // Also update badge immediately to reflect the change
+              setTimeout(() => {
+                this.updateSpaceBadge(spaceId);
+              }, 500);
+            }
           }
         }, 50);
         
@@ -1399,6 +1444,12 @@ class LunaIntegration {
                     this.renderMobileProjects();
                     } else if (viewName === 'messenger' && this.renderMobileMessenger) {
                       this.renderMobileMessenger();
+                      // Update badges after render
+                      setTimeout(() => {
+                        this.users.forEach(user => {
+                          this.updateSpaceBadge(user.id);
+                        });
+                      }, 150);
                     } else if (viewName === 'more' && this.renderMore) {
                       this.renderMore(false, 'mobile');
                     }
@@ -1429,6 +1480,12 @@ class LunaIntegration {
                     this.renderMobileProjects();
                     } else if (viewName === 'messenger' && this.renderMobileMessenger) {
                       this.renderMobileMessenger();
+                      // Update badges after render
+                      setTimeout(() => {
+                        this.users.forEach(user => {
+                          this.updateSpaceBadge(user.id);
+                        });
+                      }, 150);
                     } else if (viewName === 'more' && this.renderMore) {
                       this.renderMore(false, 'mobile');
                     }
@@ -2237,6 +2294,14 @@ class LunaIntegration {
         }
       });
     });
+    
+    // After cloning and setting up event listeners, update badges
+    // This ensures the cloned badges show the correct unread counts
+    setTimeout(() => {
+      this.users.forEach(user => {
+        this.updateSpaceBadge(user.id);
+      });
+    }, 100);
   }
 
   // Unified renderMore function - works for both mobile and desktop
@@ -4943,12 +5008,14 @@ class LunaIntegration {
           </button>`
         : '<div class="w-4"></div>'; // Spacer if no children - más pequeño
       
+      projectEl.style.position = 'relative'; // For badge positioning
       projectEl.innerHTML = `
         ${chevronHtml}
         <div class="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0" style="border: 1px solid ${project.avatar_color || '#e8eaed'}; color: ${project.avatar_color || '#6b7280'}">
           ${iconHtml}
         </div>
         <span class="flex-1 text-xs truncate">${this.escapeHTML(project.name)}</span>
+        <div class="space-unread-badge" data-space-id="${project.id}" style="display: none; position: absolute; top: 4px; right: 28px; background-color: #ea4335; color: white; border-radius: 50%; width: 18px; height: 18px; min-width: 18px; align-items: center; justify-content: center; font-size: 10px; font-weight: 600; z-index: 10;"></div>
           <button class="project-archive-btn opacity-0 group-hover:opacity-100 hover:text-[#4285f4] transition-opacity p-0.5 cursor-pointer" data-project-id="${project.id}" title="Archive" style="cursor: pointer;">
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="20 6 9 17 4 12"></polyline>
@@ -5017,6 +5084,9 @@ class LunaIntegration {
         console.error('Failed to reorder projects:', err);
       }
     });
+    
+    // Don't update badges here - they will be updated via realtime when messages arrive
+    // Only update on initial load (handled in setupChatNotifications)
   }
 
   async toggleProjectExpanded(projectId) {
@@ -5134,6 +5204,7 @@ class LunaIntegration {
           ${user.other_user_photo ? `<img src="${user.other_user_photo}" alt="" class="w-full h-full object-cover" />` : `<span class="text-xs">${initial}</span>`}
         </div>
         <span class="flex-1 text-xs truncate">${this.escapeHTML(displayName)}</span>
+        <div class="space-unread-badge" data-space-id="${user.id}" style="display: none; position: absolute; top: 4px; right: 8px; background-color: #ea4335; color: white; border-radius: 50%; width: 18px; height: 18px; min-width: 18px; align-items: center; justify-content: center; font-size: 10px; font-weight: 600; z-index: 10;"></div>
       `;
       
       // Set event listener AFTER setting innerHTML
@@ -5159,6 +5230,13 @@ class LunaIntegration {
       
       container.appendChild(userEl);
     });
+    
+    // Update badges after rendering (will update both desktop and mobile if present)
+    setTimeout(() => {
+      this.users.forEach(user => {
+        this.updateSpaceBadge(user.id);
+      });
+    }, 100);
     
     // Setup drag and drop for users
     this.setupDragAndDrop('users-cont', this.users, false, async ({ draggedId, targetId, position }) => {
@@ -5608,7 +5686,7 @@ class LunaIntegration {
       }
 
       // Cargar mensajes
-      this.loadChatMessages(wrapper, chat.id);
+      this.loadChatMessages(wrapper, chat.id, spaceId);
     } catch {
       // Solo mostrar error si no se ha renderizado nada todavía
       const messagesContainer = wrapper.querySelector('.chat-messages');
@@ -5666,7 +5744,7 @@ class LunaIntegration {
     }
   }
 
-  async loadChatMessages(container, chatId) {
+  async loadChatMessages(container, chatId, spaceId = null, skipRealtime = false) {
     const messagesContainer = container.querySelector('.chat-messages');
     if (!messagesContainer) return;
 
@@ -5677,10 +5755,42 @@ class LunaIntegration {
       // Scroll to bottom
       messagesContainer.scrollTop = messagesContainer.scrollHeight;
       
-      // Setup realtime subscription for this chat
-        this.setupChatRealtime(chatId, messagesContainer);
+      // DON'T mark as read here - only mark as read when tab becomes visible
+      // This is handled by markChatAsReadIfVisible() called from tab activation
+      
+      // Setup realtime subscription for this chat (only if not skipping)
+      if (!skipRealtime) {
+        // Only setup if we don't already have a subscription for this chat
+        if (!this.chatSubscriptions.has(chatId)) {
+          this.setupChatRealtime(chatId, messagesContainer);
+        }
+      }
     } catch (err) {
       console.error('Failed to load messages:', err);
+    }
+  }
+  
+  // Mark chat messages as read for a specific space (only if chat tab is currently visible)
+  async markChatAsReadIfVisible(spaceId) {
+    if (!spaceId) return;
+    
+    // Check if there's an active tab and if it's a chat tab for this space
+    const activeTab = window.tabManager?.active();
+    if (!activeTab) return;
+    
+    const chatUrl = `luna://chat/${spaceId}`;
+    if (activeTab.url !== chatUrl) return;
+    
+    // Active tab is the chat for this space - mark as read
+    try {
+      await this.request(`/api/chat/space/${spaceId}/mark-read`, {
+        method: 'POST'
+      });
+      // Update badges after marking as read
+      this.updateUnreadBadge();
+      this.updateSpaceBadge(spaceId);
+    } catch (markReadErr) {
+      // Silently fail
     }
   }
   
@@ -5715,10 +5825,22 @@ class LunaIntegration {
   }
   
   async setupChatRealtime(chatId, messagesContainer) {
+    // Prevent duplicate subscriptions - check if already setting up
+    const setupKey = `realtime-setup-${chatId}`;
+    if (window[setupKey]) {
+      console.log('⏳ Realtime setup already in progress for chat:', chatId);
+      return;
+    }
+    window[setupKey] = true;
+    
     // Cleanup previous subscription for this chat
     if (this.chatSubscriptions.has(chatId)) {
       const oldChannel = this.chatSubscriptions.get(chatId);
-      oldChannel.unsubscribe();
+      try {
+        oldChannel.unsubscribe();
+      } catch (e) {
+        // Ignore errors when unsubscribing
+      }
       this.chatSubscriptions.delete(chatId);
     }
     
@@ -5750,9 +5872,20 @@ class LunaIntegration {
             filter: `chat_id=eq.${chatId}`
           },
         (payload) => {
-          console.log('📨📨📨 New message received via realtime:', payload);
-            // Reload messages when new one arrives
-          this.loadChatMessages(messagesContainer.closest('.chat-wrapper'), chatId);
+          // Reload messages when new one arrives (skip realtime setup to avoid loop)
+          const wrapper = messagesContainer.closest('.chat-wrapper');
+          if (wrapper) {
+            const spaceId = wrapper?.dataset?.spaceId || this.activeSpace?.id;
+            this.loadChatMessages(wrapper, chatId, spaceId, true); // skipRealtime = true
+            
+            // If this chat tab is currently visible, mark the new messages as read
+            if (spaceId) {
+              // Small delay to ensure messages are loaded before marking as read
+              setTimeout(() => {
+                this.markChatAsReadIfVisible(spaceId);
+              }, 300);
+            }
+          }
           }
         )
         .subscribe((status, err) => {
@@ -5775,12 +5908,20 @@ class LunaIntegration {
           console.error('❌ Realtime subscription timed out - will use polling');
           this.startChatPolling(chatId, messagesContainer);
         } else if (status === 'CLOSED') {
-          console.error('❌ Realtime subscription closed - will use polling');
-          this.startChatPolling(chatId, messagesContainer);
+          console.error('❌ Realtime subscription closed');
+          // Only start polling if we don't already have an active subscription
+          // (might be closing because we're creating a new one)
+          if (!this.chatSubscriptions.has(chatId)) {
+            console.log('🔄 Starting polling as fallback');
+            this.startChatPolling(chatId, messagesContainer);
+          } else {
+            console.log('⏸️ Skipping polling - new subscription already active');
+          }
         }
       });
     
     this.chatSubscriptions.set(chatId, channel);
+    delete window[setupKey]; // Clear setup flag
   }
   
   startChatPolling(chatId, messagesContainer) {
@@ -5795,8 +5936,8 @@ class LunaIntegration {
     window[pollingKey] = setInterval(() => {
       const container = messagesContainer.closest('.chat-wrapper');
       if (container) {
-        this.loadChatMessages(container, chatId);
-                } else {
+        this.loadChatMessages(container, chatId, null, true); // skipRealtime = true to avoid recreating subscriptions
+      } else {
         // Container removed, stop polling
         clearInterval(window[pollingKey]);
         delete window[pollingKey];
@@ -6362,7 +6503,15 @@ class LunaIntegration {
       // Reload messages to show the new one
       const chatContainer = document.querySelector(`[data-chat-id="${chatId}"]`)?.closest('.chat-wrapper');
       if (chatContainer) {
-        this.loadChatMessages(chatContainer, chatId);
+        const spaceId = chatContainer?.dataset?.spaceId || this.activeSpace?.id;
+        this.loadChatMessages(chatContainer, chatId, spaceId);
+        
+        // Mark as read after sending (user is actively viewing this chat)
+        if (spaceId) {
+          setTimeout(() => {
+            this.markChatAsReadIfVisible(spaceId);
+          }, 300);
+        }
       }
     } catch (err) {
       console.error('Failed to send message:', err);

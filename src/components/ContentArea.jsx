@@ -127,6 +127,24 @@ function ChatComponent({ chatData }) {
   };
 
   const user = api.getUser();
+  
+  // #region agent log
+  useEffect(() => {
+    const logData = {location:'ContentArea.jsx:132',message:'User data loaded',data:{userId:user?.id,userName:user?.name,userEmail:user?.email,userAvatarPhoto:user?.avatar_photo,userHasAvatar:!!user?.avatar_photo},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'};
+    console.log('DEBUG A - User data:', logData);
+    fetch('http://127.0.0.1:7242/ingest/666869cb-9251-4224-9e7d-37070918adfc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(logData)}).catch(err=>console.error('Log fetch failed:',err));
+  }, [user]);
+  // #endregion
+  
+  // #region agent log
+  useEffect(() => {
+    if (messages.length > 0) {
+      const logData = {location:'ContentArea.jsx:138',message:'Messages loaded',data:{messageCount:messages.length,messages:messages.map(m=>({id:m.id,userId:m.user_id,userAvatarPhoto:m.user?.avatar_photo,userName:m.user?.name,hasUserData:!!m.user})),currentUserId:user?.id},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'};
+      console.log('DEBUG B - Messages data:', logData);
+      fetch('http://127.0.0.1:7242/ingest/666869cb-9251-4224-9e7d-37070918adfc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(logData)}).catch(err=>console.error('Log fetch failed:',err));
+    }
+  }, [messages, user]);
+  // #endregion
 
   return (
     <div className="flex-1 flex flex-col h-full">
@@ -153,26 +171,174 @@ function ChatComponent({ chatData }) {
             
             // Regular user messages
             const isOwn = msg.user_id === user?.id;
+            const userAvatar = msg.user?.avatar_photo || msg.user?.avatar_url;
+            const userName = msg.user?.name || msg.user?.email || 'Unknown';
+            const userInitials = userName.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
+            const currentUserInitials = user ? ((user.name || user.email || 'U').split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)) : 'U';
+            
+            // #region agent log
+            const logData = {location:'ContentArea.jsx:175',message:'Rendering message avatar',data:{msgId:msg.id,isOwn,userAvatar:!!userAvatar,userAvatarValue:userAvatar,userName,userHasAvatarPhoto:!!user?.avatar_photo,currentUserAvatar:user?.avatar_photo,msgUser:msg.user,currentUser:user,willRenderOtherAvatar:!isOwn,willRenderOwnAvatar:isOwn},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'};
+            console.log('DEBUG C - Rendering message:', logData);
+            fetch('http://127.0.0.1:7242/ingest/666869cb-9251-4224-9e7d-37070918adfc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(logData)}).catch(err=>console.error('Log fetch failed:',err));
+            // #endregion
+            
             return (
               <div
                 key={msg.id}
-                className={`flex ${isOwn ? 'justify-end' : 'justify-start'}`}
+                className={`flex items-end gap-2 ${isOwn ? 'flex-row-reverse' : 'flex-row'}`}
+                style={{ display: 'flex' }}
               >
+                {/* Avatar para mensajes de otros usuarios (izquierda) */}
+                {!isOwn && (
+                  <div 
+                    className="rounded-full bg-gray-300 flex-shrink-0 flex items-center justify-center overflow-hidden border border-gray-400" 
+                    style={{ 
+                      width: '32px', 
+                      height: '32px',
+                      minWidth: '32px', 
+                      minHeight: '32px',
+                      position: 'relative'
+                    }}
+                    // #region agent log
+                    ref={(el) => {
+                      if (el) {
+                        const logData = {location:'ContentArea.jsx:187',message:'Other user avatar rendered',data:{msgId:msg.id,isVisible:el.offsetParent!==null,hasAvatar:!!userAvatar,computedStyle:window.getComputedStyle(el).display,width:el.offsetWidth,height:el.offsetHeight},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'};
+                        console.log('DEBUG D - Other avatar DOM:', logData);
+                        fetch('http://127.0.0.1:7242/ingest/666869cb-9251-4224-9e7d-37070918adfc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(logData)}).catch(err=>console.error('Log fetch failed:',err));
+                      }
+                    }}
+                    // #endregion
+                  >
+                    {userAvatar ? (
+                      <>
+                        <img 
+                          src={userAvatar} 
+                          alt={userName} 
+                          style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', position: 'absolute', top: 0, left: 0 }}
+                          onError={(e) => {
+                            console.log('Avatar image failed to load:', userAvatar);
+                            e.target.style.display = 'none';
+                            const initialsSpan = e.target.parentElement?.querySelector('.avatar-initials');
+                            if (initialsSpan) {
+                              initialsSpan.style.display = 'block';
+                            }
+                          }}
+                        />
+                        <span 
+                          className="avatar-initials"
+                          style={{ 
+                            fontSize: '12px', 
+                            lineHeight: '1', 
+                            color: '#4B5563', 
+                            fontWeight: '500',
+                            display: 'none',
+                            position: 'relative',
+                            zIndex: 1
+                          }}
+                        >
+                          {userInitials}
+                        </span>
+                      </>
+                    ) : (
+                      <span 
+                        style={{ 
+                          fontSize: '12px', 
+                          lineHeight: '1', 
+                          color: '#4B5563', 
+                          fontWeight: '500'
+                        }}
+                      >
+                        {userInitials}
+                      </span>
+                    )}
+                  </div>
+                )}
+                
+                {/* Burbuja del mensaje */}
                 <div
                   className={`max-w-md px-4 py-2 rounded-lg ${
                     isOwn
                       ? 'bg-blue-500 text-white'
                       : 'bg-gray-100 text-gray-900'
                   }`}
+                  style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
                 >
-                  <div className="text-sm font-medium mb-1">
-                    {msg.user?.name || msg.user?.email || 'Unknown'}
-                  </div>
-                  <div className="text-sm">{msg.message}</div>
+                  {!isOwn && (
+                    <div className="text-sm font-medium mb-1">
+                      {userName}
+                    </div>
+                  )}
+                  <div className="text-sm select-text">{msg.message}</div>
                   <div className={`text-xs mt-1 ${isOwn ? 'text-blue-100' : 'text-gray-500'}`}>
                     {new Date(msg.created_at).toLocaleTimeString()}
                   </div>
                 </div>
+                
+                {/* Avatar para mensajes propios (derecha) */}
+                {isOwn && (
+                  <div 
+                    className="rounded-full bg-blue-500 flex-shrink-0 flex items-center justify-center overflow-hidden border border-blue-600" 
+                    style={{ 
+                      width: '32px', 
+                      height: '32px',
+                      minWidth: '32px', 
+                      minHeight: '32px',
+                      position: 'relative'
+                    }}
+                    // #region agent log
+                    ref={(el) => {
+                      if (el) {
+                        const logData = {location:'ContentArea.jsx:245',message:'Own avatar rendered',data:{msgId:msg.id,isVisible:el.offsetParent!==null,hasAvatar:!!user?.avatar_photo,computedStyle:window.getComputedStyle(el).display,width:el.offsetWidth,height:el.offsetHeight},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'};
+                        console.log('DEBUG D - Own avatar DOM:', logData);
+                        fetch('http://127.0.0.1:7242/ingest/666869cb-9251-4224-9e7d-37070918adfc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(logData)}).catch(err=>console.error('Log fetch failed:',err));
+                      }
+                    }}
+                    // #endregion
+                  >
+                    {user?.avatar_photo ? (
+                      <>
+                        <img 
+                          src={user.avatar_photo} 
+                          alt={user.name || user.email} 
+                          style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', position: 'absolute', top: 0, left: 0 }}
+                          onError={(e) => {
+                            console.log('Current user avatar image failed to load:', user.avatar_photo);
+                            e.target.style.display = 'none';
+                            const initialsSpan = e.target.parentElement?.querySelector('.avatar-initials-own');
+                            if (initialsSpan) {
+                              initialsSpan.style.display = 'block';
+                            }
+                          }}
+                        />
+                        <span 
+                          className="avatar-initials-own"
+                          style={{ 
+                            fontSize: '12px', 
+                            lineHeight: '1', 
+                            color: 'white', 
+                            fontWeight: '500',
+                            display: 'none',
+                            position: 'relative',
+                            zIndex: 1
+                          }}
+                        >
+                          {currentUserInitials}
+                        </span>
+                      </>
+                    ) : (
+                      <span 
+                        style={{ 
+                          fontSize: '12px', 
+                          lineHeight: '1', 
+                          color: 'white', 
+                          fontWeight: '500'
+                        }}
+                      >
+                        {currentUserInitials}
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })
