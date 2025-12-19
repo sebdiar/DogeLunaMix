@@ -270,6 +270,11 @@
           padding-right: 0 !important;
           margin-bottom: 0 !important; /* Remove any margin */
         }
+        
+        /* Override inline style padding-bottom in mobile only */
+        .flex-1.flex.flex-col[style*="padding-bottom"] {
+          padding-bottom: 0 !important;
+        }
 
         .flex-1.flex.flex-col > div.bg-white.rounded-2xl {
           border-radius: 0 !important;
@@ -732,6 +737,7 @@
         }
 
         /* Adjust main content for mobile - no margin needed, bottom bar is fixed */
+        /* Note: This is inside mobile media query, so only affects mobile */
         .flex.h-screen > .flex-1 {
           margin-bottom: 0;
         }
@@ -1741,7 +1747,7 @@
       </div>
       
         <!-- Contenido principal (TopBar si hay espacio activo + nav bar + iframe) - Envuelto en tarjeta -->
-        <div class="flex-1 flex flex-col" style="background-color: #ececed; padding-top: 6px; padding-bottom: 0; padding-left: 3px; padding-right: 6px;">
+        <div class="flex-1 flex flex-col" style="background-color: #ececed; padding-top: 6px; padding-bottom: 6px; padding-left: 3px; padding-right: 6px;">
         <div class="h-full flex flex-col bg-white rounded-2xl overflow-hidden">
           <!-- TopBar for active space (Projects/DMs) - estilo minimalista vertical -->
           <div id="topbar-space" class="bg-white border-b border-[#e8eaed] hidden" style="display: none;">
