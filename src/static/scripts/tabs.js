@@ -74,8 +74,11 @@ export const TYPE = {
       f.style.border = 'none';
       
       // Permitir cookies y almacenamiento en el iframe (necesario para login de Notion)
+      // Nota: Safari/iOS tiene restricciones estrictas con cookies en iframes cross-origin
       f.setAttribute('allow', 'cookies');
       f.setAttribute('credentialless', 'false');
+      // Intentar mejorar compatibilidad con Safari usando referrerpolicy
+      f.setAttribute('referrerpolicy', 'no-referrer-when-downgrade');
       
       if (!manager.ic) return;
       

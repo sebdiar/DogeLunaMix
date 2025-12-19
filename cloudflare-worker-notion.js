@@ -433,11 +433,6 @@ export default {
           setCookies.forEach(cookie => {
             if (!cookie) return;
             
-            // Extraer el nombre y valor de la cookie antes de modificar
-            const cookieParts = cookie.split(';');
-            const nameValue = cookieParts[0];
-            const attributes = cookieParts.slice(1);
-            
             // NO remover el dominio - mantenerlo pero cambiarlo al worker domain si existe
             // Las cookies con dominio funcionan mejor en iframes cross-origin
             let modifiedCookie = cookie
@@ -446,10 +441,7 @@ export default {
               .replace(/domain=\.?notion\.com/gi, `domain=.${workerDomain}`)
               .replace(/domain=notion\.com/gi, `domain=.${workerDomain}`);
             
-            // Si la cookie NO tiene dominio explícito, mantenerla sin dominio (funciona para el dominio actual)
-            // Solo modificar si ya tiene dominio
-            
-            // Asegurar SameSite=None y Secure para cross-origin (necesario para iframes)
+            // Asegurar SameSite=None y Secure para cross-origin (necesario para iframes, especialmente Safari/iOS)
             if (!modifiedCookie.match(/SameSite\s*=/i)) {
               modifiedCookie += '; SameSite=None; Secure';
             } else {
@@ -463,6 +455,42 @@ export default {
             // Asegurar que Path esté presente (algunos navegadores lo requieren)
             if (!modifiedCookie.match(/Path\s*=/i)) {
               modifiedCookie += '; Path=/';
+            }
+            
+            // Para cookies de sesión de Notion, asegurar que tengan una duración larga
+            // Esto es especialmente importante para Safari que puede ser más agresivo con cookies
+            // Solo agregar Max-Age si no tiene Expires ni Max-Age (cookies de sesión sin expiración)
+            const hasExpires = modifiedCookie.match(/Expires\s*=/i);
+            const hasMaxAge = modifiedCookie.match(/Max-Age\s*=/i);
+            
+            // Si es una cookie de sesión (sin Expires ni Max-Age), darle duración extendida
+            // Esto ayuda a mantener la sesión en todos los dispositivos
+            if (!hasExpires && !hasMaxAge) {
+              // Identificar cookies importantes de Notion que deben persistir
+              const cookieName = modifiedCookie.split(';')[0].split('=')[0].toLowerCase();
+              const importantNotionCookies = ['notion_user_id', 'notion_session', 'notion_browser_id', 'token_v2', 'notion_experiment_device_id', 'notion_locale', 'notion_theme'];
+              
+              if (importantNotionCookies.some(name => cookieName.includes(name.replace(/_/g, '')) || cookieName === name)) {
+                // Cookie importante: darle 1 año de vida para persistir entre sesiones
+                modifiedCookie += '; Max-Age=31536000'; // 1 año en segundos
+              } else {
+                // Cookie regular: darle 30 días
+                modifiedCookie += '; Max-Age=2592000'; // 30 días
+              }
+            } else if (hasMaxAge) {
+              // Si ya tiene Max-Age, intentar extenderlo si es muy corto (< 7 días)
+              const maxAgeMatch = modifiedCookie.match(/Max-Age\s*=\s*(\d+)/i);
+              if (maxAgeMatch) {
+                const currentMaxAge = parseInt(maxAgeMatch[1], 10);
+                if (currentMaxAge < 604800) { // Menos de 7 días
+                  // Reemplazar con duración más larga para cookies importantes
+                  const cookieName = modifiedCookie.split(';')[0].split('=')[0].toLowerCase();
+                  const importantNotionCookies = ['notion_user_id', 'notion_session', 'notion_browser_id', 'token_v2'];
+                  if (importantNotionCookies.some(name => cookieName.includes(name.replace(/_/g, '')) || cookieName === name)) {
+                    modifiedCookie = modifiedCookie.replace(/Max-Age\s*=\s*\d+/i, 'Max-Age=31536000'); // 1 año
+                  }
+                }
+              }
             }
             
             modifiedResponse.headers.append('Set-Cookie', modifiedCookie);
