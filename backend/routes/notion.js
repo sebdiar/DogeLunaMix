@@ -769,23 +769,46 @@ async function handleTaskCreated(taskData, apiKey) {
       return;
     }
 
-    // Build message text
-    let messageText = `Tarea creada: ${taskDetails.title}`;
+    // Build message text in English with visual format
+    const currentDate = new Date();
+    const formattedDate = currentDate.toLocaleDateString('en-US', { 
+      month: 'short', 
+      day: 'numeric', 
+      year: 'numeric' 
+    });
     
-    const parts = [];
+    let messageText = `✅ New task\n\n📋 ${taskDetails.title}\n📅 ${formattedDate}`;
+    
     if (taskDetails.assignee) {
-      parts.push(`Asignado: ${taskDetails.assignee}`);
-    }
-    if (taskDetails.dueDate) {
-      // Format date as DD/MM/YYYY
-      const date = new Date(taskDetails.dueDate);
-      const formattedDate = `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}/${date.getFullYear()}`;
-      parts.push(`Vence: ${formattedDate}`);
+      messageText += `\n👤 Assigned: ${taskDetails.assignee}`;
     }
     
-    if (parts.length > 0) {
-      messageText += '\n' + parts.join(' | ');
+    if (taskDetails.dueDate) {
+      // Format due date
+      const dueDate = new Date(taskDetails.dueDate);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      dueDate.setHours(0, 0, 0, 0);
+      const diffTime = dueDate - today;
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      
+      let dueDateText;
+      if (diffDays === 0) {
+        dueDateText = 'Due: Today';
+      } else if (diffDays === 1) {
+        dueDateText = 'Due: Tomorrow';
+      } else if (diffDays === -1) {
+        dueDateText = 'Due: Yesterday';
+      } else if (diffDays > 0) {
+        dueDateText = `Due: ${dueDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
+      } else {
+        dueDateText = `Due: ${dueDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} (Overdue)`;
+      }
+      
+      messageText += `\n⏰ ${dueDateText}`;
     }
+    
+    messageText += '\n\n🔗 View Details';
 
     // Send system message to chat
     const { error: messageError } = await supabase
@@ -878,31 +901,55 @@ async function handleTaskUpdated(taskData, apiKey) {
     const wasJustCompleted = taskDetails.isDone && 
                              (!previousState || previousState.isDone === false);
     
+    // Build message text in English with visual format
+    const currentDate = new Date();
+    const formattedDate = currentDate.toLocaleDateString('en-US', { 
+      month: 'short', 
+      day: 'numeric', 
+      year: 'numeric' 
+    });
+    
     let messageText = null;
     
     if (wasJustCompleted) {
       // Task was just completed (Done changed from false to true)
-      messageText = `Tarea completada: ${taskDetails.title}`;
+      messageText = `✅ Task completed\n\n📋 ${taskDetails.title}\n📅 ${formattedDate}`;
     } else {
       // Task was updated but not completed (or was already completed)
-      messageText = `Tarea actualizada: ${taskDetails.title}`;
+      messageText = `📝 Task updated\n\n📋 ${taskDetails.title}\n📅 ${formattedDate}`;
     }
     
     // Add assignee and due date if available
-    const parts = [];
     if (taskDetails.assignee) {
-      parts.push(`Asignado: ${taskDetails.assignee}`);
-    }
-    if (taskDetails.dueDate) {
-      // Format date as DD/MM/YYYY
-      const date = new Date(taskDetails.dueDate);
-      const formattedDate = `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}/${date.getFullYear()}`;
-      parts.push(`Vence: ${formattedDate}`);
+      messageText += `\n👤 Assigned: ${taskDetails.assignee}`;
     }
     
-    if (parts.length > 0) {
-      messageText += '\n' + parts.join(' | ');
+    if (taskDetails.dueDate) {
+      // Format due date
+      const dueDate = new Date(taskDetails.dueDate);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      dueDate.setHours(0, 0, 0, 0);
+      const diffTime = dueDate - today;
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      
+      let dueDateText;
+      if (diffDays === 0) {
+        dueDateText = 'Due: Today';
+      } else if (diffDays === 1) {
+        dueDateText = 'Due: Tomorrow';
+      } else if (diffDays === -1) {
+        dueDateText = 'Due: Yesterday';
+      } else if (diffDays > 0) {
+        dueDateText = `Due: ${dueDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
+      } else {
+        dueDateText = `Due: ${dueDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} (Overdue)`;
+      }
+      
+      messageText += `\n⏰ ${dueDateText}`;
     }
+    
+    messageText += '\n\n🔗 View Details';
 
     // Send system message to chat
     const { error: messageError } = await supabase
