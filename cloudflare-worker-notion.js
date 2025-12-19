@@ -455,10 +455,10 @@ export default {
           
           if (!name || !value) return;
           
-          // Crear cookie con dominio del worker, SameSite=None, Secure, y Max-Age largo
-          // Max-Age de 10 años (315360000 segundos) para que duren mucho tiempo
+          // Crear cookie con dominio del worker, SameSite=None, Secure, y Max-Age muy largo (10 años)
           // Usar el dominio sin el punto inicial porque ya lo agregamos con "."
-          const cookieString = `${name}=${value}; Domain=.${workerDomain}; Path=/; SameSite=None; Secure; Max-Age=315360000`;
+          const EXTENDED_MAX_AGE = 315360000; // 10 años en segundos
+          const cookieString = `${name}=${value}; Domain=.${workerDomain}; Path=/; SameSite=None; Secure; Max-Age=${EXTENDED_MAX_AGE}`;
           modifiedResponse.headers.append('Set-Cookie', cookieString);
         });
       }
@@ -503,39 +503,33 @@ export default {
               modifiedCookie += '; Path=/';
             }
             
-            // Para cookies de sesión de Notion, asegurar que tengan una duración larga
+            // Para cookies de sesión de Notion, asegurar que tengan una duración MUY larga
             // Esto es especialmente importante para Safari que puede ser más agresivo con cookies
-            // Solo agregar Max-Age si no tiene Expires ni Max-Age (cookies de sesión sin expiración)
-            const hasExpires = modifiedCookie.match(/Expires\s*=/i);
-            const hasMaxAge = modifiedCookie.match(/Max-Age\s*=/i);
+            // Extender TODAS las cookies importantes a 10 años (máximo razonable)
+            const cookieName = modifiedCookie.split(';')[0].split('=')[0].toLowerCase();
+            const importantNotionCookies = ['notion_user_id', 'notion_session', 'notion_browser_id', 'token_v2', 'notion_experiment_device_id', 'notion_locale', 'notion_theme', 'notion_users', 'notion_personalization', 'p_sync_session', 'signals-sdk-session-id', 'signals-sdk-user-id'];
+            const isImportantCookie = importantNotionCookies.some(name => cookieName.includes(name.replace(/_/g, '').replace(/-/g, '')) || cookieName === name || cookieName.includes(name));
             
-            // Si es una cookie de sesión (sin Expires ni Max-Age), darle duración extendida
-            // Esto ayuda a mantener la sesión en todos los dispositivos
-            if (!hasExpires && !hasMaxAge) {
-              // Identificar cookies importantes de Notion que deben persistir
-              const cookieName = modifiedCookie.split(';')[0].split('=')[0].toLowerCase();
-              const importantNotionCookies = ['notion_user_id', 'notion_session', 'notion_browser_id', 'token_v2', 'notion_experiment_device_id', 'notion_locale', 'notion_theme'];
+            if (isImportantCookie) {
+              // Para cookies importantes, extender a 10 años (315360000 segundos)
+              const EXTENDED_MAX_AGE = 315360000; // 10 años
               
-              if (importantNotionCookies.some(name => cookieName.includes(name.replace(/_/g, '')) || cookieName === name)) {
-                // Cookie importante: darle 10 años de vida para persistir mucho tiempo
-                modifiedCookie += '; Max-Age=315360000'; // 10 años en segundos
+              // Remover Expires si existe (vamos a usar solo Max-Age)
+              modifiedCookie = modifiedCookie.replace(/Expires\s*=\s*[^;]+/gi, '');
+              
+              // Reemplazar Max-Age existente o agregar uno nuevo
+              if (modifiedCookie.match(/Max-Age\s*=/i)) {
+                modifiedCookie = modifiedCookie.replace(/Max-Age\s*=\s*\d+/i, `Max-Age=${EXTENDED_MAX_AGE}`);
               } else {
-                // Cookie regular: darle 30 días
-                modifiedCookie += '; Max-Age=2592000'; // 30 días
+                modifiedCookie += `; Max-Age=${EXTENDED_MAX_AGE}`;
               }
-            } else if (hasMaxAge) {
-              // Si ya tiene Max-Age, intentar extenderlo si es muy corto (< 7 días)
-              const maxAgeMatch = modifiedCookie.match(/Max-Age\s*=\s*(\d+)/i);
-              if (maxAgeMatch) {
-                const currentMaxAge = parseInt(maxAgeMatch[1], 10);
-                if (currentMaxAge < 604800) { // Menos de 7 días
-                  // Reemplazar con duración más larga para cookies importantes
-                  const cookieName = modifiedCookie.split(';')[0].split('=')[0].toLowerCase();
-                  const importantNotionCookies = ['notion_user_id', 'notion_session', 'notion_browser_id', 'token_v2'];
-                  if (importantNotionCookies.some(name => cookieName.includes(name.replace(/_/g, '')) || cookieName === name)) {
-                    modifiedCookie = modifiedCookie.replace(/Max-Age\s*=\s*\d+/i, 'Max-Age=315360000'); // 10 años
-                  }
-                }
+            } else {
+              // Para cookies no importantes, mantener su duración original o darle 30 días
+              const hasExpires = modifiedCookie.match(/Expires\s*=/i);
+              const hasMaxAge = modifiedCookie.match(/Max-Age\s*=/i);
+              
+              if (!hasExpires && !hasMaxAge) {
+                modifiedCookie += '; Max-Age=2592000'; // 30 días para cookies no importantes
               }
             }
             
