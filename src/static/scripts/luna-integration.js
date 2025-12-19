@@ -365,7 +365,7 @@ class LunaIntegration {
 
   setupTabManagerMonitoring() {
     if (!window.tabManager) return;
-
+    
     // Override TabManager's onclick for tab-btn to show modal instead
     const setupTabButton = () => {
       const tabBtn = document.getElementById('tab-btn');
@@ -437,16 +437,39 @@ class LunaIntegration {
     
     setupTabButton();
 
-    // Intercept activate to update TopBar
+    // Intercept activate to update TopBar and check if tab is personal
     const originalActivate = window.tabManager.activate?.bind(window.tabManager);
     if (originalActivate) {
       window.tabManager.activate = (...args) => {
         const result = originalActivate.apply(window.tabManager, args);
+        
+        // Check if the activated tab is a personal tab (doesn't belong to active space)
         setTimeout(() => {
-          if (this.activeSpace) {
+          const activeTab = window.tabManager.active();
+          if (activeTab && this.activeSpace) {
+            // Check if this tab belongs to the active space
+            const activeTabUrl = activeTab.originalUrl || activeTab.url || '';
+            const isSpaceTab = this.spaceTabs.some(spaceTab => {
+              const spaceTabUrl = spaceTab.url || spaceTab.bookmark_url;
+              if (!spaceTabUrl || !activeTabUrl) return false;
+              
+              // Normalize URLs for comparison (handles Notion URLs with/without Worker)
+              return this.normalizeUrl(spaceTabUrl) === this.normalizeUrl(activeTabUrl);
+            });
+            
+            // If tab doesn't belong to active space, clear active space (hide top bar)
+            if (!isSpaceTab && !this.isChatUrl(activeTab.url)) {
+              this.clearActiveSpace();
+            } else {
+              // Tab belongs to space, update top bar
+              this.renderTopBar();
+            }
+          } else if (this.activeSpace) {
+            // Active space exists but no active tab, update top bar
             this.renderTopBar();
           }
         }, 50);
+        
         return result;
       };
     }
