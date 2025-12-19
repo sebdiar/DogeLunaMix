@@ -433,24 +433,36 @@ export default {
           setCookies.forEach(cookie => {
             if (!cookie) return;
             
-            // Reemplazar dominio notion.so con el dominio del worker
+            // Extraer el nombre y valor de la cookie antes de modificar
+            const cookieParts = cookie.split(';');
+            const nameValue = cookieParts[0];
+            const attributes = cookieParts.slice(1);
+            
+            // NO remover el dominio - mantenerlo pero cambiarlo al worker domain si existe
+            // Las cookies con dominio funcionan mejor en iframes cross-origin
             let modifiedCookie = cookie
-              .replace(/domain=\.?notion\.so/gi, `domain=${workerDomain}`)
-              .replace(/domain=notion\.so/gi, `domain=${workerDomain}`);
+              .replace(/domain=\.?notion\.so/gi, `domain=.${workerDomain}`)
+              .replace(/domain=notion\.so/gi, `domain=.${workerDomain}`)
+              .replace(/domain=\.?notion\.com/gi, `domain=.${workerDomain}`)
+              .replace(/domain=notion\.com/gi, `domain=.${workerDomain}`);
             
-            // Remover dominio si está configurado incorrectamente
-            // Las cookies funcionan mejor sin dominio explícito a veces
-            modifiedCookie = modifiedCookie.replace(/;\s*domain=\s*[^;]+/gi, '');
+            // Si la cookie NO tiene dominio explícito, mantenerla sin dominio (funciona para el dominio actual)
+            // Solo modificar si ya tiene dominio
             
-            // Asegurar SameSite=None y Secure para cross-origin
+            // Asegurar SameSite=None y Secure para cross-origin (necesario para iframes)
             if (!modifiedCookie.match(/SameSite\s*=/i)) {
               modifiedCookie += '; SameSite=None; Secure';
             } else {
-              // Reemplazar SameSite=Strict o Lax por None
+              // Reemplazar SameSite=Strict o Lax por None (necesario para iframes)
               modifiedCookie = modifiedCookie.replace(/SameSite\s*=\s*(Strict|Lax)/gi, 'SameSite=None');
               if (!modifiedCookie.match(/;\s*Secure/i) && !modifiedCookie.match(/^[^;]*Secure/i)) {
                 modifiedCookie += '; Secure';
               }
+            }
+            
+            // Asegurar que Path esté presente (algunos navegadores lo requieren)
+            if (!modifiedCookie.match(/Path\s*=/i)) {
+              modifiedCookie += '; Path=/';
             }
             
             modifiedResponse.headers.append('Set-Cookie', modifiedCookie);

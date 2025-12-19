@@ -73,6 +73,10 @@ export const TYPE = {
       f.style.height = '100%';
       f.style.border = 'none';
       
+      // Permitir cookies y almacenamiento en el iframe (necesario para login de Notion)
+      f.setAttribute('allow', 'cookies');
+      f.setAttribute('credentialless', 'false');
+      
       if (!manager.ic) return;
       
       manager.ic.appendChild(f);
