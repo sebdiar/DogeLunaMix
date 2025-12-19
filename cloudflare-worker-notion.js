@@ -127,6 +127,24 @@ export default {
     // Preparar headers para la petición a Notion
     const headers = new Headers(request.headers);
     
+    // Inyectar cookies de sesión compartida si están configuradas (Opción 1: Sesión compartida como VPS)
+    // Esto permite que todos los usuarios vean la misma cuenta de Notion
+    // Configurar NOTION_SESSION_COOKIES en Cloudflare Worker Variables/Secrets
+    // Formato: "token_v2=xxx; notion_user_id=xxx; notion_browser_id=xxx; notion_session=xxx"
+    if (env.NOTION_SESSION_COOKIES) {
+      const sharedCookies = env.NOTION_SESSION_COOKIES;
+      const existingCookieHeader = headers.get('Cookie') || '';
+      
+      if (existingCookieHeader) {
+        // Combinar cookies existentes con cookies compartidas
+        // Las cookies compartidas tienen prioridad
+        headers.set('Cookie', `${sharedCookies}; ${existingCookieHeader}`);
+      } else {
+        // Solo usar cookies compartidas
+        headers.set('Cookie', sharedCookies);
+      }
+    }
+    
     // Actualizar el Host header
     headers.set('Host', 'www.notion.so');
     
