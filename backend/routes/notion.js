@@ -327,6 +327,10 @@ router.post('/webhook', async (req, res) => {
     
     // Force flush after Event analysis
     process.stdout.write('\n✅ Event analysis completed, proceeding to condition check...\n');
+    process.stdout.write('   DEBUG: receivedDatabaseId = ' + (receivedDatabaseId || 'NULL') + '\n');
+    process.stdout.write('   DEBUG: tasksDatabaseId = ' + (tasksDatabaseId || 'NULL') + '\n');
+    process.stdout.write('   DEBUG: event.type = ' + (event.type || 'NULL') + '\n');
+    process.stdout.write('   DEBUG: event.data exists = ' + (event.data ? 'YES' : 'NO') + '\n');
     
     // Check if this is a page event from tasks database
     process.stdout.write('\n🔍 Checking if event should be processed:\n');
