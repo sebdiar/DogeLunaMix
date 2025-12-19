@@ -435,6 +435,33 @@ export default {
         "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:; frame-ancestors *;"
       );
       
+      // Establecer cookies compartidas en la respuesta para que el navegador las almacene
+      // Esto es necesario para que el navegador tenga las cookies desde el inicio
+      // Solo establecer si NO están ya presentes en la respuesta (para evitar duplicados)
+      if (env.NOTION_SESSION_COOKIES) {
+        const sharedCookies = env.NOTION_SESSION_COOKIES;
+        const workerDomain = workerHost;
+        
+        // Parsear cookies del formato: "name1=value1; name2=value2; ..."
+        // Tener cuidado porque algunos valores pueden contener caracteres especiales
+        const cookiePairs = sharedCookies.split('; ').filter(c => c && c.includes('='));
+        
+        cookiePairs.forEach(cookiePair => {
+          const equalIndex = cookiePair.indexOf('=');
+          if (equalIndex === -1) return;
+          
+          const name = cookiePair.substring(0, equalIndex).trim();
+          const value = cookiePair.substring(equalIndex + 1).trim();
+          
+          if (!name || !value) return;
+          
+          // Crear cookie con dominio del worker, SameSite=None, Secure, y Max-Age largo
+          // Usar el dominio sin el punto inicial porque ya lo agregamos con "."
+          const cookieString = `${name}=${value}; Domain=.${workerDomain}; Path=/; SameSite=None; Secure; Max-Age=31536000`;
+          modifiedResponse.headers.append('Set-Cookie', cookieString);
+        });
+      }
+      
       // Manejar Set-Cookie para mantener sesiones
       // Reemplazar dominio en cookies de notion.so al dominio del worker
       const setCookieHeaders = modifiedResponse.headers.get('Set-Cookie');
