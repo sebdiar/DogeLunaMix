@@ -307,10 +307,6 @@
           border-radius: 0 !important;
         }
 
-        .flex-1.flex.flex-col > div.bg-white.rounded-2xl {
-          border-radius: 0 !important;
-        }
-
         /* Also remove rounded corners from sidebar card if visible */
         #sidebar > div.rounded-2xl {
           border-radius: 0 !important;
@@ -774,20 +770,31 @@
         }
 
         /* Ensure iframe container takes full height in mobile */
-        /* Use flex to fill available space */
         #fcn {
           flex: 1 1 0 !important;
           position: relative !important;
           overflow: hidden !important;
-          min-height: 0 !important; /* Allow flex item to shrink */
+          min-height: 0 !important;
+          /* Leave space for fixed bottom bar by using margin-bottom or padding-bottom */
+          margin-bottom: calc(72px + env(safe-area-inset-bottom, 0)) !important;
         }
 
-        /* Ensure iframes take full height in mobile */
+        /* Ensure iframes fill the container but leave space for bottom bar */
         #fcn iframe {
-          height: 100% !important;
-          min-height: 100% !important;
-          max-height: 100% !important;
+          position: absolute !important;
+          top: 0 !important;
+          left: 0 !important;
+          right: 0 !important;
+          bottom: 0 !important;
           width: 100% !important;
+          height: 100% !important;
+        }
+        
+        /* Ensure the white card container has proper height */
+        .flex-1.flex.flex-col > div.bg-white.rounded-2xl {
+          display: flex !important;
+          flex-direction: column !important;
+          min-height: 0 !important;
         }
       }
 
