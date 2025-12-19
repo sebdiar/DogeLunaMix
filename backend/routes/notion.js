@@ -325,6 +325,9 @@ router.post('/webhook', async (req, res) => {
       willMatch: receivedDatabaseId && tasksDatabaseId ? compareNotionIds(receivedDatabaseId, tasksDatabaseId) : false
     });
     
+    // Force flush after Event analysis
+    process.stdout.write('\n✅ Event analysis completed, proceeding to condition check...\n');
+    
     // Check if this is a page event from tasks database
     process.stdout.write('\n🔍 Checking if event should be processed:\n');
     process.stdout.write('  tasksDatabaseId: ' + (tasksDatabaseId || 'NULL') + '\n');
@@ -340,6 +343,7 @@ router.post('/webhook', async (req, res) => {
       process.stdout.write('  Database ID match: ' + (matches ? 'YES ✅' : 'NO ❌') + '\n');
       
       if (matches) {
+        process.stdout.write('\n✅✅✅ DATABASE ID MATCHED - Processing task event ✅✅✅\n');
         console.log('✅ Task event detected from tasks database');
         console.log('📋 Task details:', {
           taskId: pageId,
@@ -348,6 +352,7 @@ router.post('/webhook', async (req, res) => {
         });
         // This is a task event
         if (event.type === 'page.created') {
+          process.stdout.write('\n✅✅✅ EVENT TYPE IS page.created - Processing creation ✅✅✅\n');
           process.stdout.write('\n📝 PROCESSING TASK CREATION: ' + pageId + '\n');
           console.log('📝 Processing task creation:', pageId);
           console.log('📝 Task data:', JSON.stringify(event.data, null, 2));
