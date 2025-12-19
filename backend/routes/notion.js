@@ -389,6 +389,27 @@ router.post('/webhook', async (req, res) => {
               console.error('❌ Error handling task creation:', err);
               console.error('❌ Error stack:', err.stack);
             });
+        } else if (event.type === 'page.updated' || event.type === 'page.properties_updated') {
+          process.stdout.write('\n✅✅✅ EVENT TYPE IS page.updated - Processing update ✅✅✅\n');
+          process.stdout.write('\n📝 PROCESSING TASK UPDATE: ' + pageId + '\n');
+          console.log('📝 Processing task update:', pageId);
+          console.log('📝 Task data:', JSON.stringify(event.data, null, 2));
+          console.log('📝 API Key available:', !!process.env.NOTION_API_KEY);
+          
+          // Create taskData with explicit pageId
+          const taskData = { ...event.data, id: pageId };
+          process.stdout.write('📝 Calling handleTaskUpdated with taskData.id: ' + taskData.id + '\n');
+          
+          // Process task update asynchronously (don't block webhook response)
+          handleTaskUpdated(taskData, process.env.NOTION_API_KEY)
+            .then(() => {
+              process.stdout.write('\n✅ handleTaskUpdated completed successfully\n');
+            })
+            .catch(err => {
+              process.stdout.write('\n❌ ERROR HANDLING TASK UPDATE: ' + err.message + '\n');
+              console.error('❌ Error handling task update:', err);
+              console.error('❌ Error stack:', err.stack);
+            });
         }
         // Respond quickly to Notion
         return res.status(200).json({ received: true, type: 'task' });
@@ -641,6 +662,44 @@ async function handlePageDeleted(pageData) {
   }
 }
 
+// Simple cache to track previous task state (for detecting completed status)
+// Format: { taskId: { isDone: boolean, lastUpdated: timestamp } }
+const taskStateCache = new Map();
+const CACHE_MAX_AGE = 5 * 60 * 1000; // 5 minutes
+
+// Helper: Get previous task state from cache
+function getPreviousTaskState(taskId) {
+  const cached = taskStateCache.get(taskId);
+  if (!cached) return null;
+  
+  // Check if cache is still valid (not too old)
+  const age = Date.now() - cached.lastUpdated;
+  if (age > CACHE_MAX_AGE) {
+    taskStateCache.delete(taskId);
+    return null;
+  }
+  
+  return cached;
+}
+
+// Helper: Update task state in cache
+function updateTaskStateCache(taskId, isDone) {
+  taskStateCache.set(taskId, {
+    isDone,
+    lastUpdated: Date.now()
+  });
+  
+  // Clean up old entries periodically (keep only last 100)
+  if (taskStateCache.size > 100) {
+    const entries = Array.from(taskStateCache.entries())
+      .sort((a, b) => b[1].lastUpdated - a[1].lastUpdated);
+    taskStateCache.clear();
+    entries.slice(0, 100).forEach(([id, state]) => {
+      taskStateCache.set(id, state);
+    });
+  }
+}
+
 // Helper: Manejar creación de task
 async function handleTaskCreated(taskData, apiKey) {
   try {
@@ -711,7 +770,7 @@ async function handleTaskCreated(taskData, apiKey) {
     }
 
     // Build message text
-    let messageText = `Nueva tarea: ${taskDetails.title}`;
+    let messageText = `Tarea creada: ${taskDetails.title}`;
     
     const parts = [];
     if (taskDetails.assignee) {
@@ -742,9 +801,129 @@ async function handleTaskCreated(taskData, apiKey) {
       throw messageError;
     }
 
+    // Update cache with current task state
+    updateTaskStateCache(taskId, taskDetails.isDone || false);
+
     console.log(`✅ Task message sent to project "${project.name}" chat`);
   } catch (error) {
     console.error('Error handling task created:', error);
+    throw error;
+  }
+}
+
+// Helper: Manejar actualización de task
+async function handleTaskUpdated(taskData, apiKey) {
+  try {
+    process.stdout.write('\n🚀 handleTaskUpdated STARTED\n');
+    process.stdout.write('  Task ID: ' + (taskData?.id || 'NULL') + '\n');
+    process.stdout.write('  API Key: ' + (apiKey ? 'SET' : 'NOT SET') + '\n');
+    
+    if (!apiKey) {
+      process.stdout.write('\n❌ ERROR: No API key provided\n');
+      console.error('handleTaskUpdated: No API key provided');
+      return;
+    }
+
+    const taskId = taskData.id;
+    process.stdout.write('📝 Handling task updated: ' + taskId + '\n');
+    console.log('📝 Handling task updated:', taskId);
+
+    // Get current task details from Notion
+    const taskDetails = await getTaskDetails(apiKey, taskId);
+    
+    console.log('📋 Task details:', {
+      title: taskDetails.title,
+      projectId: taskDetails.projectId,
+      assignee: taskDetails.assignee,
+      dueDate: taskDetails.dueDate,
+      isDone: taskDetails.isDone
+    });
+    
+    if (!taskDetails.projectId) {
+      console.log('⚠️  Task has no project relation, skipping');
+      return;
+    }
+
+    // Find project by notion_page_id
+    console.log('🔍 Searching for project with Notion ID:', taskDetails.projectId);
+    const { data: project, error: projectError } = await supabase
+      .from('spaces')
+      .select('id, name, user_id, notion_page_id')
+      .eq('notion_page_id', taskDetails.projectId)
+      .eq('category', 'project')
+      .maybeSingle();
+
+    if (projectError) {
+      console.error('❌ Error searching for project:', projectError);
+      return;
+    }
+    
+    if (!project) {
+      console.log(`⚠️  Project with Notion ID ${taskDetails.projectId} not found in database`);
+      return;
+    }
+    
+    console.log('✅ Found project:', project.name);
+
+    // Get or create chat for the project
+    const chatId = await getOrCreateChatForSpace(project.id, project.user_id);
+    
+    if (!chatId) {
+      console.error('Failed to get or create chat for project:', project.id);
+      return;
+    }
+
+    // Check if Done property changed from false to true (task completed)
+    const previousState = getPreviousTaskState(taskId);
+    const wasJustCompleted = taskDetails.isDone && 
+                             (!previousState || previousState.isDone === false);
+    
+    let messageText = null;
+    
+    if (wasJustCompleted) {
+      // Task was just completed (Done changed from false to true)
+      messageText = `Tarea completada: ${taskDetails.title}`;
+    } else {
+      // Task was updated but not completed (or was already completed)
+      messageText = `Tarea actualizada: ${taskDetails.title}`;
+    }
+    
+    // Add assignee and due date if available
+    const parts = [];
+    if (taskDetails.assignee) {
+      parts.push(`Asignado: ${taskDetails.assignee}`);
+    }
+    if (taskDetails.dueDate) {
+      // Format date as DD/MM/YYYY
+      const date = new Date(taskDetails.dueDate);
+      const formattedDate = `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}/${date.getFullYear()}`;
+      parts.push(`Vence: ${formattedDate}`);
+    }
+    
+    if (parts.length > 0) {
+      messageText += '\n' + parts.join(' | ');
+    }
+
+    // Send system message to chat
+    const { error: messageError } = await supabase
+      .from('chat_messages')
+      .insert({
+        chat_id: chatId,
+        user_id: null, // null = system message
+        message: messageText
+      });
+
+    if (messageError) {
+      console.error('Error sending task update message to chat:', messageError);
+      throw messageError;
+    }
+
+    // Update cache with current task state
+    updateTaskStateCache(taskId, taskDetails.isDone || false);
+
+    console.log(`✅ Task update message sent to project "${project.name}" chat`);
+  } catch (error) {
+    console.error('Error handling task updated:', error);
     throw error;
   }
 }

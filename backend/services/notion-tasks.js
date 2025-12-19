@@ -145,12 +145,36 @@ async function getTaskDetails(apiKey, taskId) {
       console.log('⚠️  No project relation found in task properties');
     }
 
+    // Extract done status (Checkbox property named "Done")
+    let isDone = false;
+    if (page.properties) {
+      // Try common done property names
+      const donePropNames = ['Done', 'Completado', 'Completed', 'Finished', 'Checkbox'];
+      for (const propName of donePropNames) {
+        if (page.properties[propName] && page.properties[propName].type === 'checkbox') {
+          isDone = page.properties[propName].checkbox === true;
+          break;
+        }
+      }
+      // Fallback: check any checkbox property
+      if (!isDone) {
+        for (const propName in page.properties) {
+          const prop = page.properties[propName];
+          if (prop.type === 'checkbox' && propName.toLowerCase().includes('done')) {
+            isDone = prop.checkbox === true;
+            break;
+          }
+        }
+      }
+    }
+
     return {
       id: page.id,
       title,
       assignee,
       dueDate,
-      projectId
+      projectId,
+      isDone
     };
   } catch (error) {
     console.error('Error getting task details:', error);
