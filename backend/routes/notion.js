@@ -264,11 +264,24 @@ router.post('/webhook', async (req, res) => {
   
   try {
     // Manejar verificación de webhook (Notion envía un verification_token)
+    // Notion envía: { type: 'webhook.verification', verification_token: '...' }
+    process.stdout.write('\n🔍 Checking for verification request...\n');
+    process.stdout.write('  req.body.type: ' + (req.body?.type || 'NULL') + '\n');
+    process.stdout.write('  req.body.verification_token exists: ' + (req.body?.verification_token ? 'YES' : 'NO') + '\n');
+    
     if (req.body.type === 'webhook.verification' || req.body.verification_token) {
       const { verification_token } = req.body;
+      
+      process.stdout.write('\n🔑🔑🔑 WEBHOOK VERIFICATION REQUEST 🔑🔑🔑\n');
+      process.stdout.write('  Verification token: ' + (verification_token || 'NULL') + '\n');
       console.log('🔑 Webhook verification token received:', verification_token);
+      console.log('🔑 Full request body:', JSON.stringify(req.body, null, 2));
+      
       // Devolver el token de verificación para confirmar la suscripción
-      return res.status(200).json({ verification_token });
+      process.stdout.write('  Sending response with verification_token...\n');
+      const response = { verification_token };
+      console.log('🔑 Sending verification response:', response);
+      return res.status(200).json(response);
     }
     
     // Get webhook event data
