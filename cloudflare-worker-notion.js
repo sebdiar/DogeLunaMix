@@ -455,11 +455,16 @@ export default {
           
           if (!name || !value) return;
           
-          // Crear cookie con dominio del worker, SameSite=None, Secure, y Max-Age muy largo (10 años)
-          // Usar el dominio sin el punto inicial porque ya lo agregamos con "."
           const EXTENDED_MAX_AGE = 315360000; // 10 años en segundos
-          const cookieString = `${name}=${value}; Domain=.${workerDomain}; Path=/; SameSite=None; Secure; Max-Age=${EXTENDED_MAX_AGE}`;
-          modifiedResponse.headers.append('Set-Cookie', cookieString);
+          
+          // Establecer cookie CON dominio (para cross-origin)
+          const cookieWithDomain = `${name}=${value}; Domain=.${workerDomain}; Path=/; SameSite=None; Secure; Max-Age=${EXTENDED_MAX_AGE}`;
+          modifiedResponse.headers.append('Set-Cookie', cookieWithDomain);
+          
+          // También establecer cookie SIN dominio (first-party, mejor para Safari/iOS en navegación directa)
+          // Safari es más permisivo con first-party cookies cuando abres directamente
+          const cookieWithoutDomain = `${name}=${value}; Path=/; SameSite=Lax; Secure; Max-Age=${EXTENDED_MAX_AGE}`;
+          modifiedResponse.headers.append('Set-Cookie', cookieWithoutDomain);
         });
       }
       
