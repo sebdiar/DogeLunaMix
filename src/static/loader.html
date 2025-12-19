@@ -265,9 +265,10 @@
         /* But respect safe areas for iPhone notch and bottom bar */
         .flex-1.flex.flex-col {
           padding-top: env(safe-area-inset-top, 0) !important;
-          padding-bottom: calc(72px + env(safe-area-inset-bottom, 0)) !important;
+          padding-bottom: 0 !important; /* Remove padding-bottom - bottom bar is fixed */
           padding-left: 0 !important;
           padding-right: 0 !important;
+          margin-bottom: 0 !important; /* Remove any margin */
         }
 
         .flex-1.flex.flex-col > div.bg-white.rounded-2xl {
