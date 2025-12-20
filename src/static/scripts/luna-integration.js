@@ -140,7 +140,7 @@ class LunaIntegration {
 
     try {
       // Register notification service worker
-      await navigator.serviceWorker.register('/notifications-sw.js', {
+      const registration = await navigator.serviceWorker.register('/notifications-sw.js', {
         scope: '/'
       });
       
@@ -163,18 +163,73 @@ class LunaIntegration {
         const permission = await Notification.requestPermission();
         if (permission === 'granted') {
           console.log('Notification permission granted');
+          // Subscribe to push notifications
+          await this.subscribeToPushNotifications(registration);
           // Setup chat notifications after permission is granted
           await this.setupChatNotifications();
         } else {
           console.log('Notification permission denied');
         }
       } else if (Notification.permission === 'granted') {
-        // Already granted, setup notifications
+        // Already granted, subscribe to push and setup notifications
+        await this.subscribeToPushNotifications(registration);
         await this.setupChatNotifications();
       }
     } catch (error) {
       console.error('Failed to register notification service worker:', error);
     }
+  }
+
+  async subscribeToPushNotifications(registration) {
+    try {
+      // Check if already subscribed
+      let subscription = await registration.pushManager.getSubscription();
+      
+      if (subscription) {
+        console.log('Already subscribed to push notifications');
+        return subscription;
+      }
+
+      // Get VAPID public key from backend
+      const { publicKey } = await this.request('/api/notifications/vapid-public-key');
+      
+      // Convert VAPID public key to Uint8Array
+      const convertedVapidKey = this.urlBase64ToUint8Array(publicKey);
+      
+      // Subscribe to push notifications
+      subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true, // Required for Chrome
+        applicationServerKey: convertedVapidKey
+      });
+      
+      console.log('Subscribed to push notifications');
+      
+      // Send subscription to backend
+      await this.request('/api/notifications/subscribe', {
+        method: 'POST',
+        body: JSON.stringify(subscription)
+      });
+      
+      console.log('Push subscription saved to server');
+      return subscription;
+    } catch (error) {
+      console.error('Failed to subscribe to push notifications:', error);
+    }
+  }
+
+  urlBase64ToUint8Array(base64String) {
+    const padding = '='.repeat((4 - base64String.length % 4) % 4);
+    const base64 = (base64String + padding)
+      .replace(/\-/g, '+')
+      .replace(/_/g, '/');
+
+    const rawData = window.atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+
+    for (let i = 0; i < rawData.length; ++i) {
+      outputArray[i] = rawData.charCodeAt(i);
+    }
+    return outputArray;
   }
 
   async openChatFromNotification(spaceId) {
@@ -395,8 +450,9 @@ class LunaIntegration {
                 // Update only the badge for this specific space
                 this.updateSpaceBadge(spaceId);
                 
-                // Show notification if user is not viewing this chat
-                await this.showMessageNotification(message, spaceId);
+                // ❌ DESACTIVADO: Notificaciones locales del frontend (solo funcionan si app está abierta)
+                // Las notificaciones ahora se envían desde el BACKEND (funcionan incluso si app está cerrada)
+                // await this.showMessageNotification(message, spaceId);
               } else {
                 // Fallback: update all badges
                 this.updateUnreadBadge();

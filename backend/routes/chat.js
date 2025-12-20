@@ -1,9 +1,53 @@
 import express from 'express';
 import supabase from '../config/database.js';
 import { authenticate } from '../middleware/auth.js';
+import webpush from 'web-push';
 
 const router = express.Router();
 router.use(authenticate);
+
+// Helper: Send push notifications to users
+async function sendPushNotificationsToUsers(userIds, title, body, data) {
+  try {
+    // Get all subscriptions for these users
+    const { data: subscriptions, error } = await supabase
+      .from('push_subscriptions')
+      .select('*')
+      .in('user_id', userIds);
+
+    if (error || !subscriptions || subscriptions.length === 0) {
+      return;
+    }
+
+    // Prepare notification payload
+    const payload = JSON.stringify({
+      title,
+      body,
+      icon: '/icon.svg',
+      badge: '/icon.svg',
+      data: data || {}
+    });
+
+    // Send notifications to all subscriptions
+    await Promise.allSettled(
+      subscriptions.map(async (sub) => {
+        try {
+          await webpush.sendNotification(sub.subscription, payload);
+        } catch (error) {
+          // If subscription is invalid (410 Gone), remove it
+          if (error.statusCode === 410) {
+            await supabase
+              .from('push_subscriptions')
+              .delete()
+              .eq('id', sub.id);
+          }
+        }
+      })
+    );
+  } catch (error) {
+    console.error('Failed to send push notifications:', error);
+  }
+}
 
 // Helper: Get or create chat for a space
 async function getOrCreateChatForSpace(spaceId, userId) {
@@ -1067,6 +1111,48 @@ router.post('/:chatId/messages', async (req, res) => {
       console.error('Error sending message:', error);
       return res.status(500).json({ error: 'Failed to send message' });
     }
+    
+    // Send push notifications to other participants (in background)
+    setImmediate(async () => {
+      try {
+        // Get all other participants in this chat
+        const { data: participants } = await supabase
+          .from('chat_participants')
+          .select('user_id, users!chat_participants_user_id_fkey(id, name, email)')
+          .eq('chat_id', chatId)
+          .neq('user_id', req.userId);
+        
+        if (!participants || participants.length === 0) {
+          return;
+        }
+        
+        const recipientIds = participants.map(p => p.user_id);
+        
+        // Get sender name
+        const senderName = newMessage.user?.name || newMessage.user?.email || 'Someone';
+        const displayName = senderName.includes('@') ? senderName.split('@')[0] : senderName;
+        
+        // Truncate message for notification
+        const messageText = message.trim();
+        const notificationBody = messageText.length > 100 ? messageText.substring(0, 100) + '...' : messageText;
+        
+        // Send push notification to all recipients
+        await sendPushNotificationsToUsers(
+          recipientIds,
+          displayName,
+          notificationBody,
+          {
+            type: 'chat_message',
+            chatId: chatId,
+            messageId: newMessage.id,
+            senderId: req.userId
+          }
+        );
+      } catch (pushError) {
+        console.error('Error sending push notifications:', pushError);
+        // Don't fail the request if push fails
+      }
+    });
     
     res.json({ message: newMessage });
   } catch (error) {

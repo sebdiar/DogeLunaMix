@@ -1,0 +1,13 @@
+# VAPID Keys for Push Notifications
+# Add these to your .env file:
+
+VAPID_PUBLIC_KEY=BHHhuWaVULh1G757aYjl08B0HZIR29nFwIjgm6gGNKkG3kJ76IYTEAKgXcYP5LoL0zEXIN5Gnz3IavLgHHsfnl4
+VAPID_PRIVATE_KEY=kFCM5MFVWm8ZqSmNOQc4LAeoB2tF5n3lTVRS8MGr2xE
+VAPID_MAILTO=mailto:your-email@example.com
+
+# Instructions:
+# 1. Copy these three lines to your backend/.env file
+# 2. Replace your-email@example.com with your actual email
+# 3. In Replit, add these to Secrets with the same names
+# 4. IMPORTANT: Keep these keys secret, don't commit to git
+

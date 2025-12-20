@@ -17,6 +17,7 @@ import tabsRoutes from './routes/tabs.js';
 import spacesRoutes from './routes/spaces.js';
 import chatRoutes from './routes/chat.js';
 import notionRoutes from './routes/notion.js';
+import notificationsRoutes from './routes/notifications.js';
 
 const app = express();
 const PORT = process.env.BACKEND_PORT || 3001;
@@ -36,6 +37,7 @@ app.use('/api/tabs', tabsRoutes);
 app.use('/api/spaces', spacesRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/notion', notionRoutes);
+app.use('/api/notifications', notificationsRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
