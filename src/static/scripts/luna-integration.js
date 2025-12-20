@@ -19,6 +19,7 @@ class LunaIntegration {
     this.chatNotificationChannel = null; // Supabase Realtime channel for chat notifications
     this.supabaseClient = null; // Supabase client for realtime
     this.chatSubscriptions = new Map(); // Map of chatId -> subscription channel
+    this.lastNotificationTime = new Map(); // Track last notification time per space to prevent duplicates
     
     this.init().catch(err => {
       console.error('❌ Error initializing LunaIntegration:', err);
@@ -145,6 +146,17 @@ class LunaIntegration {
       
       console.log('Notification service worker registered');
       
+      // Listen for messages from service worker (e.g., when notification is clicked)
+      navigator.serviceWorker.addEventListener('message', (event) => {
+        if (event.data && event.data.type === 'OPEN_CHAT') {
+          const spaceId = event.data.spaceId;
+          if (spaceId) {
+            // Open the chat in the app
+            this.openChatFromNotification(spaceId);
+          }
+        }
+      });
+      
       // Request notification permission if not already granted/denied
       if (Notification.permission === 'default') {
         // Ask for permission
@@ -162,6 +174,148 @@ class LunaIntegration {
       }
     } catch (error) {
       console.error('Failed to register notification service worker:', error);
+    }
+  }
+
+  async openChatFromNotification(spaceId) {
+    // Find the user/space
+    const space = this.users.find(u => u.id === spaceId);
+    if (!space) {
+      console.error('Space not found:', spaceId);
+      return;
+    }
+
+    // Open the space (this will load the chat)
+    await this.openSpace(space);
+    
+    // Create/activate chat tab
+    const chatUrl = `luna://chat/${spaceId}`;
+    
+    // Check if tab already exists
+    let existingTab = null;
+    if (window.tabManager && window.tabManager.tabs) {
+      existingTab = window.tabManager.tabs.find(t => t.url === chatUrl);
+    }
+    
+    if (existingTab) {
+      // Activate existing tab
+      window.tabManager.activate(existingTab.id);
+    } else {
+      // Create new chat tab
+      const displayName = space.display_name || space.name || 'Chat';
+      window.tabManager.add({
+        url: chatUrl,
+        title: displayName,
+        closable: true
+      });
+    }
+  }
+
+  async showMessageNotification(message, spaceId) {
+    // Check if notifications are supported and permitted
+    if (!('Notification' in window) || Notification.permission !== 'granted') {
+      return;
+    }
+
+    // Prevent duplicate notifications - check if we recently showed one for this message
+    const notificationKey = `${spaceId}-${message.id || Date.now()}`;
+    const now = Date.now();
+    const lastTime = this.lastNotificationTime.get(notificationKey);
+    
+    if (lastTime && (now - lastTime) < 2000) {
+      // Less than 2 seconds since last notification for this message, skip
+      return;
+    }
+    
+    // Store this notification time
+    this.lastNotificationTime.set(notificationKey, now);
+    
+    // Clean up old entries (keep only last 50)
+    if (this.lastNotificationTime.size > 50) {
+      const keys = Array.from(this.lastNotificationTime.keys());
+      const oldKeys = keys.slice(0, keys.length - 50);
+      oldKeys.forEach(key => this.lastNotificationTime.delete(key));
+    }
+
+    // Check if user is currently viewing this chat
+    const activeTab = window.tabManager?.active();
+    const chatUrl = `luna://chat/${spaceId}`;
+    const isViewingChat = activeTab && activeTab.url === chatUrl;
+
+    // Check if app is in foreground
+    const isAppInForeground = document.visibilityState === 'visible';
+
+    // Only show notification if user is NOT viewing this chat OR app is in background
+    if (isViewingChat && isAppInForeground) {
+      return; // User is actively viewing this chat, don't show notification
+    }
+
+    // Get sender information - the space is the DM with the sender
+    let senderName = 'Someone';
+    if (message.user_id) {
+      // Try to get sender from the space (which represents the DM user)
+      const space = this.users.find(u => u.id === spaceId);
+      if (space) {
+        senderName = space.display_name || space.name || 'Someone';
+        // Remove email from name if it's just an email
+        if (senderName.includes('@')) {
+          // Try to get just the name part before @
+          const namePart = senderName.split('@')[0];
+          if (namePart) {
+            senderName = namePart;
+          }
+        }
+      } else {
+        // Fallback: fetch user info from backend
+        try {
+          const userResponse = await this.request(`/api/users/${message.user_id}`);
+          senderName = userResponse.name || userResponse.email?.split('@')[0] || 'Someone';
+        } catch (err) {
+          senderName = 'Someone';
+        }
+      }
+    } else {
+      // System message
+      senderName = 'System';
+    }
+
+    const messageText = message.message || 'New message';
+    const notificationTitle = senderName;
+    const notificationBody = messageText.length > 100 
+      ? messageText.substring(0, 100) + '...' 
+      : messageText;
+
+    try {
+      // Try to use service worker notification
+      if ('serviceWorker' in navigator) {
+        const registration = await navigator.serviceWorker.ready;
+        await registration.showNotification(notificationTitle, {
+          body: notificationBody,
+          icon: '/icon.svg',
+          badge: '/icon.svg',
+          tag: `chat-${spaceId}-${message.id || Date.now()}`,
+          renotify: false, // Don't renotify if same tag
+          data: {
+            url: `${window.location.origin}/indev`,
+            spaceId: spaceId,
+            chatId: message.chat_id,
+            type: 'chat_message'
+          },
+          requireInteraction: false,
+          vibrate: [200, 100, 200] // Vibration pattern for mobile
+        });
+      }
+    } catch (error) {
+      // Fallback to regular Notification API
+      try {
+        new Notification(notificationTitle, {
+          body: notificationBody,
+          icon: '/icon.svg',
+          tag: `chat-${spaceId}-${message.id || Date.now()}`
+        });
+      } catch (fallbackError) {
+        console.error('Failed to show notification:', fallbackError);
+      }
     }
   }
 
@@ -240,6 +394,9 @@ class LunaIntegration {
                 
                 // Update only the badge for this specific space
                 this.updateSpaceBadge(spaceId);
+                
+                // Show notification if user is not viewing this chat
+                await this.showMessageNotification(message, spaceId);
               } else {
                 // Fallback: update all badges
                 this.updateUnreadBadge();
