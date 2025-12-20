@@ -5996,14 +5996,17 @@ class LunaIntegration {
     
     // Active tab is the chat for this space - mark as read
     try {
-      await this.request(`/api/chat/space/${spaceId}/mark-read`, {
-        method: 'POST'
+      console.log(`[MARK READ] Attempting to mark as read: ${spaceId}`);
+      const response = await this.request(`/api/chat/space/${spaceId}/mark-read`, {
+        method: 'POST',
+        body: JSON.stringify({}) // Send empty body
       });
+      console.log(`[MARK READ] Success for ${spaceId}:`, response);
       // Update badges after marking as read
       this.updateUnreadBadge();
       this.updateSpaceBadge(spaceId);
     } catch (markReadErr) {
-      // Silently fail
+      console.error(`[MARK READ] Error for ${spaceId}:`, markReadErr);
     }
   }
   
