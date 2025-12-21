@@ -353,7 +353,7 @@
         #mobile-bottom-bar {
           display: flex;
           position: fixed;
-          bottom: 8px;
+          bottom: 0;
           left: 0;
           right: 0;
           height: 72px !important;
@@ -2458,39 +2458,11 @@
           initMobileUI();
         }
 
-        // Fix iOS PWA height issue: 100vh doesn't work correctly in standalone mode
-        function fixPWAHeight() {
-          if (window.matchMedia('(display-mode: standalone)').matches) {
-            // In PWA mode, use screen.height instead of 100vh
-            const height = screen.height + 'px';
-            document.body.style.setProperty('height', height, 'important');
-            document.body.style.setProperty('min-height', height, 'important');
-            
-            // Also fix all direct children of body
-            document.querySelectorAll('body > div').forEach(div => {
-              div.style.setProperty('height', height, 'important');
-              div.style.setProperty('min-height', height, 'important');
-            });
-            
-            console.log('[PWA] Fixed height to:', height);
-          }
-        }
-        
-        // Run on load
-        if (document.readyState === 'loading') {
-          document.addEventListener('DOMContentLoaded', fixPWAHeight);
-        } else {
-          fixPWAHeight();
-        }
-
         // Re-initialize on resize
         let resizeTimer;
         window.addEventListener('resize', () => {
           clearTimeout(resizeTimer);
-          resizeTimer = setTimeout(() => {
-            initMobileUI();
-            fixPWAHeight();
-          }, 250);
+          resizeTimer = setTimeout(initMobileUI, 250);
         });
 
         // Expose functions globally
