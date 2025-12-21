@@ -305,9 +305,16 @@
         html, body {
           margin: 0 !important;
           width: 100% !important;
-          height: 100% !important;
+          height: 100vh !important;
+          min-height: 100vh !important;
           overflow: hidden !important;
           background-color: #ffffff !important;
+        }
+        
+        /* Force all direct children of body to 100vh */
+        body > div {
+          height: 100vh !important;
+          min-height: 100vh !important;
         }
         
         /* Main container - full screen */
@@ -349,12 +356,14 @@
           bottom: 0;
           left: 0;
           right: 0;
-          height: calc(72px + env(safe-area-inset-bottom, 0));
+          height: 72px !important;
+          min-height: 72px !important;
+          max-height: 72px !important;
           background-color: #ffffff;
           border-top: 1px solid #e8eaed;
           z-index: 300; /* Above mobile views */
-          padding: 0 8px;
-          padding-bottom: env(safe-area-inset-bottom, 0);
+          padding: 0 8px !important;
+          padding-bottom: 0 !important;
           padding-left: env(safe-area-inset-left, 0);
           padding-right: env(safe-area-inset-right, 0);
           box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.05);
@@ -613,7 +622,7 @@
           top: env(safe-area-inset-top, 0);
           left: env(safe-area-inset-left, 0);
           right: env(safe-area-inset-right, 0);
-          bottom: calc(60px + env(safe-area-inset-bottom, 0));
+          bottom: 72px;
           background-color: #ffffff;
           z-index: 100;
           overflow-y: auto;
@@ -636,6 +645,13 @@
         [class*="notion-"] {
           margin-top: 0 !important;
           padding-top: 0 !important;
+        }
+        
+        /* Hide toaster in mobile to prevent layout issues */
+        #toaster,
+        .toaster {
+          display: none !important;
+          height: 0 !important;
         }
 
         #mobile-more-view {
