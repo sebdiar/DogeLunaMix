@@ -4,6 +4,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'dogeub-secret-key-change-in-produc
 
 export const authenticate = async (req, res, next) => {
   try {
+    console.log(`[AUTH] ${req.method} ${req.path}`);
     let token = null;
     
     // Try Authorization header first
@@ -18,6 +19,7 @@ export const authenticate = async (req, res, next) => {
     }
     
     if (!token) {
+      console.log('[AUTH] No token provided');
       return res.status(401).json({ error: 'No token provided' });
     }
     
@@ -25,12 +27,14 @@ export const authenticate = async (req, res, next) => {
       const decoded = jwt.verify(token, JWT_SECRET);
       req.userId = decoded.userId;
       req.userEmail = decoded.email;
+      console.log(`[AUTH] ✅ Authenticated user: ${req.userId}`);
       next();
     } catch (err) {
+      console.log('[AUTH] Invalid token:', err.message);
       return res.status(401).json({ error: 'Invalid token' });
     }
   } catch (error) {
-    console.error('Auth middleware error:', error);
+    console.error('[AUTH] Middleware error:', error);
     res.status(500).json({ error: 'Authentication error' });
   }
 };

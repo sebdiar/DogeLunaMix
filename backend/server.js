@@ -30,6 +30,12 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' })); // Increase limit for base64 image uploads
 app.use(cookieParser());
 
+// Log all requests for debugging
+app.use((req, res, next) => {
+  console.log(`[REQUEST] ${req.method} ${req.path}`);
+  next();
+});
+
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/users', usersRoutes);
