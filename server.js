@@ -69,7 +69,14 @@ await app.register(fastifyCookie);
 await app.register(compress, { global: true, encodings: ['gzip','deflate','br'] });
 
 // Parse all content types for API proxy (pass raw body)
+// Allow empty bodies for all content types (important for DELETE requests)
 app.addContentTypeParser('*', { parseAs: 'buffer' }, (req, body, done) => {
+  done(null, body);
+});
+
+// Remove default JSON parser that rejects empty bodies
+app.removeContentTypeParser('application/json');
+app.addContentTypeParser('application/json', { parseAs: 'buffer' }, (req, body, done) => {
   done(null, body);
 });
 
