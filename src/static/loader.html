@@ -264,7 +264,7 @@
         /* Remove ALL padding and margins from main content container in mobile */
         /* This ensures the content takes full screen space when used as app */
         .flex-1.flex.flex-col {
-          padding-top: env(safe-area-inset-top, 0) !important;
+          padding-top: 0 !important;
           padding-bottom: 0 !important;
           padding-left: 0 !important;
           padding-right: 0 !important;
@@ -272,14 +272,25 @@
           margin-top: 0 !important;
           margin-left: 0 !important;
           margin-right: 0 !important;
+          background-color: #ffffff !important;
         }
         
         /* Override ALL inline style padding in mobile only */
         .flex-1.flex.flex-col[style*="padding"] {
-          padding-top: env(safe-area-inset-top, 0) !important;
+          padding-top: 0 !important;
           padding-bottom: 0 !important;
           padding-left: 0 !important;
           padding-right: 0 !important;
+          background-color: #ffffff !important;
+        }
+        
+        /* Also target the specific flex container */
+        .flex.flex-col.flex-1.min-w-0 {
+          padding-top: 0 !important;
+          padding-bottom: 0 !important;
+          padding-left: 0 !important;
+          padding-right: 0 !important;
+          background-color: #ffffff !important;
         }
         
         /* Also remove padding from parent containers in mobile */
