@@ -1,0 +1,4 @@
+[submodule "dogeub"]
+	path = dogeub
+	url = https://github.com/sebdiar/dogeub.git
+
