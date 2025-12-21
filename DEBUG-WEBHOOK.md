@@ -66,3 +66,4 @@ Verás algo como:
 **No veo logs:**
 - Asegúrate de que el backend esté corriendo en el puerto 3001
 - Verifica que la URL del túnel sea correcta
+

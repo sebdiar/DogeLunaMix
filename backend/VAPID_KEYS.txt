@@ -11,3 +11,4 @@ VAPID_MAILTO=mailto:your-email@example.com
 # 3. In Replit, add these to Secrets with the same names
 # 4. IMPORTANT: Keep these keys secret, don't commit to git
 
+

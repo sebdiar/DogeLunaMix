@@ -47,3 +47,4 @@ $$;
 -- Add comment
 COMMENT ON TABLE push_subscriptions IS 'Stores web push notification subscriptions for users';
 
+

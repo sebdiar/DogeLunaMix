@@ -34,3 +34,4 @@ WHERE tablename = 'chat_participants';
 
 -- Expected result: replica_identity should be 'f' (FULL) and in_publication should be true
 
+

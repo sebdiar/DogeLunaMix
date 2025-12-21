@@ -5589,7 +5589,8 @@ class LunaIntegration {
         filteredUsers.forEach(user => {
           const userEl = document.createElement('button');
           userEl.className = 'user-picker-item';
-          if (selectedUsers.some(u => u.id === user.id)) {
+          const isSelected = selectedUsers.some(u => u.id === user.id);
+          if (isSelected) {
             userEl.classList.add('selected');
           }
 
@@ -5597,8 +5598,19 @@ class LunaIntegration {
           const email = user.email || '';
           const initials = name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2) || name[0]?.toUpperCase() || 'U';
           
+          // Build avatar HTML - use photo if available, otherwise initials
+          let avatarHTML;
+          if (user.avatar_photo) {
+            avatarHTML = `<img src="${this.escapeHTML(user.avatar_photo)}" alt="${this.escapeHTML(name)}" class="user-picker-avatar-img" />`;
+          } else {
+            avatarHTML = `<div class="user-picker-avatar-initials">${initials}</div>`;
+          }
+          
           userEl.innerHTML = `
-            <div class="user-picker-avatar">${initials}</div>
+            <div class="user-picker-checkbox">
+              <input type="checkbox" ${isSelected ? 'checked' : ''} />
+            </div>
+            <div class="user-picker-avatar">${avatarHTML}</div>
             <div class="user-picker-info">
               <div class="user-picker-name">${this.escapeHTML(name)}</div>
               <div class="user-picker-email">${this.escapeHTML(email)}</div>
@@ -5606,13 +5618,16 @@ class LunaIntegration {
           `;
 
           userEl.addEventListener('click', () => {
+            const checkbox = userEl.querySelector('input[type="checkbox"]');
             const index = selectedUsers.findIndex(u => u.id === user.id);
               if (index >= 0) {
               selectedUsers.splice(index, 1);
                 userEl.classList.remove('selected');
+                if (checkbox) checkbox.checked = false;
             } else {
               selectedUsers.push(user);
               userEl.classList.add('selected');
+              if (checkbox) checkbox.checked = true;
             }
             updateGoButton();
           });
@@ -5658,13 +5673,24 @@ class LunaIntegration {
           const user = selectedUsers[0];
           try {
             // Check if space already exists
-            const existingSpace = this.users.find(
-              s => s.name === user.name || s.name === user.email || s.display_name === user.name
-            );
+            // Match by exact name or email (case-insensitive)
+            const userName = (user.name || '').toLowerCase().trim();
+            const userEmail = (user.email || '').toLowerCase().trim();
+            
+            const existingSpace = this.users.find(s => {
+              const spaceName = (s.name || '').toLowerCase().trim();
+              const spaceDisplayName = (s.display_name || '').toLowerCase().trim();
+              
+              // Match if space name equals user name or user email
+              return (spaceName === userName || spaceName === userEmail ||
+                      spaceDisplayName === userName || spaceDisplayName === userEmail);
+            });
 
             if (existingSpace) {
+              console.log('Found existing space:', existingSpace.id, existingSpace.name);
               this.selectUser(existingSpace.id);
             } else {
+              console.log('Creating new space for user:', user.name || user.email);
               // Create new space
               const { space } = await this.request('/api/spaces', {
                 method: 'POST',
@@ -5679,9 +5705,12 @@ class LunaIntegration {
               this.selectUser(space.id);
             }
 
-            // Close modal
-            if (modal && modal.parentNode) {
-              modal.parentNode.removeChild(modal);
+            // Close modal (hide it, don't remove from DOM)
+            handlers.close();
+            
+            // Close mobile menu if open
+            if (window.mobileUI && window.mobileUI.hideAll) {
+              window.mobileUI.hideAll();
             }
           } catch (err) {
             console.error('Failed to create/open chat:', err);
@@ -5701,8 +5730,13 @@ class LunaIntegration {
           this.users.push(space);
           this.renderUsers();
           this.selectUser(space.id);
-          if (modal && modal.parentNode) {
-            modal.parentNode.removeChild(modal);
+          
+          // Close modal (hide it, don't remove from DOM)
+          handlers.close();
+          
+          // Close mobile menu if open
+          if (window.mobileUI && window.mobileUI.hideAll) {
+            window.mobileUI.hideAll();
           }
         }
       };

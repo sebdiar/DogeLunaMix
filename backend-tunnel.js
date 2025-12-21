@@ -81,3 +81,4 @@ process.on('SIGTERM', () => {
   cloudflared.kill();
   process.exit(0);
 });
+

@@ -128,3 +128,4 @@ checkCurrentUserChats()
     process.exit(1);
   });
 
+

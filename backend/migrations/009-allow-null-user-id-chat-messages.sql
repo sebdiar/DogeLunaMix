@@ -16,3 +16,4 @@ ALTER TABLE chat_messages
   REFERENCES users(id) 
   ON DELETE SET NULL;
 
+
