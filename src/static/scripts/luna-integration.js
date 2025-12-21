@@ -6778,6 +6778,19 @@ class LunaIntegration {
   }
 }
 
+// Fix PWA height for iOS - force full screen height
+function fixPWAHeight() {
+  if (window.matchMedia('(display-mode: standalone)').matches) {
+    const correctHeight = screen.height + 'px';
+    document.body.style.setProperty('height', correctHeight, 'important');
+    const main = document.querySelector('.flex.h-screen');
+    if (main) {
+      main.style.setProperty('height', correctHeight, 'important');
+    }
+    console.log('✅ PWA height fixed to', screen.height);
+  }
+}
+
 // Initialize - wait for TabManager to be ready
 
 let lunaIntegration;
@@ -6789,6 +6802,9 @@ const initLunaIntegration = () => {
       try {
         lunaIntegration = new LunaIntegration();
         window.lunaIntegration = lunaIntegration;
+        
+        // Fix PWA height after initialization
+        setTimeout(fixPWAHeight, 100);
       } catch (err) {
         console.error('Error creating LunaIntegration:', err);
       }
