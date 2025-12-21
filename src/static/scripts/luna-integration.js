@@ -4899,7 +4899,7 @@ class LunaIntegration {
     if (!this.activeSpace || !this.activeSpace.id) return;
     
     try {
-      const { members } = await this.request(`/api/spaces/${this.activeSpace.id}/members`);
+      const { members } = await this.request(`/api/chat/space/${this.activeSpace.id}/members`);
       const membersList = document.getElementById('members-list');
       const membersCount = document.getElementById('members-count');
       
@@ -5002,7 +5002,7 @@ class LunaIntegration {
     // Load all users (excluding current project members)
     try {
       const { users } = await this.request('/api/users');
-      const { members } = await this.request(`/api/spaces/${this.activeSpace.id}/members`);
+      const { members } = await this.request(`/api/chat/space/${this.activeSpace.id}/members`);
       const memberUserIds = new Set(members?.map(m => m.user_id) || []);
       
       const availableUsers = users?.filter(u => 
@@ -5076,9 +5076,9 @@ class LunaIntegration {
     if (!this.activeSpace || !this.activeSpace.id) return;
     
     try {
-      await this.request(`/api/spaces/${this.activeSpace.id}/members`, {
+      await this.request(`/api/chat/space/${this.activeSpace.id}/members`, {
         method: 'POST',
-        body: JSON.stringify({ user_ids: userIds })
+        body: JSON.stringify({ userIds: userIds })
       });
     } catch (err) {
       console.error('Failed to add members:', err);
@@ -5100,9 +5100,9 @@ class LunaIntegration {
     if (!confirm(`Are you sure you want to remove ${userIds.length} member(s)?`)) return;
     
     try {
-      await this.request(`/api/spaces/${this.activeSpace.id}/members`, {
+      await this.request(`/api/chat/space/${this.activeSpace.id}/members`, {
         method: 'DELETE',
-        body: JSON.stringify({ user_ids: userIds })
+        body: JSON.stringify({ userIds: userIds })
       });
       
       await this.loadProjectMembers();
