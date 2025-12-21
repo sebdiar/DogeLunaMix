@@ -610,9 +610,9 @@
         #mobile-messenger-view {
           display: none;
           position: fixed;
-          top: 0;
-          left: 0;
-          right: 0;
+          top: env(safe-area-inset-top, 0);
+          left: env(safe-area-inset-left, 0);
+          right: env(safe-area-inset-right, 0);
           bottom: calc(60px + env(safe-area-inset-bottom, 0));
           background-color: #ffffff;
           z-index: 100;
@@ -622,6 +622,20 @@
         #mobile-projects-view.active,
         #mobile-messenger-view.active {
           display: block;
+        }
+        
+        /* Remove any margins from content inside mobile views */
+        #mobile-projects-view *,
+        #mobile-messenger-view * {
+          margin-top: 0 !important;
+        }
+        
+        /* Specifically target notion elements that might have safe-area margins */
+        .notion-topbar-mobile,
+        .notion-frame,
+        [class*="notion-"] {
+          margin-top: 0 !important;
+          padding-top: 0 !important;
         }
 
         #mobile-more-view {
