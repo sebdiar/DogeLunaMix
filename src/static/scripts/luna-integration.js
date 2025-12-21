@@ -6780,14 +6780,31 @@ class LunaIntegration {
 
 // Fix PWA height for iOS - force full screen height
 function fixPWAHeight() {
-  if (window.matchMedia('(display-mode: standalone)').matches) {
+  if (window.matchMedia('(display-mode: standalone)').matches && window.matchMedia('(max-width: 768px)').matches) {
     const correctHeight = screen.height + 'px';
+    const bottomBarHeight = 72; // Height of mobile bottom bar
+    const contentHeight = (screen.height - bottomBarHeight) + 'px';
+    
+    // Set body to full screen height
     document.body.style.setProperty('height', correctHeight, 'important');
+    
+    // Set main container to full screen height
     const main = document.querySelector('.flex.h-screen');
     if (main) {
       main.style.setProperty('height', correctHeight, 'important');
     }
-    console.log('✅ PWA height fixed to', screen.height);
+    
+    // Ensure mobile views respect bottom bar space
+    const mobileViews = ['mobile-projects-view', 'mobile-messenger-view'];
+    mobileViews.forEach(id => {
+      const view = document.getElementById(id);
+      if (view) {
+        view.style.setProperty('bottom', bottomBarHeight + 'px', 'important');
+        view.style.setProperty('height', 'auto', 'important');
+      }
+    });
+    
+    console.log('✅ PWA height fixed to', screen.height, '- Content respects bottom bar');
   }
 }
 
