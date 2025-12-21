@@ -5047,14 +5047,22 @@ class LunaIntegration {
       
       // Setup close button
       const closeBtn = document.getElementById('add-members-close');
+      const cancelBtn = document.getElementById('add-members-cancel');
+      
       if (closeBtn) {
         closeBtn.onclick = () => {
           modal.classList.add('hidden');
         };
       }
       
+      if (cancelBtn) {
+        cancelBtn.onclick = () => {
+          modal.classList.add('hidden');
+        };
+      }
+      
       // Setup add button
-      const addBtn = document.getElementById('add-members-add-btn');
+      const addBtn = document.getElementById('add-members-submit');
       if (addBtn) {
         addBtn.onclick = async () => {
           const checked = list.querySelectorAll('.add-member-checkbox:checked');
