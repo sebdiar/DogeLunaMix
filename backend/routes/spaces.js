@@ -1109,61 +1109,78 @@ router.patch('/:id/archive', async (req, res) => {
 // Only the owner can delete the space
 router.delete('/:id', async (req, res) => {
   try {
+    console.log('[DELETE SPACE] Request received for space:', req.params.id);
+    console.log('[DELETE SPACE] User ID:', req.userId);
+    
     const { data: existing } = await supabase
       .from('spaces')
       .select('id, notion_page_id, category, user_id')
       .eq('id', req.params.id)
       .single();
     
+    console.log('[DELETE SPACE] Found space:', existing);
+    
     if (!existing) {
+      console.log('[DELETE SPACE] Space not found');
       return res.status(404).json({ error: 'Space not found' });
     }
     
     // Verify user is the owner
     if (existing.user_id !== req.userId) {
+      console.log('[DELETE SPACE] User is not owner. Space owner:', existing.user_id, 'Current user:', req.userId);
       return res.status(403).json({ error: 'Only the project owner can delete the project' });
     }
     
+    console.log('[DELETE SPACE] User is owner, proceeding with deletion');
+    console.log('[DELETE SPACE] User is owner, proceeding with deletion');
+    
     // Delete from Notion if it has a notion_page_id
     if (existing.notion_page_id && existing.category === 'project') {
+      console.log('[DELETE SPACE] Archiving Notion page:', existing.notion_page_id);
       const apiKey = process.env.NOTION_API_KEY;
       
       if (apiKey) {
         try {
           // Archive the page in Notion (Notion doesn't support permanent deletion via API)
           await archiveNotionPage(apiKey, existing.notion_page_id, true);
+          console.log('[DELETE SPACE] Notion page archived successfully');
         } catch (notionError) {
-          console.error('Failed to archive Notion page:', notionError);
+          console.error('[DELETE SPACE] Failed to archive Notion page:', notionError);
           // Continue with deletion even if Notion fails
         }
       }
     }
     
     // Delete all tabs associated with this space
+    console.log('[DELETE SPACE] Deleting tabs for space:', req.params.id);
     const { error: tabsError } = await supabase
       .from('tabs')
       .delete()
       .eq('space_id', req.params.id);
     
     if (tabsError) {
-      console.error('Error deleting tabs:', tabsError);
+      console.error('[DELETE SPACE] Error deleting tabs:', tabsError);
       // Continue with space deletion even if tabs deletion fails
+    } else {
+      console.log('[DELETE SPACE] Tabs deleted successfully');
     }
     
     // Delete the space
+    console.log('[DELETE SPACE] Deleting space:', req.params.id);
     const { error } = await supabase
       .from('spaces')
       .delete()
       .eq('id', req.params.id);
     
     if (error) {
-      console.error('Error deleting space:', error);
+      console.error('[DELETE SPACE] Error deleting space:', error);
       return res.status(500).json({ error: 'Failed to delete space' });
     }
     
+    console.log('[DELETE SPACE] Space deleted successfully');
     res.json({ success: true });
   } catch (error) {
-    console.error('Delete space error:', error);
+    console.error('[DELETE SPACE] Unexpected error:', error);
     res.status(500).json({ error: 'Failed to delete space' });
   }
 });
