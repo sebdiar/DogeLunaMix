@@ -2458,19 +2458,15 @@
           initMobileUI();
         }
 
-        // Fix iOS PWA height: use screen.height instead of 100vh in standalone mode
+        // Fix iOS PWA height: use screen.height in standalone mode
         function fixPWAHeight() {
           if (window.matchMedia('(display-mode: standalone)').matches) {
-            const height = screen.height + 'px';
-            document.body.style.setProperty('height', height, 'important');
-            document.body.style.setProperty('min-height', height, 'important');
-            
+            // EXACTAMENTE el código que funciona
+            document.body.style.setProperty('height', screen.height + 'px', 'important');
             document.querySelectorAll('body > div').forEach(div => {
-              div.style.setProperty('height', height, 'important');
-              div.style.setProperty('min-height', height, 'important');
+              div.style.setProperty('height', screen.height + 'px', 'important');
             });
-            
-            console.log('[PWA] Fixed height to:', height);
+            console.log('[PWA] Fixed height to:', screen.height + 'px');
           }
         }
         
