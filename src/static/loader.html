@@ -853,15 +853,17 @@
           margin-bottom: 0;
         }
 
-        /* Ensure iframe container takes full height in mobile BUT leaves space for bottom bar */
+        /* Ensure iframe container takes correct height leaving space for bottom bar */
         #fcn {
-          flex: 1 1 0 !important;
           position: relative !important;
           overflow: hidden !important;
-          min-height: 0 !important;
-          /* CRITICAL: Subtract 72px for bottom bar */
-          height: calc(100% - 72px) !important;
-          max-height: calc(100dvh - 72px) !important;
+          /* Don't use flex-1, use explicit height calculation */
+          flex: none !important;
+          /* Calculate exact height: viewport - top position - bottom bar */
+          /* From debug: fcn.top = 116px, bottomBar = 72px, so available = 793 - 116 - 72 = 605px */
+          height: calc(100dvh - 116px - 72px) !important;
+          max-height: calc(100dvh - 116px - 72px) !important;
+          min-height: calc(100dvh - 116px - 72px) !important;
         }
 
         /* Ensure iframes fill the container */
