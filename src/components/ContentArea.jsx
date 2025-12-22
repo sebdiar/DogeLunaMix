@@ -146,9 +146,15 @@ function ChatComponent({ chatData }) {
   }, [messages, user]);
   // #endregion
 
+  // Detect mobile
+  const isMobile = typeof window !== 'undefined' && window.innerWidth <= 768;
+  
   return (
     <div className="flex-1 flex flex-col h-full">
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      <div 
+        className="flex-1 overflow-y-auto p-4 space-y-4"
+        style={isMobile ? { paddingBottom: '80px' } : {}}
+      >
         {loading ? (
           <div className="text-center text-gray-500">Loading messages...</div>
         ) : messages.length === 0 ? (
@@ -345,7 +351,19 @@ function ChatComponent({ chatData }) {
         )}
       </div>
       
-      <form onSubmit={handleSend} className="border-t border-gray-200 p-4">
+      <form 
+        onSubmit={handleSend} 
+        className="border-t border-gray-200 p-4 bg-white"
+        style={isMobile ? {
+          position: 'fixed',
+          bottom: '72px',
+          left: 0,
+          right: 0,
+          margin: 0,
+          zIndex: 1000,
+          boxShadow: '0 -2px 10px rgba(0,0,0,0.1)'
+        } : {}}
+      >
         <div className="flex gap-2">
           <input
             type="text"

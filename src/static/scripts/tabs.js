@@ -98,6 +98,31 @@ export const TYPE = {
           f.style.pointerEvents = 'auto';
           manager.setFrameState(tab.id, true);
         }
+        
+        // Fix for mobile PWA: Remove top spacing in Notion iframes
+        if (window.innerWidth <= 768) {
+          try {
+            const iframeDoc = f.contentWindow?.document;
+            if (iframeDoc) {
+              // Remove padding/margin from body and html
+              const style = iframeDoc.createElement('style');
+              style.textContent = `
+                html, body {
+                  margin-top: 0 !important;
+                  padding-top: 0 !important;
+                }
+                body > div:first-child {
+                  margin-top: 0 !important;
+                  padding-top: 0 !important;
+                }
+              `;
+              iframeDoc.head?.appendChild(style);
+            }
+          } catch (e) {
+            // Cross-origin restriction, can't access iframe content
+            console.log('Cannot access iframe content (cross-origin)');
+          }
+        }
       };
     },
     navigate: (url, manager, tab, iframe) => {

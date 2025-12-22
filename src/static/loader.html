@@ -622,15 +622,29 @@
           top: env(safe-area-inset-top, 0);
           left: env(safe-area-inset-left, 0);
           right: env(safe-area-inset-right, 0);
-          bottom: 72px;
+          bottom: 72px !important;
           background-color: #ffffff;
           z-index: 100;
           overflow-y: auto;
+          /* Ensure content doesn't go behind bottom bar */
+          padding-bottom: 20px;
         }
 
         #mobile-projects-view.active,
         #mobile-messenger-view.active {
           display: block;
+        }
+        
+        /* Ensure iframes inside mobile views respect the container boundaries */
+        #mobile-messenger-view iframe,
+        #mobile-projects-view iframe {
+          max-height: 100% !important;
+          height: 100% !important;
+          position: absolute !important;
+          top: 0 !important;
+          left: 0 !important;
+          right: 0 !important;
+          bottom: 0 !important;
         }
         
         /* Remove any margins from content inside mobile views */
@@ -645,6 +659,16 @@
         [class*="notion-"] {
           margin-top: 0 !important;
           padding-top: 0 !important;
+        }
+        
+        /* FIX: Notion via Cloudflare Worker has internal header (~59px) - hide it by moving iframe up */
+        /* This ONLY applies in mobile PWA, and ONLY to Notion iframes */
+        #fcn iframe[src*="notion"],
+        #fcn iframe[src*="silent-queen"] {
+          position: absolute !important;
+          top: -59px !important;
+          height: calc(100% + 59px) !important;
+          margin-top: 0 !important;
         }
         
         /* Hide toaster in mobile to prevent layout issues */
@@ -829,17 +853,18 @@
           margin-bottom: 0;
         }
 
-        /* Ensure iframe container takes full height in mobile */
+        /* Ensure iframe container takes full height in mobile BUT leaves space for bottom bar */
         #fcn {
           flex: 1 1 0 !important;
           position: relative !important;
           overflow: hidden !important;
           min-height: 0 !important;
-          /* Leave space for fixed bottom bar by using margin-bottom or padding-bottom */
-          margin-bottom: calc(72px + env(safe-area-inset-bottom, 0)) !important;
+          /* CRITICAL: Subtract 72px for bottom bar */
+          height: calc(100% - 72px) !important;
+          max-height: calc(100dvh - 72px) !important;
         }
 
-        /* Ensure iframes fill the container but leave space for bottom bar */
+        /* Ensure iframes fill the container */
         #fcn iframe {
           position: absolute !important;
           top: 0 !important;
