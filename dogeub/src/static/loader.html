@@ -1,0 +1,2630 @@
+<html>
+  <head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    
+    <!-- PWA Manifest -->
+    <link rel="manifest" href="/manifest.json" />
+    
+    <!-- iOS PWA Meta Tags -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="DogeLunaMix" />
+    <link rel="apple-touch-icon" href="/icon.svg" />
+    
+    <!-- Theme Color -->
+    <meta name="theme-color" content="#ececed" />
+    <meta name="msapplication-TileColor" content="#ececed" />
+    
+    <!-- Import Map for module resolution - must be before any module scripts -->
+    <script type="importmap">
+    {
+      "imports": {
+        "@mercuryworkshop/bare-mux": "/baremux/index.mjs",
+        "lucide": "https://cdn.jsdelivr.net/npm/lucide@0.263.1/dist/esm/lucide.js"
+      }
+    }
+    </script>
+    
+    <script type="module">
+      (function() {
+        const options = JSON.parse(localStorage.getItem("options") || "{}");
+
+        const css = `
+          body { color: ${options.bodyText || "#111827"}; }
+          #url input::placeholder { color: ${options.urlBarText || "#111827"}; }
+          #d-url { background-color: ${options.urlBarBg || "#ffffff"}; color: ${options.urlBarText || "#111827"}; }
+          #sidebar { background-color: transparent; border-color: ${options.tabBarBorder || "#d1d5db"}; }
+          .ub { background-color: ${options.ubBg || "#efefefcc"}; }
+          .ub:hover:not(:has(input:focus)) { background-color: ${options.ubHover || "#e5e7eb"}; }
+          .tooltip { background-color: ${options.tooltipBg || "#111827"}; color: ${options.tooltipText || "#fff"}; }
+          .has-tooltip:hover { background-color: ${options.hoverBg || "#e5e7eb"}; }
+          .has-tooltip:active { background-color: ${options.activeBg || "#d1d5db6e"}; }
+          .lscr { background-color: ${options.loadingSrBgColor || "#f4f5f7"}; }
+          .loading svg polyline#back { stroke: ${options.loadingIconBack || "#d1d5db33"}; }
+          .loading svg polyline#front { stroke: ${options.loadingIconFront || "#111827"}; }
+        `;
+
+        document.documentElement.classList.add(options.type || 'light');
+
+        const style = document.createElement("style");
+        style.innerHTML = css;
+        document.head.appendChild(style);
+      })();
+    </script>
+
+    <!-- Lucide icons - required for dynamic tab icons -->
+    <script type="module">
+      // Try to load lucide icons - required for tab icons
+      (async () => {
+        try {
+          // Try multiple CDN sources
+          const sources = [
+            'https://unpkg.com/lucide@latest/dist/umd/lucide.js',
+            'https://cdn.jsdelivr.net/npm/lucide@latest/dist/umd/lucide.js',
+            'https://esm.sh/lucide@latest'
+          ];
+          
+          let loaded = false;
+          for (const source of sources) {
+            try {
+              // Try UMD version first (works better with CORS)
+              if (source.includes('umd')) {
+                const script = document.createElement('script');
+                script.src = source;
+                script.type = 'text/javascript';
+                await new Promise((resolve, reject) => {
+                  script.onload = resolve;
+                  script.onerror = reject;
+                  document.head.appendChild(script);
+                });
+                if (window.lucide && window.lucide.createIcons) {
+                  window.lucide.createIcons();
+                  loaded = true;
+                  break;
+                }
+              } else {
+                // Try ES module version
+                const module = await import(source);
+                if (module && (module.createIcons || module.default?.createIcons)) {
+                  (module.createIcons || module.default.createIcons)();
+                  loaded = true;
+                  break;
+                }
+              }
+            } catch (e) {
+              // Continue to next source
+              continue;
+            }
+          }
+          
+          if (!loaded) {
+            console.warn('Lucide icons could not be loaded - some tab icons may not appear');
+          }
+        } catch (e) {
+          console.warn('Failed to load Lucide icons:', e);
+        }
+      })();
+    </script>
+
+    <!-- globals.css is processed by Vite during build, but in dev we need to import it -->
+    <link rel="stylesheet" href="../globals.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/basecoat-css@0.3.1/dist/basecoat.cdn.min.css">
+
+    <style>
+      @import url("https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap");
+      @import url("https://fonts.googleapis.com/css2?family=Geist:wght@100..900&display=swap");
+
+      @font-face {
+        font-family: "SFProText";
+        src: url("https://cdn.jsdelivr.net/gh/nerocdn/assets-8bH2k/subset-SFProText-Semibold.woff2") format("woff2"),
+             url("https://cdn.jsdelivr.net/gh/nerocdn/assets-8bH2k/subset-SFProText-Semibold.woff") format("woff");
+        font-weight: 600;
+        font-style: normal;
+        font-display: swap;
+      }
+
+      body {
+        font-family: "Geist";
+        font-size: 14px;
+        font-weight: 500;
+        background-color: #ececed;
+      }
+
+      .tooltip {
+        visibility: hidden;
+        position: absolute;
+        opacity: 0;
+        transition: all 100ms ease-in;
+      }
+
+      .has-tooltip:hover .tooltip {
+        visibility: visible;
+        z-index: 50;
+        opacity: 1;
+      }
+
+      .tab-item {
+        border-radius: 6px;
+        margin-bottom: 2px;
+      }
+
+      .tab-item:hover {
+        user-select: none;
+      }
+      
+      /* Congelar hover durante drag: mantener estilo hover en elemento arrastrado */
+      .dragging-item {
+        background-color: #e8eaed !important;
+      }
+      
+      .dragging-item .tab-menu-btn {
+        opacity: 1 !important;
+      }
+      
+      /* Prevenir hovers en otros elementos durante drag */
+      .dragging-active .tab-item:not(.dragging-item):hover {
+        background-color: transparent !important;
+      }
+      
+      .dragging-active .tab-item:not(.dragging-item) .tab-menu-btn {
+        opacity: 0 !important;
+      }
+      
+      #sidebar {
+        min-width: 140px;
+        max-width: 300px;
+      }
+      
+      #tabs-cont {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+
+      /* LUNA-style scrollbar - invisible by default, only appears on scroll/hover */
+      #sidebar::-webkit-scrollbar {
+        width: 6px;
+        height: 6px;
+      }
+
+      #sidebar::-webkit-scrollbar-track {
+        background: transparent;
+      }
+
+      #sidebar::-webkit-scrollbar-thumb {
+        background: transparent;
+        border-radius: 3px;
+        transition: background 0.2s ease;
+      }
+
+      #sidebar:hover::-webkit-scrollbar-thumb {
+        background: #d1d5db;
+      }
+
+      #sidebar::-webkit-scrollbar-thumb:hover {
+        background: #9ca3af;
+      }
+
+      /* Scrollbar for the scrollable content area inside sidebar - overlay style */
+      #sidebar .sidebar-scrollable {
+        scrollbar-width: thin;
+        scrollbar-color: transparent transparent;
+      }
+
+      #sidebar .sidebar-scrollable::-webkit-scrollbar {
+        width: 8px;
+      }
+
+      #sidebar .sidebar-scrollable::-webkit-scrollbar-track {
+        background: transparent;
+      }
+
+      #sidebar .sidebar-scrollable::-webkit-scrollbar-thumb {
+        background: transparent;
+        border-radius: 4px;
+        transition: background 0.3s ease;
+      }
+
+      /* Show scrollbar on hover or when scrolling - overlays content */
+      #sidebar .sidebar-scrollable:hover {
+        scrollbar-color: rgba(209, 213, 219, 0.6) transparent;
+      }
+
+      #sidebar .sidebar-scrollable:hover::-webkit-scrollbar-thumb,
+      #sidebar .sidebar-scrollable.scrolling::-webkit-scrollbar-thumb {
+        background: rgba(209, 213, 219, 0.6);
+      }
+
+      #sidebar .sidebar-scrollable::-webkit-scrollbar-thumb:hover {
+        background: rgba(156, 163, 175, 0.8);
+      }
+
+      #sidebar .sidebar-scrollable.scrolling {
+        scrollbar-color: rgba(209, 213, 219, 0.6) transparent;
+      }
+
+      #fcn iframe {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+      }
+
+      [role="menuitem"] {
+        font-size: 13px;
+      }
+
+      /* Mobile styles */
+      @media (max-width: 768px) {
+        #sidebar {
+          display: none !important;
+        }
+
+        /* Remove ALL padding and margins from main content container in mobile */
+        /* This ensures the content takes full screen space when used as app */
+        .flex-1.flex.flex-col {
+          padding-top: 0 !important;
+          padding-bottom: 0 !important;
+          padding-left: 0 !important;
+          padding-right: 0 !important;
+          margin-bottom: 0 !important;
+          margin-top: 0 !important;
+          margin-left: 0 !important;
+          margin-right: 0 !important;
+          background-color: #ffffff !important;
+        }
+        
+        /* Override ALL inline style padding in mobile only */
+        .flex-1.flex.flex-col[style*="padding"] {
+          padding-top: 0 !important;
+          padding-bottom: 0 !important;
+          padding-left: 0 !important;
+          padding-right: 0 !important;
+          background-color: #ffffff !important;
+        }
+        
+        /* Also target the specific flex container */
+        .flex.flex-col.flex-1.min-w-0 {
+          padding-top: 0 !important;
+          padding-bottom: 0 !important;
+          padding-left: 0 !important;
+          padding-right: 0 !important;
+          background-color: #ffffff !important;
+        }
+        
+        /* Also remove padding from parent containers in mobile */
+        body {
+          padding-top: env(safe-area-inset-top, 0) !important;
+          padding-bottom: 0 !important;
+          padding-left: 0 !important;
+          padding-right: 0 !important;
+        }
+        
+        /* iOS PWA Fix: Prevent white/gray spaces in fullscreen mode */
+        html, body {
+          margin: 0 !important;
+          width: 100% !important;
+          height: 100vh !important;
+          min-height: 100vh !important;
+          overflow: hidden !important;
+          background-color: #ffffff !important;
+        }
+        
+        /* Force all direct children of body to 100vh */
+        body > div {
+          height: 100vh !important;
+          min-height: 100vh !important;
+        }
+        
+        /* Main container - full screen */
+        body > .flex.h-screen {
+          width: 100vw !important;
+          height: 100vh !important;
+          height: 100dvh !important;
+          margin: 0 !important;
+          padding: 0 !important;
+          background-color: #ffffff !important;
+        }
+        
+        /* Remove all padding from main flex container in mobile */
+        .flex.h-screen.mobile-no-padding {
+          padding: 0 !important;
+          margin: 0 !important;
+        }
+        
+        /* Remove background color from main container in mobile to avoid gray spaces */
+        .flex.h-screen.mobile-no-padding {
+          background-color: #ffffff !important;
+        }
+        
+        /* Ensure the white content card takes full space */
+        .flex-1.flex.flex-col > div.bg-white.rounded-2xl {
+          margin: 0 !important;
+          border-radius: 0 !important;
+        }
+
+        /* Also remove rounded corners from sidebar card if visible */
+        #sidebar > div.rounded-2xl {
+          border-radius: 0 !important;
+        }
+
+        /* Bottom navigation bar - fixed to bottom */
+        #mobile-bottom-bar {
+          display: flex;
+          position: fixed;
+          bottom: 0;
+          left: 0;
+          right: 0;
+          height: 72px !important;
+          min-height: 72px !important;
+          max-height: 72px !important;
+          background-color: #ffffff;
+          border-top: 1px solid #e8eaed;
+          z-index: 300; /* Above mobile views */
+          padding: 0 8px !important;
+          padding-bottom: 0 !important;
+          padding-left: env(safe-area-inset-left, 0);
+          padding-right: env(safe-area-inset-right, 0);
+          box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.05);
+        }
+        
+        /* URL bar - respect safe area at top for iPhone notch */
+        #d-url {
+          position: relative;
+          margin-top: 0;
+        }
+
+        #mobile-bottom-bar .bottom-nav-item {
+          flex: 1 1 0; /* Equal distribution - all items get same space */
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 4px;
+          padding: 8px 4px;
+          color: #5f6368;
+          font-size: 10px;
+          font-weight: 500;
+          cursor: pointer;
+          transition: color 0.2s;
+          position: relative;
+          min-width: 0; /* Allow flex items to shrink */
+          max-width: 100%; /* Prevent overflow */
+        }
+        
+        /* Tabs container - should not take flex space, just contain tabs */
+        #mobile-tabs-container {
+          display: contents !important; /* Makes container transparent to flexbox */
+          gap: 4px;
+        }
+        
+        /* All items (tabs and fixed buttons) get equal space */
+        #mobile-tabs-container .bottom-nav-item,
+        #mobile-nav-projects,
+        #mobile-nav-messenger,
+        #mobile-nav-more {
+          flex: 1 1 0 !important; /* Each item gets equal space */
+          min-width: 0; /* Allow flex items to shrink */
+          max-width: none; /* Remove max-width restriction */
+        }
+        
+        /* Ensure fixed buttons are always visible */
+        #mobile-nav-projects,
+        #mobile-nav-messenger,
+        #mobile-nav-more {
+          display: flex !important; /* Ensure visibility */
+          visibility: visible !important;
+          opacity: 1 !important;
+        }
+        
+        /* Ensure all text content is centered */
+        #mobile-bottom-bar .bottom-nav-item > * {
+          text-align: center;
+        }
+
+        /* Ensure all labels have same font size and are centered */
+        #mobile-bottom-bar .bottom-nav-item .label,
+        #mobile-bottom-bar .bottom-nav-item span:not(.badge) {
+          font-size: 10px;
+          font-weight: 500;
+          text-align: center;
+          width: 100%;
+          display: block;
+        }
+
+        /* More button - same structure as other buttons (icon above, text below) */
+        #mobile-nav-more {
+          flex-direction: column !important;
+        }
+        
+        /* Ensure all fixed buttons have vertical layout (icon above, text below) */
+        #mobile-nav-projects,
+        #mobile-nav-messenger,
+        #mobile-nav-more {
+          flex-direction: column !important;
+        }
+
+        /* Editing mode - wiggle animation for ALL items in bottom bar AND More view */
+        #mobile-bottom-bar.editing .bottom-nav-item {
+          animation: wiggle 0.3s ease-in-out infinite;
+          cursor: move;
+        }
+        
+        #mobile-bottom-bar.editing .bottom-nav-item.dragging {
+          opacity: 0.5;
+          z-index: 1000;
+        }
+
+        #mobile-bottom-bar.editing .bottom-nav-item:nth-child(1) { animation-delay: 0s; }
+        #mobile-bottom-bar.editing .bottom-nav-item:nth-child(2) { animation-delay: 0.05s; }
+        #mobile-bottom-bar.editing .bottom-nav-item:nth-child(3) { animation-delay: 0.1s; }
+        #mobile-bottom-bar.editing .bottom-nav-item:nth-child(4) { animation-delay: 0.15s; }
+        #mobile-bottom-bar.editing .bottom-nav-item:nth-child(5) { animation-delay: 0.2s; }
+        #mobile-bottom-bar.editing .bottom-nav-item:nth-child(6) { animation-delay: 0.25s; }
+
+        /* Also animate items in More view when editing */
+        .mobile-more-editing .mobile-more-item {
+          animation: wiggle 0.3s ease-in-out infinite;
+        }
+
+        .mobile-more-editing .mobile-more-item:nth-child(1) { animation-delay: 0s; }
+        .mobile-more-editing .mobile-more-item:nth-child(2) { animation-delay: 0.05s; }
+        .mobile-more-editing .mobile-more-item:nth-child(3) { animation-delay: 0.1s; }
+        .mobile-more-editing .mobile-more-item:nth-child(4) { animation-delay: 0.15s; }
+        .mobile-more-editing .mobile-more-item:nth-child(5) { animation-delay: 0.2s; }
+        .mobile-more-editing .mobile-more-item:nth-child(6) { animation-delay: 0.25s; }
+        .mobile-more-editing .mobile-more-item:nth-child(7) { animation-delay: 0.3s; }
+        .mobile-more-editing .mobile-more-item:nth-child(8) { animation-delay: 0.35s; }
+
+        @keyframes wiggle {
+          0%, 100% { transform: rotate(0deg) translateX(0); }
+          25% { transform: rotate(-1deg) translateX(-1px); }
+          75% { transform: rotate(1deg) translateX(1px); }
+        }
+
+        /* Three dots button for bottom bar items in editing mode */
+        #mobile-bottom-bar.editing .bottom-nav-item .mobile-tab-menu-btn {
+          position: absolute;
+          top: 2px;
+          right: 2px;
+          padding: 4px;
+          opacity: 0.95;
+          z-index: 1000 !important;
+          background: rgba(255, 255, 255, 0.98);
+          border-radius: 4px;
+          border: none;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+          pointer-events: auto !important;
+          touch-action: manipulation;
+          min-width: 24px;
+          min-height: 24px;
+        }
+        
+        #mobile-bottom-bar.editing .bottom-nav-item {
+          position: relative;
+        }
+        
+        #mobile-bottom-bar.editing .bottom-nav-item .mobile-tab-menu-btn:active {
+          opacity: 1;
+          transform: scale(0.95);
+        }
+        
+        /* Three dots button for More view items */
+        .mobile-more-item .mobile-tab-menu-btn {
+          position: absolute;
+          top: 4px;
+          right: 4px;
+          padding: 2px;
+          opacity: 0.7;
+          z-index: 1000 !important;
+          background: rgba(255, 255, 255, 0.9);
+          border-radius: 50%;
+          border: 1px solid rgba(0,0,0,0.1);
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+          pointer-events: auto !important;
+          touch-action: manipulation;
+          width: 20px;
+          height: 20px;
+        }
+        
+        .mobile-more-item {
+          position: relative;
+        }
+        
+        .mobile-more-item .mobile-tab-menu-btn:active {
+          opacity: 1;
+          transform: scale(0.95);
+        }
+
+        #mobile-bottom-bar .bottom-nav-item.active {
+          color: #4285f4;
+        }
+
+        #mobile-bottom-bar .bottom-nav-item .icon {
+          width: 36px; /* Mismo tamaño que More */
+          height: 36px; /* Mismo tamaño que More */
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          flex-shrink: 0;
+        }
+        
+        #mobile-bottom-bar .bottom-nav-item .icon > div {
+          width: 100% !important;
+          height: 100% !important;
+        }
+        
+        /* Iconos dentro del círculo - mismo tamaño que More */
+        #mobile-bottom-bar .bottom-nav-item .icon > div > img,
+        #mobile-bottom-bar .bottom-nav-item .icon > div > svg {
+          max-width: 20px !important;
+          max-height: 20px !important;
+          width: auto !important;
+          height: auto !important;
+        }
+        
+        /* Iconos SVG directos (Projects, Users, More) - mismo tamaño que tabs */
+        #mobile-bottom-bar .bottom-nav-item .icon > svg {
+          width: 20px;
+          height: 20px;
+        }
+
+        #mobile-bottom-bar .bottom-nav-item .label {
+          width: 100%;
+          text-align: center !important;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          line-height: 1.2;
+          max-height: 14px;
+          display: block;
+          margin: 0 auto;
+        }
+        
+        /* Ensure all spans in bottom nav items are centered */
+        #mobile-bottom-bar .bottom-nav-item > span:not(.badge) {
+          text-align: center !important;
+          display: block;
+          width: 100%;
+        }
+
+        #mobile-bottom-bar .bottom-nav-item .badge {
+          position: absolute;
+          top: 6px;
+          right: 8px;
+          background-color: #ea4335;
+          color: white;
+          border-radius: 10px;
+          min-width: 18px;
+          height: 18px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 11px;
+          font-weight: 600;
+          padding: 0 5px;
+        }
+
+        /* Mobile views (full screen overlays) */
+        #mobile-projects-view,
+        #mobile-messenger-view {
+          display: none;
+          position: fixed;
+          top: env(safe-area-inset-top, 0);
+          left: env(safe-area-inset-left, 0);
+          right: env(safe-area-inset-right, 0);
+          bottom: 72px !important;
+          background-color: #ffffff;
+          z-index: 100;
+          overflow-y: auto;
+          /* Ensure content doesn't go behind bottom bar */
+          padding-bottom: 20px;
+        }
+
+        #mobile-projects-view.active,
+        #mobile-messenger-view.active {
+          display: block;
+        }
+        
+        /* Ensure iframes inside mobile views respect the container boundaries */
+        #mobile-messenger-view iframe,
+        #mobile-projects-view iframe {
+          max-height: 100% !important;
+          height: 100% !important;
+          position: absolute !important;
+          top: 0 !important;
+          left: 0 !important;
+          right: 0 !important;
+          bottom: 0 !important;
+        }
+        
+        /* Remove any margins from content inside mobile views */
+        #mobile-projects-view *,
+        #mobile-messenger-view * {
+          margin-top: 0 !important;
+        }
+        
+        /* Specifically target notion elements that might have safe-area margins */
+        .notion-topbar-mobile,
+        .notion-frame,
+        [class*="notion-"] {
+          margin-top: 0 !important;
+          padding-top: 0 !important;
+        }
+        
+        /* FIX: Notion via Cloudflare Worker has internal header (~59px) - hide it by moving iframe up */
+        /* This ONLY applies in mobile PWA, and ONLY to Notion iframes */
+        #fcn iframe[src*="notion"],
+        #fcn iframe[src*="silent-queen"] {
+          position: absolute !important;
+          top: -59px !important;
+          height: calc(100% + 59px) !important;
+          margin-top: 0 !important;
+        }
+        
+        /* Hide toaster in mobile to prevent layout issues */
+        #toaster,
+        .toaster {
+          display: none !important;
+          height: 0 !important;
+        }
+
+        #mobile-more-view {
+          display: none;
+          position: fixed;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          z-index: 200; /* Below bottom bar */
+          pointer-events: none;
+        }
+
+        #mobile-more-view.active {
+          display: flex;
+          flex-direction: column;
+          justify-content: flex-end;
+          pointer-events: auto;
+        }
+
+        #mobile-more-view.active::before {
+          content: '';
+          position: absolute;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          background-color: rgba(0, 0, 0, 0.3);
+          z-index: -1;
+        }
+
+        .mobile-view-header {
+          position: sticky;
+          top: 0;
+          background-color: #ffffff;
+          border-bottom: 1px solid #e8eaed;
+          padding: 12px 16px;
+          display: flex;
+          align-items: center;
+          z-index: 10;
+        }
+
+        .mobile-view-title {
+          font-size: 18px;
+          font-weight: 600;
+          color: #202124;
+        }
+
+        /* More view as bottom sheet */
+        .mobile-more-sheet {
+          background-color: #ffffff;
+          border-radius: 20px 20px 0 0;
+          max-height: calc(100vh - 60px); /* Leave space for bottom bar */
+          display: flex;
+          flex-direction: column;
+          overflow: hidden;
+          width: 100%;
+          margin-bottom: 60px; /* Push up to leave space for bottom bar */
+        }
+
+        .mobile-more-handle {
+          width: 40px;
+          height: 4px;
+          background-color: #d1d5db;
+          border-radius: 2px;
+          margin: 12px auto 0;
+        }
+
+        .mobile-more-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 16px 20px;
+          border-bottom: 1px solid #e8eaed;
+        }
+
+        .mobile-more-title {
+          font-size: 24px;
+          font-weight: 600;
+          color: #202124;
+        }
+
+        .mobile-more-edit-btn {
+          color: #4285f4;
+          font-size: 16px;
+          font-weight: 500;
+          background: none;
+          border: none;
+          cursor: pointer;
+          padding: 4px 8px;
+        }
+
+        .mobile-more-edit-btn:hover {
+          opacity: 0.8;
+        }
+
+        /* Edit mode styles */
+        .mobile-more-editing .mobile-more-item {
+          cursor: move;
+          transition: transform 0.2s;
+        }
+
+        .mobile-more-editing .mobile-more-item:active {
+          transform: scale(0.95);
+        }
+
+        .mobile-more-grid {
+          display: grid;
+          grid-template-columns: repeat(4, 1fr);
+          gap: 12px;
+          padding: 16px;
+          overflow-y: auto;
+          max-height: calc(80vh - 100px); /* Account for header and handle */
+        }
+
+        .mobile-more-item {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 6px;
+          cursor: pointer;
+          padding: 8px 4px;
+          border-radius: 8px;
+          transition: background-color 0.2s;
+          min-width: 0; /* Permitir que el item se encoja */
+          max-width: 100%; /* No exceder el ancho del grid */
+        }
+
+        .mobile-more-item:active {
+          background-color: #f5f7fa;
+        }
+
+        .mobile-more-item-icon {
+          width: 36px; /* Aumentado de 28px a 36px */
+          height: 36px; /* Aumentado de 28px a 36px */
+          border-radius: 50%; /* Círculo como desktop */
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 18px;
+          flex-shrink: 0;
+          position: relative;
+        }
+        
+        .mobile-more-item-icon > div {
+          width: 100% !important;
+          height: 100% !important;
+          border-radius: 50% !important; /* Asegurar que el círculo interno también sea redondo */
+        }
+
+        .mobile-more-item-icon img,
+        .mobile-more-item-icon svg {
+          width: 20px; /* Aumentado de 16px a 20px */
+          height: 20px; /* Aumentado de 16px a 20px */
+        }
+
+        .mobile-more-item-label {
+          font-size: 10px;
+          color: #202124;
+          text-align: center;
+          max-width: 100%;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          line-height: 1.2;
+          padding: 0 4px; /* Aumentado padding para mejor truncamiento */
+          margin-top: 4px;
+          word-break: break-word; /* Asegurar que palabras largas se rompan */
+          hyphens: auto; /* Agregar guiones si es necesario */
+        }
+
+        /* Adjust main content for mobile - no margin needed, bottom bar is fixed */
+        /* Note: This is inside mobile media query, so only affects mobile */
+        .flex.h-screen > .flex-1 {
+          margin-bottom: 0;
+        }
+
+        /* Ensure iframe container takes correct height leaving space for bottom bar */
+        #fcn {
+          position: relative !important;
+          overflow: hidden !important;
+          /* Don't use flex-1, use explicit height calculation */
+          flex: none !important;
+          /* Calculate exact height: viewport - top position - bottom bar */
+          /* From debug: fcn.top = 116px, bottomBar = 72px, so available = 793 - 116 - 72 = 605px */
+          height: calc(100dvh - 116px - 72px) !important;
+          max-height: calc(100dvh - 116px - 72px) !important;
+          min-height: calc(100dvh - 116px - 72px) !important;
+        }
+
+        /* Ensure iframes fill the container */
+        #fcn iframe {
+          position: absolute !important;
+          top: 0 !important;
+          left: 0 !important;
+          right: 0 !important;
+          bottom: 0 !important;
+          width: 100% !important;
+          height: 100% !important;
+        }
+        
+        /* Ensure the white card container has proper height */
+        .flex-1.flex.flex-col > div.bg-white.rounded-2xl {
+          display: flex !important;
+          flex-direction: column !important;
+          min-height: 0 !important;
+        }
+      }
+
+      /* Desktop: hide mobile bottom bar */
+      @media (min-width: 769px) {
+        #mobile-bottom-bar,
+        #mobile-projects-view,
+        #mobile-messenger-view,
+        #mobile-more-view {
+          display: none !important;
+        }
+
+        /* More dropdown menu - Floating menu like tab submenu */
+        .more-dropdown-menu {
+          display: none;
+          position: fixed;
+          background-color: #ffffff;
+          border: 1px solid #e8eaed;
+          border-radius: 8px;
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+          z-index: 10000;
+          min-width: 240px;
+          max-width: 280px;
+          max-height: 60vh;
+          overflow: hidden;
+          flex-direction: column;
+        }
+
+        /* Position dropdown to the right of sidebar */
+        #sidebar-more-btn {
+          position: relative;
+        }
+
+        .more-dropdown-menu.active {
+          display: flex;
+        }
+
+        .more-dropdown-content {
+          padding: 4px 0;
+          overflow-y: auto;
+          max-height: 60vh;
+          /* Scrollbar overlay - no reserva espacio cuando no se usa */
+          scrollbar-gutter: auto;
+        }
+
+        /* More dropdown uses same tab-item style as sidebar */
+        .more-dropdown-content .tab-item {
+          margin-bottom: 2px;
+          margin-left: 8px;
+          margin-right: 8px;
+        }
+
+        /* Scrollbar for more dropdown - overlay style, solo aparece cuando se scrollea */
+        .more-dropdown-content::-webkit-scrollbar {
+          width: 6px;
+        }
+
+        .more-dropdown-content::-webkit-scrollbar-track {
+          background: transparent;
+        }
+
+        .more-dropdown-content::-webkit-scrollbar-thumb {
+          background: transparent;
+          border-radius: 3px;
+          transition: background 0.2s ease;
+        }
+
+        /* Mostrar scrollbar solo cuando se está scrolleando o hover */
+        .more-dropdown-content:not(:hover):not(:active)::-webkit-scrollbar-thumb {
+          background: transparent;
+        }
+
+        .more-dropdown-content:hover::-webkit-scrollbar-thumb,
+        .more-dropdown-content:active::-webkit-scrollbar-thumb {
+          background: #d1d5db;
+        }
+
+        /* Firefox: scrollbar overlay - no reserva espacio */
+        .more-dropdown-content {
+          scrollbar-width: thin;
+          scrollbar-color: transparent transparent;
+        }
+
+        .more-dropdown-content:hover,
+        .more-dropdown-content:active {
+          scrollbar-color: #d1d5db transparent;
+        }
+      }
+
+      /* URL bar menu popover styles */
+      #dropdown {
+        position: relative;
+      }
+
+      #menu-popover {
+        position: absolute;
+        top: 100%;
+        right: 0;
+        margin-top: 4px;
+        background-color: #ffffff;
+        border: 1px solid #e8eaed;
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        z-index: 10001;
+        min-width: 200px;
+        padding: 4px;
+        display: none;
+      }
+
+      #menu-popover[aria-hidden="false"] {
+        display: block;
+      }
+
+      #menu-popover[aria-hidden="true"] {
+        display: none;
+      }
+
+      #menu-popover [role="menu"] {
+        display: flex;
+        flex-direction: column;
+      }
+
+      #menu-popover [role="menuitem"] {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 8px 12px;
+        cursor: pointer;
+        border-radius: 4px;
+        font-size: 13px;
+        color: #202124;
+        transition: background-color 0.15s ease;
+      }
+
+      #menu-popover [role="menuitem"]:hover {
+        background-color: #f1f3f4;
+      }
+
+      #menu-popover [role="separator"] {
+        height: 1px;
+        background-color: #e8eaed;
+        margin: 4px 0;
+        border: none;
+      }
+
+      #menu-popover .text-muted-foreground {
+        color: #6b7280;
+        font-size: 11px;
+        margin-left: auto;
+      }
+
+      /* User Picker Modal - GLOBAL STYLES (outside media queries) */
+      #user-picker-modal {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(0, 0, 0, 0.5);
+        z-index: 999999;
+        align-items: center;
+        justify-content: center;
+        pointer-events: none;
+      }
+
+      #user-picker-modal.active {
+        display: flex;
+        pointer-events: auto;
+      }
+
+      .user-picker-dialog {
+          background-color: #ffffff;
+          border-radius: 8px;
+          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+          width: 90%;
+          max-width: 480px;
+          max-height: 80vh;
+          display: flex;
+          flex-direction: column;
+          overflow: hidden;
+        }
+
+        .user-picker-header {
+          padding: 20px 24px;
+          border-bottom: 1px solid #e8eaed;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+        }
+
+        .user-picker-title {
+          font-size: 16px;
+          font-weight: 600;
+          color: #202124;
+          margin: 0;
+        }
+
+        .user-picker-close {
+          background: none;
+          border: none;
+          font-size: 24px;
+          color: #5f6368;
+          cursor: pointer;
+          padding: 0;
+          width: 32px;
+          height: 32px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 4px;
+          transition: background-color 0.2s;
+        }
+
+        .user-picker-close:hover {
+          background-color: #f1f3f4;
+        }
+
+        .user-picker-search {
+          padding: 16px 24px;
+          border-bottom: 1px solid #e8eaed;
+          display: flex;
+          gap: 8px;
+          align-items: center;
+        }
+
+        .user-picker-search-input {
+          flex: 1;
+          border: 1px solid #dadce0;
+          border-radius: 4px;
+          padding: 8px 12px;
+          font-size: 14px;
+          color: #202124;
+          outline: none;
+          transition: border-color 0.2s;
+        }
+
+        .user-picker-search-input:focus {
+          border-color: #4285f4;
+        }
+
+        .user-picker-search-input::placeholder {
+          color: #80868b;
+        }
+
+        .user-picker-go-btn {
+          background-color: #4285f4;
+          color: white;
+          border: none;
+          border-radius: 4px;
+          padding: 8px 16px;
+          font-size: 14px;
+          font-weight: 500;
+          cursor: pointer;
+          transition: background-color 0.2s;
+        }
+
+        .user-picker-go-btn:hover:not(:disabled) {
+          background-color: #3367d6;
+        }
+
+        .user-picker-go-btn:disabled {
+          background-color: #dadce0;
+          color: #80868b;
+          cursor: not-allowed;
+        }
+
+        .user-picker-list {
+          flex: 1;
+          overflow-y: auto;
+          padding: 8px 0;
+        }
+
+        .user-picker-item {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          padding: 12px 24px;
+          cursor: pointer;
+          transition: background-color 0.2s;
+          border: none;
+          background: none;
+          width: 100%;
+          text-align: left;
+        }
+
+        .user-picker-item:hover {
+          background-color: #f8f9fa;
+        }
+
+        .user-picker-item.selected {
+          background-color: #e8f0fe;
+        }
+
+        .user-picker-avatar {
+          width: 40px;
+          height: 40px;
+          border-radius: 50%;
+          background-color: #dadce0;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 14px;
+          font-weight: 500;
+          color: #5f6368;
+          flex-shrink: 0;
+          overflow: hidden;
+        }
+
+        .user-picker-avatar-img {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+          border-radius: 50%;
+        }
+
+        .user-picker-avatar-initials {
+          font-size: 14px;
+          font-weight: 500;
+          color: #5f6368;
+        }
+
+        .user-picker-avatar img {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+        }
+
+        .user-picker-checkbox {
+          flex-shrink: 0;
+        }
+
+        .user-picker-checkbox input[type="checkbox"] {
+          width: 18px;
+          height: 18px;
+          cursor: pointer;
+          accent-color: #1a73e8;
+        }
+
+        .user-picker-info {
+          flex: 1;
+          min-width: 0;
+        }
+
+        .user-picker-name {
+          font-size: 14px;
+          font-weight: 400;
+          color: #202124;
+          margin: 0 0 4px 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .user-picker-email {
+          font-size: 12px;
+          color: #5f6368;
+          margin: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+      .user-picker-empty {
+        padding: 40px 24px;
+        text-align: center;
+        color: #5f6368;
+        font-size: 14px;
+      }
+    </style>
+
+    <style>
+      .loading svg polyline {
+        fill: none;
+        stroke-width: 3;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      .loading svg polyline#back {
+        fill: none;
+      }
+
+      .loading svg polyline#front {
+        fill: none;
+        stroke-dasharray: 48, 144;
+        stroke-dashoffset: 192;
+        animation: dash_682 1.4s linear infinite;
+      }
+
+      @keyframes dash_682 {
+        72.5% { opacity: 0; }
+        to { stroke-dashoffset: 0; }
+      }
+      .ub {
+        transition: background-color 0.1s ease-in;
+      }
+
+      /* Project Settings Sidebar */
+      .project-settings-sidebar {
+        position: fixed;
+        top: 0;
+        right: 0;
+        width: 320px;
+        height: 100vh;
+        background: white;
+        border-left: 1px solid #e8eaed;
+        z-index: 200;
+        transform: translateX(100%);
+        transition: transform 0.3s ease-in-out;
+        overflow-y: auto;
+      }
+
+      .project-settings-sidebar:not(.hidden) {
+        transform: translateX(0);
+      }
+
+      .project-settings-sidebar.hidden {
+        display: none;
+      }
+
+      .project-settings-content {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+      }
+
+      .project-settings-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 16px;
+        border-bottom: 1px solid #e8eaed;
+      }
+
+      .project-settings-title {
+        font-size: 18px;
+        font-weight: 600;
+        color: #202124;
+        margin: 0;
+      }
+
+      .project-settings-close-btn {
+        padding: 4px;
+        border: none;
+        background: transparent;
+        cursor: pointer;
+        color: #5f6368;
+        border-radius: 4px;
+        transition: background-color 0.2s;
+      }
+
+      .project-settings-close-btn:hover {
+        background-color: #f1f3f4;
+      }
+
+      .project-settings-section {
+        padding: 16px;
+        border-bottom: 1px solid #e8eaed;
+      }
+
+      .project-settings-danger {
+        margin-top: auto;
+        border-top: 1px solid #e8eaed;
+        border-bottom: none;
+      }
+
+      .members-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 12px;
+      }
+
+      .members-title {
+        font-size: 14px;
+        font-weight: 600;
+        color: #202124;
+        margin: 0;
+      }
+
+      .members-count {
+        font-size: 12px;
+        color: #5f6368;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+
+      .members-search {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+        background: #f8f9fa;
+        border-radius: 8px;
+        margin-bottom: 12px;
+      }
+
+      .members-search-input {
+        flex: 1;
+        border: none;
+        background: transparent;
+        outline: none;
+        font-size: 14px;
+        color: #202124;
+      }
+
+      .members-search-input::placeholder {
+        color: #9aa0a6;
+      }
+
+      .members-list {
+        display: flex;
+        gap: 8px;
+        overflow-x: auto;
+        padding-bottom: 8px;
+        margin-bottom: 12px;
+        scrollbar-width: thin;
+      }
+
+      .members-list::-webkit-scrollbar {
+        height: 6px;
+      }
+
+      .members-list::-webkit-scrollbar-thumb {
+        background: #dadce0;
+        border-radius: 3px;
+      }
+
+      .member-avatar {
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        flex-shrink: 0;
+        overflow: hidden;
+        position: relative;
+        cursor: pointer;
+        border: 2px solid transparent;
+        transition: border-color 0.2s;
+      }
+
+      .member-avatar.selected {
+        border-color: #1a73e8;
+      }
+
+      .member-avatar img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+
+      .member-avatar-initials {
+        width: 100%;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        font-size: 14px;
+        font-weight: 500;
+      }
+
+      .members-actions {
+        display: flex;
+        gap: 8px;
+      }
+
+      .member-action-btn {
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        border: 1px solid #dadce0;
+        background: white;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        transition: all 0.2s;
+        flex-shrink: 0;
+      }
+
+      .member-add-btn:hover {
+        background: #f1f3f4;
+        border-color: #1a73e8;
+        color: #1a73e8;
+      }
+
+      .member-remove-btn:hover {
+        background: #fce8e6;
+        border-color: #ea4335;
+        color: #ea4335;
+      }
+
+      .delete-project-btn {
+        width: 100%;
+        padding: 12px;
+        background: #ea4335;
+        color: white;
+        border: none;
+        border-radius: 8px;
+        font-size: 14px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: background-color 0.2s;
+      }
+
+      .delete-project-btn:hover {
+        background: #d33b2c;
+      }
+
+      /* Add Members Modal */
+      .add-members-modal {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 300;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0, 0, 0, 0.5);
+      }
+
+      .add-members-modal.hidden {
+        display: none;
+      }
+
+      .add-members-modal-content {
+        background: white;
+        border-radius: 12px;
+        width: 90%;
+        max-width: 500px;
+        max-height: 80vh;
+        display: flex;
+        flex-direction: column;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+      }
+
+      .add-members-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 20px;
+        border-bottom: 1px solid #e8eaed;
+      }
+
+      .add-members-title {
+        font-size: 18px;
+        font-weight: 600;
+        color: #202124;
+        margin: 0;
+      }
+
+      .add-members-close-btn {
+        padding: 4px;
+        border: none;
+        background: transparent;
+        cursor: pointer;
+        color: #5f6368;
+        border-radius: 4px;
+        transition: background-color 0.2s;
+      }
+
+      .add-members-close-btn:hover {
+        background-color: #f1f3f4;
+      }
+
+      .add-members-search {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 12px 20px;
+        border-bottom: 1px solid #e8eaed;
+      }
+
+      .add-members-search-input {
+        flex: 1;
+        border: none;
+        background: transparent;
+        outline: none;
+        font-size: 14px;
+        color: #202124;
+      }
+
+      .add-members-search-input::placeholder {
+        color: #9aa0a6;
+      }
+
+      .add-members-list {
+        flex: 1;
+        overflow-y: auto;
+        padding: 8px 0;
+        max-height: 400px;
+      }
+
+      .add-member-item {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 20px;
+        cursor: pointer;
+        transition: background-color 0.2s;
+      }
+
+      .add-member-item:hover {
+        background-color: #f8f9fa;
+      }
+
+      .add-member-item input[type="checkbox"] {
+        width: 18px;
+        height: 18px;
+        cursor: pointer;
+      }
+
+      .add-member-avatar {
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        overflow: hidden;
+        flex-shrink: 0;
+      }
+
+      .add-member-avatar img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+
+      .add-member-avatar-initials {
+        width: 100%;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        font-size: 14px;
+        font-weight: 500;
+      }
+
+      .add-member-info {
+        flex: 1;
+        min-width: 0;
+      }
+
+      .add-member-name {
+        font-size: 14px;
+        font-weight: 500;
+        color: #202124;
+        margin: 0 0 2px 0;
+      }
+
+      .add-member-email {
+        font-size: 12px;
+        color: #5f6368;
+        margin: 0;
+      }
+
+      .add-members-footer {
+        display: flex;
+        gap: 12px;
+        padding: 16px 20px;
+        border-top: 1px solid #e8eaed;
+        justify-content: flex-end;
+      }
+
+      .add-members-cancel-btn,
+      .add-members-submit-btn {
+        padding: 8px 16px;
+        border-radius: 6px;
+        font-size: 14px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s;
+        border: none;
+      }
+
+      .add-members-cancel-btn {
+        background: transparent;
+        color: #5f6368;
+      }
+
+      .add-members-cancel-btn:hover {
+        background: #f1f3f4;
+      }
+
+      .add-members-submit-btn {
+        background: #1a73e8;
+        color: white;
+      }
+
+      .add-members-submit-btn:hover {
+        background: #1557b0;
+      }
+
+      .add-members-submit-btn:disabled {
+        background: #dadce0;
+        color: #9aa0a6;
+        cursor: not-allowed;
+      }
+
+      /* Delete Project Confirmation Modal */
+      .delete-project-modal {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 300;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0, 0, 0, 0.5);
+      }
+
+      .delete-project-modal.hidden {
+        display: none;
+      }
+
+      .delete-project-modal-content {
+        background: white;
+        border-radius: 12px;
+        width: 90%;
+        max-width: 400px;
+        padding: 24px;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+      }
+
+      .delete-project-modal-title {
+        font-size: 20px;
+        font-weight: 600;
+        color: #202124;
+        margin: 0 0 12px 0;
+      }
+
+      .delete-project-modal-text {
+        font-size: 14px;
+        color: #5f6368;
+        margin: 0 0 24px 0;
+        line-height: 1.5;
+      }
+
+      .delete-project-modal-actions {
+        display: flex;
+        gap: 12px;
+        justify-content: flex-end;
+      }
+
+      .delete-project-cancel-btn,
+      .delete-project-confirm-btn {
+        padding: 10px 20px;
+        border-radius: 6px;
+        font-size: 14px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s;
+        border: none;
+      }
+
+      .delete-project-cancel-btn {
+        background: transparent;
+        color: #5f6368;
+      }
+
+      .delete-project-cancel-btn:hover {
+        background: #f1f3f4;
+      }
+
+      .delete-project-confirm-btn {
+        background: #ea4335;
+        color: white;
+      }
+
+      .delete-project-confirm-btn:hover {
+        background: #d33b2c;
+      }
+
+      /* Adjust sidebar position based on TopBar */
+      #topbar-space:not(.hidden) ~ * .project-settings-sidebar {
+        top: auto;
+      }
+
+      /* Calculate top position dynamically - sidebar starts below TopBar */
+      .project-settings-sidebar {
+        top: 0;
+      }
+
+      /* When TopBar is visible, adjust sidebar top */
+      body:has(#topbar-space:not(.hidden)) .project-settings-sidebar {
+        top: var(--topbar-height, 0px);
+        height: calc(100vh - var(--topbar-height, 0px));
+      }
+    </style>
+    <script src="/baremux/index.js" defer></script>
+    <script src="/libcurl/index.js" defer></script>
+    <script src="/scram/scramjet.all.js" defer></script>
+    <script src="/uv/uv.config.js" defer></script>
+  </head>
+
+  <body style="margin: 0; padding: 0; width: 100vw; height: 100vh; height: 100dvh; overflow: hidden; position: fixed; top: 0; left: 0;">
+      <div class="flex h-screen select-none mobile-no-padding" style="background-color: #ececed; width: 100%; height: 100%;">
+        <!-- Sidebar vertical izquierdo - Estilo LUNA -->
+        <div id="sidebar" class="h-screen flex flex-col relative" style="width: 240px; min-width: 140px; max-width: 400px; padding: 6px;">
+          <!-- Resize handle -->
+          <div id="sidebar-resize-handle" class="absolute top-0 right-0 h-full w-1 cursor-col-resize z-50 hover:bg-blue-400 transition-colors" style="background-color: transparent;"></div>
+          <!-- Floating sidebar card -->
+          <div class="h-full flex flex-col bg-white rounded-2xl overflow-hidden">
+          <!-- Sections -->
+          <div class="flex-1 py-2 sidebar-scrollable" style="overflow-y: overlay; overflow-x: hidden;">
+            <!-- Sección Tabs -->
+            <div class="py-1">
+              <div class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold text-[#5f6368] uppercase tracking-wide">
+                <span>Tabs</span>
+                <div class="relative">
+                  <button id="tab-btn" class="p-1 hover:bg-[#e8eaed] rounded transition-colors" title="New Tab" type="button">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: #5f6368;">
+                      <line x1="12" y1="5" x2="12" y2="19"></line>
+                      <line x1="5" y1="12" x2="19" y2="12"></line>
+                    </svg>
+                  </button>
+                  <!-- Submenu dropdown -->
+                  <div id="tab-submenu" class="hidden absolute right-0 top-full mt-1 bg-white border border-[#e8eaed] rounded-lg shadow-lg py-1 z-50 min-w-[160px]">
+                    <button class="tab-submenu-browser w-full flex items-center gap-2 px-3 py-2 text-sm text-[#202124] hover:bg-[#f5f7fa] transition-colors text-left">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="18" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
+                      <span>Browser Tab</span>
+                    </button>
+                    <button class="tab-submenu-ai w-full flex items-center gap-2 px-3 py-2 text-sm text-[#202124] hover:bg-[#f5f7fa] transition-colors text-left">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path><circle cx="12" cy="12" r="5"></circle></svg>
+                      <span>AI Dashboard</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div id="tabs-cont" class="px-2 space-y-0.5"></div>
+              <div id="personal-tabs-cont" style="display: none;"></div>
+              <!-- More button (3 dots horizontal + text) - Desktop -->
+              <div id="sidebar-more-btn" class="tab-item px-2 py-1.5 mx-2 flex items-center justify-center gap-3 cursor-pointer hover:bg-gray-100 transition-colors rounded-lg relative" style="display: none;">
+                <span class="text-xs text-gray-600 font-medium">More</span>
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-gray-600">
+                  <circle cx="12" cy="12" r="1"></circle>
+                  <circle cx="19" cy="12" r="1"></circle>
+                  <circle cx="5" cy="12" r="1"></circle>
+                </svg>
+                <!-- More dropdown menu -->
+                <div id="more-dropdown" class="more-dropdown-menu">
+                  <div id="more-dropdown-content" class="more-dropdown-content">
+                    <!-- Tabs will be rendered here -->
+                  </div>
+                </div>
+              </div>
+            </div>
+            
+            <!-- Sección Projects -->
+            <div class="py-0.5 mt-3">
+              <div class="w-full flex items-center justify-between px-2 py-1.5 text-xs font-semibold text-[#5f6368] uppercase tracking-wide">
+                <span>Projects</span>
+                <button id="project-btn" class="p-0.5 hover:bg-[#e8eaed] rounded transition-colors" title="New Project">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: #5f6368;">
+                    <line x1="12" y1="5" x2="12" y2="19"></line>
+                    <line x1="5" y1="12" x2="19" y2="12"></line>
+                  </svg>
+        </button>
+              </div>
+              <div id="projects-cont" class="px-2 space-y-0.5"></div>
+            </div>
+            
+            <!-- Sección Users -->
+            <div class="py-0.5 mt-3">
+              <div class="w-full flex items-center justify-between px-2 py-1.5 text-xs font-semibold text-[#5f6368] uppercase tracking-wide">
+                <span>Users</span>
+                <button id="dm-btn" class="p-0.5 hover:bg-[#e8eaed] rounded transition-colors" title="New Message">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: #5f6368;">
+                    <line x1="12" y1="5" x2="12" y2="19"></line>
+                    <line x1="5" y1="12" x2="19" y2="12"></line>
+                  </svg>
+        </button>
+      </div>
+              <div id="users-cont" class="px-2 space-y-0.5"></div>
+        </div>
+        </div>
+
+          <!-- Bottom section -->
+          <div class="p-2 space-y-0.5 border-t border-[#e8eaed]/50">
+            <!-- Settings -->
+            <button id="settings-btn" class="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-[#5f6368] hover:text-[#202124] hover:bg-[#e8eaed] transition-all text-xs" title="Settings">
+              <i data-lucide="settings" class="w-4 h-4"></i>
+              <span>Settings</span>
+            </button>
+
+            <!-- User info & logout -->
+            <div id="user-info-cont" class="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-[#e8eaed] transition-all cursor-pointer">
+              <!-- User info will be rendered here by luna-integration.js -->
+        </div>
+          </div>
+        </div>
+      </div>
+      
+        <!-- Contenido principal (TopBar si hay espacio activo + nav bar + iframe) - Envuelto en tarjeta -->
+        <div class="flex-1 flex flex-col" style="background-color: #ececed; padding-top: 6px; padding-bottom: 6px; padding-left: 3px; padding-right: 6px;">
+        <div class="h-full flex flex-col bg-white rounded-2xl overflow-hidden">
+          <!-- TopBar for active space (Projects/DMs) - estilo minimalista vertical -->
+          <div id="topbar-space" class="bg-white border-b border-[#e8eaed] hidden" style="display: none;">
+            <div class="flex items-start gap-2 px-2 py-1 relative w-full">
+              <!-- Space avatar/icon - a la izquierda de todo -->
+              <div id="topbar-space-avatar" class="w-7 h-7 rounded-full bg-gray-200 flex items-center justify-center text-gray-600 text-xs font-medium flex-shrink-0 overflow-hidden mt-0.5">
+                <!-- Avatar will be rendered here by luna-integration.js -->
+              </div>
+              <!-- Right side: Name + Tabs -->
+              <div class="flex flex-col flex-1 min-w-0">
+                <!-- Space name -->
+                <span id="topbar-space-name" class="text-sm font-medium text-[#5f6368] truncate mb-1"></span>
+                <!-- Tabs row -->
+                <div id="topbar-tabs-cont" class="flex items-center gap-0.5 overflow-x-auto">
+                  <!-- Tabs will be rendered here by luna-integration.js -->
+                </div>
+              </div>
+              <!-- Three dots menu button - positioned absolutely at top right -->
+              <button id="topbar-settings-btn" class="absolute top-1 right-2 p-1 hover:bg-gray-100 rounded transition-colors flex-shrink-0" title="Project Settings">
+                <i data-lucide="more-vertical" class="w-4 h-4 text-gray-600"></i>
+              </button>
+            </div>
+          </div>
+          
+          <!-- Project Settings Sidebar -->
+          <div id="project-settings-sidebar" class="project-settings-sidebar hidden">
+            <div class="project-settings-content">
+              <!-- Header -->
+              <div class="project-settings-header">
+                <h2 class="project-settings-title">Project Settings</h2>
+                <button id="project-settings-close" class="project-settings-close-btn" title="Close">
+                  <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+              </div>
+              
+              <!-- Members Section -->
+              <div class="project-settings-section">
+                <div class="members-header">
+                  <h3 class="members-title">Members</h3>
+                  <span id="members-count" class="members-count">0</span>
+                </div>
+                
+                <!-- Search bar -->
+                <div class="members-search">
+                  <i data-lucide="search" class="w-4 h-4 text-gray-400"></i>
+                  <input type="text" id="members-search-input" class="members-search-input" placeholder="Search" />
+                </div>
+                
+                <!-- Members list (horizontal scroll) -->
+                <div id="members-list" class="members-list">
+                  <!-- Members will be rendered here by luna-integration.js -->
+                </div>
+                
+                <!-- Add/Remove buttons -->
+                <div class="members-actions">
+                  <button id="add-member-btn" class="member-action-btn member-add-btn" title="Add Member">
+                    <i data-lucide="plus" class="w-4 h-4"></i>
+                  </button>
+                  <button id="remove-member-btn" class="member-action-btn member-remove-btn" title="Remove Selected Members" style="display: none;">
+                    <i data-lucide="minus" class="w-4 h-4"></i>
+                  </button>
+                </div>
+              </div>
+              
+              <!-- Delete Project Section -->
+              <div class="project-settings-section project-settings-danger">
+                <button id="delete-project-btn" class="delete-project-btn">
+                  Delete Project
+                </button>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Add Members Modal -->
+          <div id="add-members-modal" class="add-members-modal hidden">
+            <div class="add-members-modal-content">
+              <div class="add-members-header">
+                <h3 class="add-members-title">Add Members</h3>
+                <button id="add-members-close" class="add-members-close-btn" title="Close">
+                  <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+              </div>
+              
+              <div class="add-members-search">
+                <i data-lucide="search" class="w-4 h-4 text-gray-400"></i>
+                <input type="text" id="add-members-search-input" class="add-members-search-input" placeholder="Search users..." />
+              </div>
+              
+              <div id="add-members-list" class="add-members-list">
+                <!-- Users will be rendered here by luna-integration.js -->
+              </div>
+              
+              <div class="add-members-footer">
+                <button id="add-members-cancel" class="add-members-cancel-btn">Cancel</button>
+                <button id="add-members-submit" class="add-members-submit-btn">Add Selected</button>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Delete Confirmation Modal -->
+          <div id="delete-project-modal" class="delete-project-modal hidden">
+            <div class="delete-project-modal-content">
+              <h3 class="delete-project-modal-title">Delete Project</h3>
+              <p class="delete-project-modal-text">
+                Are you sure you want to delete this project? This will permanently delete the project from Notion and remove all tabs. This action cannot be undone.
+              </p>
+              <div class="delete-project-modal-actions">
+                <button id="delete-project-cancel" class="delete-project-cancel-btn">Cancel</button>
+                <button id="delete-project-confirm" class="delete-project-confirm-btn">Delete Project</button>
+              </div>
+            </div>
+          </div>
+          
+          <div class="flex w-full flex-col z-50" id="d-url" style="background-color: #f7f7f7; min-height: 22px; transition: min-height 0.2s ease;">
+            <!-- Barra principal de navegación -->
+            <div class="flex w-full h-[22px] p-0.5 pl-1 pr-1.5 gap-0.5 items-center">
+              <div class="has-tooltip w-4 h-4 duration-100 ease-in rounded flex justify-center items-center relative hover:bg-gray-300" style="color: #6b7280;">
+                <i data-lucide="arrow-left" class="w-3 h-3" id="n-bk"></i>
+              </div>
+              <div class="has-tooltip w-4 h-4 duration-100 ease-in rounded flex justify-center items-center relative hover:bg-gray-300" style="color: #6b7280;">
+                <i data-lucide="arrow-right" class="w-3 h-3" id="n-fw"></i>
+              </div>
+              <div class="has-tooltip w-4 h-4 duration-100 ease-in rounded flex justify-center items-center relative hover:bg-gray-300" style="color: #6b7280;">
+                <i data-lucide="rotate-cw" class="w-3 h-3" id="n-rl"></i>
+              </div>
+              <div class="has-tooltip w-4 h-4 duration-100 ease-in rounded flex justify-center items-center relative hover:bg-gray-300" style="color: #6b7280;" id="return-home-btn" title="Return Home">
+                <i data-lucide="home" class="w-3 h-3"></i>
+              </div>
+              <div class="ub group flex flex-1 border-0 rounded items-center pl-1 ml-0.5 mr-0.5 h-full" style="background-color: #f7f7f7;">
+                <input id="url" class="outline-hidden flex-1 text-[10px] bg-transparent" style="color: #6b7280;" placeholder="Search or type any URL" onmousedown="this.focus()"/>
+              </div>
+              <div id="dropdown" class="dropdown-menu">
+                <button id="menu-btn" aria-haspopup="menu" aria-controls="menu-popover" aria-expanded="false" class="has-tooltip w-4 h-4 duration-100 ease-in rounded flex justify-center items-center relative hover:bg-gray-300" style="color: #6b7280;">
+                  <i data-lucide="menu" class="w-3 h-3"></i>
+                  <span class="tooltip rounded-sm shadow-lg p-1 text-[9px] absolute top-full mt-1 whitespace-nowrap">Menu</span>
+                </button>
+                <div id="menu-popover" aria-hidden="true" class="min-w-46">
+                  <div role="menu" aria-labelledby="menu-btn">
+                    <div role="menuitem" id="t-add">New Tab<span class="text-muted-foreground ml-auto text-xs">alt + n</span></div>
+                    <div role="menuitem" id="t-clear">Clear Tabs<span class="text-muted-foreground ml-auto text-xs">alt + c</span></div>
+                    <div role="menuitem" id="t-fs">Fullscreen<span class="text-muted-foreground ml-auto text-xs">shift + f</span></div>
+                    <hr role="separator" />
+                    <div role="menuitem" id="t-dev">DevTools<span class="text-muted-foreground ml-auto text-xs">alt + i</span></div>
+                    <div role="menuitem" id="rm-bar">Hide Bar<span class="text-muted-foreground ml-auto text-xs">alt + z</span></div>
+                    <hr role="separator" />
+                    <div role="menuitem" id="toggle-proxy-indicator" class="flex items-center justify-between">
+                      <span>Show Proxy Indicator</span>
+                      <span id="proxy-indicator-status" class="text-muted-foreground text-xs"></span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <!-- Indicador del Cloudflare Worker (solo para Notion) -->
+            <div id="notion-worker-indicator" style="display: none; padding: 2px 8px; font-size: 9px; color: #6b7280; background-color: #e5e7eb; border-top: 1px solid #d1d5db; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+              Proxied via: https://silent-queen-f1d8.sebdiar.workers.dev/...
+            </div>
+          </div>
+      <div id="fcn" class="w-full flex-1 relative">
+        <div class="relative w-full h-full lscr"></div>
+          <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2">
+            <div class="loading">
+              <svg width="64px" height="48px">
+                <polyline points="0.157 23.954, 14 23.954, 21.843 48, 43 0, 50 24, 64 24" id="back"></polyline>
+                <polyline points="0.157 23.954, 14 23.954, 21.843 48, 43 0, 50 24, 64 24" id="front"></polyline>
+              </svg>
+            </div>
+          </div>
+        </div>
+        <div id="class-portal" style="position: absolute; inset: 0; z-index: 1; display: none;"></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="toaster" class="toaster"></div>
+    <script src="./scripts/tabs.js" type="module"></script>
+    <script src="./scripts/luna-integration-mobile-bottom-bar.js"></script>
+    <script src="./scripts/luna-integration.js" type="module"></script>
+    <script>
+      // Setup Return Home button
+      (function() {
+        function setupReturnHome() {
+          const returnHomeBtn = document.getElementById('return-home-btn');
+          if (returnHomeBtn) {
+            returnHomeBtn.addEventListener('click', () => {
+              if (window.parent && window.parent !== window) {
+                window.parent.postMessage({ action: 'navigate', to: '/indev' }, '*');
+              } else {
+                window.location.href = '/indev';
+              }
+            });
+          } else {
+            setTimeout(setupReturnHome, 100);
+          }
+        }
+        if (document.readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', setupReturnHome);
+        } else {
+          setupReturnHome();
+        }
+      })();
+    </script>
+    <script>
+      // Intercept tab close to delete from backend
+      const API_URL = '';
+      const token = localStorage.getItem('dogeub_token');
+      
+      const setupDOMInterceptor = () => {
+        const tabsContainer = document.getElementById('tabs-cont');
+        if (!tabsContainer) {
+          setTimeout(setupDOMInterceptor, 500);
+          return;
+        }
+        
+        // Wait for TabManager to set onclick, then wrap it
+        const checkForOnclick = () => {
+          if (tabsContainer.onclick && typeof tabsContainer.onclick === 'function') {
+            const originalOnclick = tabsContainer.onclick.bind(tabsContainer);
+            tabsContainer.onclick = function(e) {
+              const closeBtn = e.target.closest('.close-tab');
+              if (closeBtn) {
+                // Get tab info from DOM BEFORE it gets removed
+                const tabEl = closeBtn.closest('.tab-item');
+                const tabTitle = tabEl?.querySelector('span')?.textContent?.trim() || '';
+                
+                // Skip deleting if it's the default new tab or special URLs
+                if (!tabTitle || tabTitle === 'New Tab' || tabTitle.includes('localhost:2345') || tabTitle === 'new') {
+                  originalOnclick(e);
+                  return;
+                }
+                
+                // Delete from backend (don't wait)
+                if (token && tabTitle) {
+                  (async () => {
+                    try {
+                      const response = await fetch(`${API_URL}/api/tabs`, {
+                        headers: {
+                          'Authorization': `Bearer ${token}`,
+                          'Content-Type': 'application/json'
+                        }
+                      });
+                      
+                      if (response.ok) {
+                        const { tabs } = await response.json();
+                        const tabToDelete = tabs.find(t => {
+                          const tTitle = (t.title || '').trim();
+                          return tTitle === tabTitle || tTitle.toLowerCase() === tabTitle.toLowerCase();
+                        });
+                        
+                        if (tabToDelete) {
+                          await fetch(`${API_URL}/api/tabs/${tabToDelete.id}`, {
+                            method: 'DELETE',
+                            headers: {
+                              'Authorization': `Bearer ${token}`,
+                              'Content-Type': 'application/json'
+                            }
+                          });
+                        }
+                      }
+                    } catch (err) {
+                      // Silent error handling
+                    }
+                  })();
+                }
+                
+                // Call original handler for close button
+                originalOnclick(e);
+              } else {
+                // Not a close button - just call original handler immediately
+                originalOnclick(e);
+              }
+            };
+          } else {
+            setTimeout(checkForOnclick, 100);
+          }
+        };
+        checkForOnclick();
+      };
+      
+      // Set up DOM interceptor
+      setupDOMInterceptor();
+    </script>
+
+    <!-- Mobile Bottom Navigation Bar -->
+    <div id="mobile-bottom-bar" style="display: none;">
+      <!-- Tabs will be dynamically added here (max 3) - cloned from sidebar -->
+      <div id="mobile-tabs-container" style="display: flex; flex: 1 1 0; gap: 4px;"></div>
+      
+      <!-- Projects button - with circle like tabs -->
+      <div class="bottom-nav-item" id="mobile-nav-projects" data-view="projects" data-fixed-button="projects">
+        <div class="icon">
+          <div style="width: 36px; height: 36px; border-radius: 50%; background-color: #ffffff; border: 1px solid #e8eaed; display: flex; align-items: center; justify-content: center;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#5f6368" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+              <line x1="3" x2="21" y1="9" y2="9"></line>
+              <line x1="9" x2="9" y1="21" y2="9"></line>
+            </svg>
+          </div>
+        </div>
+        <span class="label">Projects</span>
+      </div>
+
+      <!-- Users/Messenger button - with circle like tabs -->
+      <div class="bottom-nav-item" id="mobile-nav-messenger" data-view="messenger" data-fixed-button="users">
+        <div class="icon">
+          <div style="width: 36px; height: 36px; border-radius: 50%; background-color: #ffffff; border: 1px solid #e8eaed; display: flex; align-items: center; justify-content: center;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#5f6368" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+              <circle cx="9" cy="7" r="4"></circle>
+              <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+              <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+            </svg>
+          </div>
+        </div>
+        <span class="label">Users</span>
+        <div class="badge" id="mobile-messenger-badge" style="display: none;">0</div>
+      </div>
+
+      <!-- More button - with circle like tabs -->
+      <div class="bottom-nav-item" id="mobile-nav-more" data-view="more" data-fixed-button="more">
+        <div class="icon">
+          <div style="width: 36px; height: 36px; border-radius: 50%; background-color: #ffffff; border: 1px solid #e8eaed; display: flex; align-items: center; justify-content: center;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#5f6368" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="5" cy="12" r="1"></circle>
+              <circle cx="12" cy="12" r="1"></circle>
+              <circle cx="19" cy="12" r="1"></circle>
+            </svg>
+          </div>
+        </div>
+        <span class="label">More</span>
+      </div>
+    </div>
+
+    <!-- Mobile Projects View (Full Screen) - Cloned from sidebar -->
+    <div id="mobile-projects-view">
+      <div id="mobile-projects-content" class="p-0">
+        <!-- Entire Projects section will be cloned here from sidebar (including header) -->
+      </div>
+    </div>
+
+    <!-- Mobile Users/Messenger View (Full Screen) - Cloned from sidebar -->
+    <div id="mobile-messenger-view">
+      <div id="mobile-messenger-content" class="p-0">
+        <!-- Entire Users section will be cloned here from sidebar (including header) -->
+      </div>
+    </div>
+
+    <!-- Mobile More View (Modal Sheet from bottom - Extra Tabs) -->
+    <div id="mobile-more-view">
+      <div class="mobile-more-sheet">
+        <div class="mobile-more-handle"></div>
+        <div class="mobile-more-header">
+          <h2 class="mobile-more-title">More</h2>
+          <button id="mobile-more-edit" class="mobile-more-edit-btn">Edit</button>
+        </div>
+        <div id="mobile-more-content" class="mobile-more-grid">
+          <!-- Extra tabs will be rendered here as grid -->
+        </div>
+      </div>
+    </div>
+
+
+    <script>
+      // Mobile detection and initialization
+      (function() {
+        function isMobile() {
+          return window.innerWidth <= 768;
+        }
+
+        function initMobileUI() {
+          if (!isMobile()) {
+            document.getElementById('mobile-bottom-bar').style.display = 'none';
+            return;
+          }
+
+          // Show mobile bottom bar
+          const bottomBar = document.getElementById('mobile-bottom-bar');
+          if (bottomBar) {
+            bottomBar.style.display = 'flex';
+          }
+
+          // Mobile navigation handlers
+          setupMobileNavigation();
+
+          // Initialize mobile views
+          if (window.lunaIntegration) {
+            window.lunaIntegration.initMobileViews();
+          }
+        }
+
+        function setupMobileNavigation() {
+          // Projects view
+          const projectsBtn = document.getElementById('mobile-nav-projects');
+          if (projectsBtn) {
+            projectsBtn.addEventListener('click', () => {
+              showMobileView('projects');
+              if (window.lunaIntegration) {
+                window.lunaIntegration.renderMobileProjects();
+              }
+            });
+          }
+
+          // Messenger view
+          const messengerBtn = document.getElementById('mobile-nav-messenger');
+          if (messengerBtn) {
+            messengerBtn.addEventListener('click', () => {
+              showMobileView('messenger');
+              if (window.lunaIntegration) {
+                window.lunaIntegration.renderMobileMessenger();
+              }
+            });
+          }
+
+          // More view
+          const moreBtn = document.getElementById('mobile-nav-more');
+          const moreView = document.getElementById('mobile-more-view');
+          const moreEditBtn = document.getElementById('mobile-more-edit');
+          let isEditingMore = false;
+
+          if (moreBtn) {
+            moreBtn.addEventListener('click', () => {
+              showMobileView('more');
+              if (window.lunaIntegration) {
+                window.lunaIntegration.renderMobileMore(isEditingMore);
+              }
+            });
+          }
+
+          // Edit button to toggle edit mode
+          if (moreEditBtn) {
+            moreEditBtn.addEventListener('click', async () => {
+              isEditingMore = !isEditingMore;
+              const moreViewElement = document.getElementById('mobile-more-view');
+              const bottomBar = document.getElementById('mobile-bottom-bar');
+              
+              if (moreViewElement) {
+                moreViewElement.classList.toggle('mobile-more-editing', isEditingMore);
+                moreEditBtn.textContent = isEditingMore ? 'Done' : 'Edit';
+              }
+              
+              // Add/remove editing class to bottom bar for wiggle animation
+              if (bottomBar) {
+                if (isEditingMore) {
+                  bottomBar.classList.add('editing');
+                // Add editing class to all bottom nav items
+                const bottomNavItems = bottomBar.querySelectorAll('.bottom-nav-item');
+                bottomNavItems.forEach(item => {
+                    item.classList.add('editing');
+                  });
+                } else {
+                  // Exit edit mode - do this immediately
+                  bottomBar.classList.remove('editing');
+                  // Remove editing class from all bottom nav items
+                  const bottomNavItems = bottomBar.querySelectorAll('.bottom-nav-item');
+                  bottomNavItems.forEach(item => {
+                    item.classList.remove('editing');
+                  });
+                  
+                  // Disable drag & drop immediately
+                  if (window.lunaIntegration) {
+                    // Clear drag setup flag to disable drag & drop and allow re-setup next time
+                    bottomBar.dataset.dragSetup = 'false';
+                    // Remove all drag listeners by removing data attributes
+                    bottomNavItems.forEach(item => {
+                      item.dataset.dragListener = 'false';
+                      // Remove any dragging classes and styles
+                      item.classList.remove('dragging');
+                      item.style.opacity = '';
+                      item.style.touchAction = '';
+                      item.style.userSelect = '';
+                      item.style.webkitUserSelect = '';
+                      item.style.zIndex = '';
+                    });
+                    
+                    // Remover tres puntos inmediatamente cuando se sale del modo de edición
+                    const allThreeDots = bottomBar.querySelectorAll('.mobile-tab-menu-btn');
+                    allThreeDots.forEach(btn => btn.remove());
+                  }
+                  
+                  // Save order when exiting edit mode
+                  if (window.lunaIntegration) {
+                    await window.lunaIntegration.saveMobileBottomBarOrder();
+                  }
+                }
+              }
+              
+              // Update UI immediately
+              if (window.lunaIntegration) {
+                window.lunaIntegration.renderMobileMore(isEditingMore);
+                
+                // Re-render bottom bar to add/remove three dots based on edit mode
+                // Solo llamar UNA VEZ - renderMobileBottomBar() ya maneja los listeners
+                // IMPORTANTE: Pasar isEditingMore para que se remuevan los tres puntos inmediatamente
+                window.lunaIntegration.renderMobileBottomBar(isEditingMore);
+              }
+            });
+          }
+
+          // Close More view when clicking backdrop (but not if in editing mode)
+          if (moreView) {
+            moreView.addEventListener('click', (e) => {
+              if (e.target === moreView) {
+                // Don't close if in editing mode - user needs access to "Done" button
+                const bottomBar = document.getElementById('mobile-bottom-bar');
+                if (bottomBar && bottomBar.classList.contains('editing')) {
+                  return; // Keep More open when in editing mode
+                }
+                hideAllMobileViews();
+              }
+            });
+          }
+
+          // Allow swipe down to close More view
+          let touchStartY = 0;
+          let sheetStartY = 0;
+          if (moreView) {
+            const sheet = moreView.querySelector('.mobile-more-sheet');
+            if (sheet) {
+              sheet.addEventListener('touchstart', (e) => {
+                touchStartY = e.touches[0].clientY;
+                sheetStartY = sheet.getBoundingClientRect().top;
+                e.stopPropagation();
+              }, { passive: true });
+              
+              sheet.addEventListener('touchmove', (e) => {
+                const touchY = e.touches[0].clientY;
+                const deltaY = touchY - touchStartY;
+                // Only allow swipe down if starting near top of sheet
+                if (deltaY > 0 && touchStartY < sheetStartY + 50) {
+                  sheet.style.transform = `translateY(${Math.min(deltaY, 300)}px)`;
+                  sheet.style.transition = 'none';
+                }
+                e.stopPropagation();
+              }, { passive: true });
+              
+              sheet.addEventListener('touchend', (e) => {
+                const touchY = e.changedTouches[0].clientY;
+                const deltaY = touchY - touchStartY;
+                if (deltaY > 100) {
+                  // Don't close if in editing mode - user needs access to "Done" button
+                  const bottomBar = document.getElementById('mobile-bottom-bar');
+                  if (bottomBar && bottomBar.classList.contains('editing')) {
+                    // Reset transform but don't close
+                    sheet.style.transform = '';
+                    sheet.style.transition = '';
+                    e.stopPropagation();
+                    return;
+                  }
+                  hideAllMobileViews();
+                } else {
+                  sheet.style.transform = '';
+                  sheet.style.transition = '';
+                }
+                e.stopPropagation();
+              }, { passive: true });
+            }
+          }
+        }
+
+        function showMobileView(viewName) {
+          // Hide all views
+          hideAllMobileViews();
+
+          // Show selected view
+          const view = document.getElementById(`mobile-${viewName}-view`);
+          if (view) {
+            view.classList.add('active');
+          }
+
+          // Update active state in bottom bar
+          document.querySelectorAll('#mobile-bottom-bar .bottom-nav-item').forEach(item => {
+            item.classList.remove('active');
+          });
+          const btn = document.getElementById(`mobile-nav-${viewName}`);
+          if (btn) {
+            btn.classList.add('active');
+          }
+        }
+
+        function hideAllMobileViews() {
+          document.querySelectorAll('[id$="-view"]').forEach(view => {
+            if (view.id.includes('mobile-')) {
+              view.classList.remove('active');
+            }
+          });
+
+          // Remove active state from all nav items
+          document.querySelectorAll('#mobile-bottom-bar .bottom-nav-item').forEach(item => {
+            item.classList.remove('active');
+          });
+        }
+
+        // Initialize on load
+        if (document.readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', initMobileUI);
+        } else {
+          initMobileUI();
+        }
+
+        // Re-initialize on resize
+        let resizeTimer;
+        window.addEventListener('resize', () => {
+          clearTimeout(resizeTimer);
+          resizeTimer = setTimeout(initMobileUI, 250);
+        });
+
+        // Expose functions globally
+        window.mobileUI = {
+          showView: showMobileView,
+          hideAll: hideAllMobileViews,
+          isMobile: isMobile
+        };
+      })();
+
+      // Sidebar resize functionality - usando overlay invisible para capturar eventos sobre iframe
+      (function() {
+        const sidebar = document.getElementById('sidebar');
+        const resizeHandle = document.getElementById('sidebar-resize-handle');
+        
+        if (!sidebar || !resizeHandle) return;
+
+        let isResizing = false;
+        let startX = 0;
+        let startWidth = 0;
+        let resizeOverlay = null;
+
+        const createOverlay = () => {
+          // Crear overlay invisible que cubre toda la pantalla
+          const overlay = document.createElement('div');
+          overlay.id = 'resize-overlay';
+          overlay.style.cssText = 'position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 9999; cursor: col-resize; background: transparent; pointer-events: all;';
+          document.body.appendChild(overlay);
+          return overlay;
+        };
+
+        const removeOverlay = () => {
+          if (resizeOverlay) {
+            resizeOverlay.remove();
+            resizeOverlay = null;
+          }
+        };
+
+        const handleMouseMove = (e) => {
+          if (!isResizing) return;
+          
+          const deltaX = e.clientX - startX;
+          const newWidth = Math.max(140, Math.min(400, startWidth + deltaX));
+          sidebar.style.width = newWidth + 'px';
+        };
+
+        const handleMouseUp = (e) => {
+          if (isResizing) {
+            isResizing = false;
+            resizeHandle.style.backgroundColor = 'transparent';
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+            removeOverlay();
+            
+            // Remover listeners
+            document.removeEventListener('mousemove', handleMouseMove);
+            document.removeEventListener('mouseup', handleMouseUp);
+            window.removeEventListener('mousemove', handleMouseMove);
+            window.removeEventListener('mouseup', handleMouseUp);
+          }
+        };
+
+        // Event listener en el handle para iniciar el resize
+        resizeHandle.addEventListener('mousedown', (e) => {
+          isResizing = true;
+          startX = e.clientX;
+          startWidth = sidebar.offsetWidth;
+          resizeHandle.style.backgroundColor = '#60a5fa';
+          document.body.style.cursor = 'col-resize';
+          document.body.style.userSelect = 'none';
+          
+          // Crear overlay invisible para capturar eventos sobre iframe
+          resizeOverlay = createOverlay();
+          
+          // Agregar listeners al overlay también
+          resizeOverlay.addEventListener('mousemove', handleMouseMove);
+          resizeOverlay.addEventListener('mouseup', handleMouseUp);
+          
+          // Listeners globales en document y window
+          document.addEventListener('mousemove', handleMouseMove);
+          document.addEventListener('mouseup', handleMouseUp);
+          window.addEventListener('mousemove', handleMouseMove);
+          window.addEventListener('mouseup', handleMouseUp);
+          
+          e.preventDefault();
+          e.stopPropagation();
+        });
+      })();
+
+      // Show scrollbar when scrolling
+      (function() {
+        const scrollableContainer = document.querySelector('#sidebar .sidebar-scrollable');
+        if (!scrollableContainer) return;
+
+        let scrollTimeout;
+        let isScrolling = false;
+
+        const handleScroll = () => {
+          if (!isScrolling) {
+            isScrolling = true;
+            scrollableContainer.classList.add('scrolling');
+          }
+
+          clearTimeout(scrollTimeout);
+          scrollTimeout = setTimeout(() => {
+            isScrolling = false;
+            scrollableContainer.classList.remove('scrolling');
+          }, 500);
+        };
+
+        scrollableContainer.addEventListener('scroll', handleScroll, { passive: true });
+        scrollableContainer.addEventListener('wheel', handleScroll, { passive: true });
+      })();
+    </script>
+
+    <!-- User Picker Modal - placed at very end of body to ensure highest stacking context -->
+    <div id="user-picker-modal">
+      <div class="user-picker-dialog">
+        <div class="user-picker-header">
+          <h2 class="user-picker-title">OPEN A CHAT OR GO TO A GROUP CHAT</h2>
+          <button class="user-picker-close" id="user-picker-close">×</button>
+        </div>
+        <div class="user-picker-search">
+          <input
+            type="text"
+            id="user-picker-search-input"
+            class="user-picker-search-input"
+            placeholder="Find member"
+          />
+          <button id="user-picker-go-btn" class="user-picker-go-btn" disabled>Go to chat</button>
+        </div>
+        <div class="user-picker-list" id="user-picker-list">
+          <!-- Users will be rendered here -->
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

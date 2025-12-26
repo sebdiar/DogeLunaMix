@@ -333,11 +333,76 @@ async function updateNotionPageParent(apiKey, pageId, parentPageId, parentProper
   }
 }
 
+/**
+ * Get page icon from Notion
+ * @param {string} apiKey - Notion API key
+ * @param {string} pageId - Notion page ID
+ * @returns {Promise<{type: 'emoji'|'file'|'external'|null, emoji: string|null, url: string|null}>}
+ */
+async function getNotionPageIcon(apiKey, pageId) {
+  if (!apiKey || !pageId) {
+    throw new Error('API key and page ID are required');
+  }
+
+  try {
+    const response = await fetch(`https://api.notion.com/v1/pages/${pageId}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Notion-Version': NOTION_API_VERSION
+      }
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(`Notion API error: ${errorData.message || response.statusText}`);
+    }
+
+    const page = await response.json();
+    
+    // Notion page icon can be:
+    // - { type: 'emoji', emoji: '🎯' }
+    // - { type: 'file', file: { url: '...', expiry_time: '...' } }
+    // - { type: 'external', external: { url: '...' } }
+    // - null (no icon)
+    
+    if (!page.icon) {
+      return { type: null, emoji: null, url: null };
+    }
+
+    if (page.icon.type === 'emoji') {
+      return {
+        type: 'emoji',
+        emoji: page.icon.emoji,
+        url: null
+      };
+    } else if (page.icon.type === 'file') {
+      return {
+        type: 'file',
+        emoji: null,
+        url: page.icon.file?.url || null
+      };
+    } else if (page.icon.type === 'external') {
+      return {
+        type: 'external',
+        emoji: null,
+        url: page.icon.external?.url || null
+      };
+    }
+
+    return { type: null, emoji: null, url: null };
+  } catch (error) {
+    console.error('Error getting Notion page icon:', error);
+    throw error;
+  }
+}
+
 export {
   createNotionPage,
   updateNotionPageName,
   archiveNotionPage,
   queryNotionPages,
   updateNotionPageParent,
+  getNotionPageIcon,
 };
 

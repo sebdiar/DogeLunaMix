@@ -10,7 +10,9 @@
     "preview": "vite preview",
     "backend": "cd backend && npm start",
     "backend:dev": "cd backend && npm run dev",
-    "start:replit": "node replit-start.js"
+    "start:replit": "node replit-start.js",
+    "tunnel": "node dev-local-tunnel.js",
+    "tunnel:backend": "node backend-tunnel.js"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

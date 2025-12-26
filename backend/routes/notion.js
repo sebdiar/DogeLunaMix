@@ -3,6 +3,7 @@ import supabase from '../config/database.js';
 import { authenticate } from '../middleware/auth.js';
 import { getTaskDetails } from '../services/notion-tasks.js';
 import { getOrCreateChatForSpace } from './chat.js';
+import { getNotionPageIcon } from '../services/notion.js';
 
 const router = express.Router();
 
@@ -443,9 +444,24 @@ router.post('/webhook', async (req, res) => {
       
       // Verify the page belongs to projects database (using normalized comparison)
       if (receivedDatabaseId && compareNotionIds(receivedDatabaseId, projectsDatabaseId)) {
-        // This is a project event - handle as before (currently disabled)
-        console.log('⚠️  Project webhook received but IGNORED - projects are only created from the app, not from Notion webhooks');
-        return res.status(200).json({ received: true, message: 'Project webhook disabled - projects only created from app' });
+        // This is a project event - handle icon updates
+        const pageId = event.entity?.id || event.data?.id || event.data?.page_id || null;
+        
+        if (pageId && (event.type === 'page.updated' || event.type === 'page.properties_updated')) {
+          console.log('📝 Processing project icon update:', pageId);
+          
+          // Process icon update asynchronously (don't block webhook response)
+          handleProjectIconUpdate(pageId, process.env.NOTION_API_KEY)
+            .then(() => {
+              console.log('✅ Project icon update completed successfully');
+            })
+            .catch(err => {
+              console.error('❌ Error handling project icon update:', err);
+            });
+        }
+        
+        // Respond quickly to Notion
+        return res.status(200).json({ received: true, type: 'project', message: 'Project event processed' });
       }
     }
     
@@ -830,6 +846,85 @@ async function handleTaskCreated(taskData, apiKey) {
     console.log(`✅ Task message sent to project "${project.name}" chat`);
   } catch (error) {
     console.error('Error handling task created:', error);
+    throw error;
+  }
+}
+
+// Helper: Manejar actualización de ícono de proyecto
+async function handleProjectIconUpdate(pageId, apiKey) {
+  try {
+    if (!apiKey) {
+      console.error('handleProjectIconUpdate: No API key provided');
+      return;
+    }
+
+    console.log('🎨 Handling project icon update:', pageId);
+
+    // Get icon from Notion page
+    const iconData = await getNotionPageIcon(apiKey, pageId);
+    
+    console.log('🎨 Icon data from Notion:', iconData);
+
+    // Find all projects with this notion_page_id (can be multiple users)
+    const { data: projects, error: findError } = await supabase
+      .from('spaces')
+      .select('id, name, user_id, notion_page_id')
+      .eq('notion_page_id', pageId)
+      .eq('category', 'project');
+
+    if (findError) {
+      console.error('❌ Error finding projects:', findError);
+      return;
+    }
+
+    if (!projects || projects.length === 0) {
+      console.log(`⚠️  No projects found with Notion ID ${pageId}`);
+      return;
+    }
+
+    // Prepare update data based on icon type
+    let updateData = {
+      avatar_emoji: null,
+      avatar_photo: null,
+      avatar_color: null,
+      updated_at: new Date().toISOString()
+    };
+
+    if (iconData.type === 'emoji' && iconData.emoji) {
+      // Use emoji as icon
+      updateData.avatar_emoji = iconData.emoji;
+      updateData.avatar_photo = null;
+      // Generate a color based on emoji (optional - you can customize this)
+      updateData.avatar_color = '#4285f4'; // Default blue color
+    } else if (iconData.type === 'file' || iconData.type === 'external') {
+      // Use image URL as icon
+      updateData.avatar_photo = iconData.url;
+      updateData.avatar_emoji = null;
+      updateData.avatar_color = null;
+    } else {
+      // No icon - clear all icon fields
+      updateData.avatar_emoji = null;
+      updateData.avatar_photo = null;
+      updateData.avatar_color = null;
+    }
+
+    // Update all projects with this notion_page_id
+    for (const project of projects) {
+      const { error: updateError } = await supabase
+        .from('spaces')
+        .update(updateData)
+        .eq('id', project.id);
+
+      if (updateError) {
+        console.error(`❌ Error updating project ${project.id}:`, updateError);
+      } else {
+        console.log(`✅ Updated icon for project "${project.name}" (${project.id})`);
+      }
+    }
+
+    console.log(`✅ Project icon update completed for ${projects.length} project(s)`);
+  } catch (error) {
+    console.error('Error handling project icon update:', error);
     throw error;
   }
 }

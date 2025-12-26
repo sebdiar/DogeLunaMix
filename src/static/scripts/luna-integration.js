@@ -3513,9 +3513,17 @@ class LunaIntegration {
     );
 
     // Filtrar tabs de TabManager que pertenecen a este espacio
-    // IMPORTANTE: Para tabs de Notion, usar originalUrl si está disponible para la comparación
+    // Usar backendId primero (más confiable), luego spaceId, y finalmente comparar URLs
     let spaceTabsInTabManager = (window.tabManager?.tabs || []).filter(t => {
-      // Para tabs de Notion, usar originalUrl si está disponible (es la URL guardada en el backend)
+      // Si tiene backendId, verificar si está en spaceTabs
+      if (t.backendId) {
+        return this.spaceTabs.some(st => st.id === t.backendId);
+      }
+      // Si tiene spaceId, verificar si coincide con el espacio activo
+      if (t.spaceId && this.activeSpace && t.spaceId === this.activeSpace.id) {
+        return true;
+      }
+      // Fallback: comparar URLs (para tabs sin backendId)
       const tUrl = (t.originalUrl || t.url || '').trim();
       if (!tUrl || tUrl === '/new' || tUrl === 'tabs://new') return false;
       return spaceTabUrls.has(this.normalizeUrl(tUrl));
@@ -3720,6 +3728,7 @@ class LunaIntegration {
 
     if (existingTab) {
       // Tab ya existe - solo activarlo (es el MISMO tab)
+      // Usar activate() que maneja correctamente la activación sin ocultar otros tabs innecesariamente
       window.tabManager.activate(existingTab.id);
       // Si es chat, asegurar que esté inicializado INMEDIATAMENTE
       if (this.isChatUrl(url)) {
@@ -3739,6 +3748,10 @@ class LunaIntegration {
           }
         }
       }
+      // NO llamar a renderTopBar aquí - activate() ya maneja todo
+      // Solo actualizar el TopBar sin afectar la visibilidad de los tabs
+      this.renderTopBar();
+      return;
     } else {
       // Tab no existe - crear nuevo tab directamente con la URL correcta
       // NO usar add() porque crea un tab con /new por defecto
