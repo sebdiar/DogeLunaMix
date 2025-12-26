@@ -1,7 +1,7 @@
 import express from 'express';
 import supabase from '../config/database.js';
 import { authenticate } from '../middleware/auth.js';
-import { createNotionPage, updateNotionPageName, archiveNotionPage } from '../services/notion.js';
+import { createNotionPage, updateNotionPageName, archiveNotionPage, updateNotionPageParent } from '../services/notion.js';
 
 const router = express.Router();
 router.use(authenticate);
@@ -26,11 +26,14 @@ router.get('/', async (req, res) => {
       query = query.eq('category', category);
     }
     
-    // By default, only show non-archived spaces (can be filtered later with ?archived=true)
+    // Handle archived filter: 'true' = only archived, 'false' = only active, undefined/'all' = all
     const { archived } = req.query;
-    if (archived !== 'true') {
+    if (archived === 'true') {
+      query = query.eq('archived', true);
+    } else if (archived === 'false') {
       query = query.eq('archived', false);
     }
+    // If archived is undefined or 'all', return all (both archived and active)
     
     const { data: spacesData, error } = await query
       .order('position', { ascending: true, nullsFirst: false })
@@ -75,9 +78,13 @@ router.get('/', async (req, res) => {
             memberSpacesQuery = memberSpacesQuery.eq('category', category);
           }
           
-          if (archived !== 'true') {
+          // Apply same archived filter for member spaces
+          if (archived === 'true') {
+            memberSpacesQuery = memberSpacesQuery.eq('archived', true);
+          } else if (archived === 'false') {
             memberSpacesQuery = memberSpacesQuery.eq('archived', false);
           }
+          // If archived is undefined or 'all', return all (both archived and active)
           
           const { data: memberSpaces, error: memberSpacesError } = await memberSpacesQuery
             .order('position', { ascending: true, nullsFirst: false })
@@ -1011,22 +1018,117 @@ router.post('/reorder', async (req, res) => {
       newPosition = target.position || 0;
     } else if (dropPosition === 'after') {
       newPosition = (target.position || 0) + 1;
-    } else {
-      await supabase
+    } else if (dropPosition === 'inside') {
+      // Cuando se arrastra dentro de otro proyecto, ponerlo al final de los hijos
+      const children = allSpaces.filter(s => s.parent_id === targetId && s.id !== spaceId);
+      newPosition = children.length > 0 
+        ? Math.max(...children.map(c => c.position || 0)) + 1 
+        : 0;
+      
+      // Actualizar parent_id y position
+      const { data: updatedSpace } = await supabase
         .from('spaces')
-        .update({ parent_id: targetId, position: 0 })
+        .update({ parent_id: targetId, position: newPosition })
         .eq('id', spaceId)
-        .eq('user_id', req.userId);
+        .eq('user_id', req.userId)
+        .select('notion_page_id, category')
+        .single();
+      
+      // Sync with Notion if space has notion_page_id and is a project
+      if (updatedSpace?.notion_page_id && updatedSpace?.category === 'project') {
+        const targetSpace = allSpaces.find(s => s.id === targetId);
+        if (targetSpace?.notion_page_id) {
+          try {
+            const apiKey = process.env.NOTION_API_KEY;
+            if (apiKey) {
+              await updateNotionPageParent(apiKey, updatedSpace.notion_page_id, targetSpace.notion_page_id);
+            }
+          } catch (notionError) {
+            console.error('Failed to update Notion page parent:', notionError);
+            // Continue even if Notion update fails
+          }
+        }
+      }
+      
+      return res.json({ success: true });
+    } else if (!targetId && targetParentId === null) {
+      // Moving to root level (removing from parent)
+      const rootSiblings = allSpaces.filter(s => !s.parent_id && s.id !== spaceId);
+      newPosition = rootSiblings.length > 0 
+        ? Math.max(...rootSiblings.map(s => s.position || 0)) + 1 
+        : 0;
+      
+      // Actualizar parent_id a null y position
+      const { data: updatedSpace } = await supabase
+        .from('spaces')
+        .update({ parent_id: null, position: newPosition })
+        .eq('id', spaceId)
+        .eq('user_id', req.userId)
+        .select('notion_page_id, category')
+        .single();
+      
+      // Sync with Notion - remove parent relation
+      if (updatedSpace?.notion_page_id && updatedSpace?.category === 'project') {
+        try {
+          const apiKey = process.env.NOTION_API_KEY;
+          if (apiKey) {
+            await updateNotionPageParent(apiKey, updatedSpace.notion_page_id, null);
+          }
+        } catch (notionError) {
+          console.error('Failed to remove Notion page parent:', notionError);
+          // Continue even if Notion update fails
+        }
+      }
       
       return res.json({ success: true });
     }
     
-    await supabase
+    // Para 'before' y 'after', verificar si el parent_id cambió
+    const oldParentId = space.parent_id || null;
+    const newParentId = targetParentId || null;
+    const parentChanged = oldParentId !== newParentId;
+    
+    // Actualizar parent_id y position
+    const { data: updatedSpace } = await supabase
       .from('spaces')
       .update({ parent_id: targetParentId, position: newPosition })
       .eq('id', spaceId)
-      .eq('user_id', req.userId);
+      .eq('user_id', req.userId)
+      .select('notion_page_id, category')
+      .single();
     
+    // Solo sincronizar con Notion si el parent_id cambió (no solo el orden)
+    if (parentChanged && updatedSpace?.notion_page_id && updatedSpace?.category === 'project') {
+      if (newParentId) {
+        // Moving to a new parent - sync with Notion
+        const targetSpace = allSpaces.find(s => s.id === targetId);
+        if (targetSpace?.notion_page_id) {
+          try {
+            const apiKey = process.env.NOTION_API_KEY;
+            if (apiKey) {
+              await updateNotionPageParent(apiKey, updatedSpace.notion_page_id, targetSpace.notion_page_id);
+            }
+          } catch (notionError) {
+            console.error('Failed to update Notion page parent:', notionError);
+            // Continue even if Notion update fails
+          }
+        }
+      } else {
+        // Moving to root - remove parent in Notion
+        try {
+          const apiKey = process.env.NOTION_API_KEY;
+          if (apiKey) {
+            await updateNotionPageParent(apiKey, updatedSpace.notion_page_id, null);
+          }
+        } catch (notionError) {
+          console.error('Failed to remove Notion page parent:', notionError);
+          // Continue even if Notion update fails
+        }
+      }
+    }
+    // Si solo cambió el orden (mismo parent), NO sincronizar con Notion
+    
+    // Ajustar posiciones de los siblings
     for (let i = 0; i < siblings.length; i++) {
       const sibling = siblings[i];
       const currentPos = sibling.position || 0;
@@ -1037,7 +1139,7 @@ router.post('/reorder', async (req, res) => {
           .update({ position: currentPos + 1 })
           .eq('id', sibling.id)
           .eq('user_id', req.userId);
-      } else if (dropPosition === 'after' && currentPos > target.position) {
+      } else if (dropPosition === 'after' && currentPos > (target.position || 0)) {
         await supabase
           .from('spaces')
           .update({ position: currentPos + 1 })
@@ -1086,19 +1188,8 @@ router.patch('/:id/archive', async (req, res) => {
     // Respond immediately (optimistic UI)
     res.json({ space });
     
-    // Sync with Notion in background (don't block response)
-    if (existingSpace.notion_page_id && existingSpace.category === 'project') {
-      const apiKey = process.env.NOTION_API_KEY;
-      
-      if (apiKey) {
-        // Run Notion sync asynchronously without blocking
-        archiveNotionPage(apiKey, existingSpace.notion_page_id, archived)
-          .catch(notionError => {
-            console.error('Failed to archive Notion page (non-blocking):', notionError);
-            // Note: Space is already archived locally, sync will happen on next load
-          });
-      }
-    }
+    // NOTE: Archive functionality no longer syncs with Notion
+    // Each user can archive projects independently based on their own preferences
   } catch (error) {
     console.error('Archive space error:', error);
     res.status(500).json({ error: 'Failed to archive space' });

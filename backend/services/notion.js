@@ -278,10 +278,66 @@ async function archiveNotionPage(apiKey, pageId, archived = true) {
   }
 }
 
+/**
+ * Update parent relation in Notion page
+ * @param {string} apiKey - Notion API key
+ * @param {string} pageId - Notion page ID to update
+ * @param {string|null} parentPageId - Parent Notion page ID (null to remove parent)
+ * @param {string} parentPropertyName - Name of the parent property (default: 'Parent item')
+ */
+async function updateNotionPageParent(apiKey, pageId, parentPageId, parentPropertyName = 'Parent item') {
+  if (!apiKey || !pageId) {
+    throw new Error('API key and page ID are required');
+  }
+
+  try {
+    const properties = {};
+    
+    if (parentPageId) {
+      // Set parent relation
+      properties[parentPropertyName] = {
+        relation: [
+          {
+            id: parentPageId
+          }
+        ]
+      };
+    } else {
+      // Remove parent relation (set to empty array)
+      properties[parentPropertyName] = {
+        relation: []
+      };
+    }
+
+    const response = await fetch(`https://api.notion.com/v1/pages/${pageId}`, {
+      method: 'PATCH',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        'Notion-Version': NOTION_API_VERSION
+      },
+      body: JSON.stringify({
+        properties
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(`Notion API error: ${errorData.message || response.statusText}`);
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('[NOTION] Error updating page parent:', error);
+    throw error;
+  }
+}
+
 export {
   createNotionPage,
   updateNotionPageName,
   archiveNotionPage,
   queryNotionPages,
+  updateNotionPageParent,
 };
 

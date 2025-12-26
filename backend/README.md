@@ -6,7 +6,7 @@ Backend API para DogeUB con Express y Supabase.
 
 1. **Configurar variables de entorno**
 
-   Crea un archivo `.env` en la raíz del proyecto (`dogeub/.env`) con:
+   Crea un archivo `.env` en la raíz del proyecto con:
 
    ```env
    SUPABASE_URL=tu_supabase_url

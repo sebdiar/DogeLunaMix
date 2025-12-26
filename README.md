@@ -92,7 +92,7 @@ La aplicación estará disponible en `http://localhost:2345/indev`
 
 ## 🌐 Deployment en Replit
 
-Ver guía completa en [REPLIT_DEPLOY.md](./REPLIT_DEPLOY.md)
+Ver guía completa en [REPLIT_DEPLOY.md](./docs/REPLIT_DEPLOY.md)
 
 1. Importa el proyecto en Replit
 2. Configura las variables de entorno en Secrets

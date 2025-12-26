@@ -170,6 +170,21 @@
         opacity: 0 !important;
       }
       
+      /* Freeze sidebar during project drag */
+      #projects-cont.dragging-active .project-item:not(.dragging-item):hover {
+        background-color: transparent !important;
+      }
+      
+      #projects-cont.dragging-active .project-item:not(.dragging-item) .project-archive-btn {
+        opacity: 0 !important;
+        pointer-events: none;
+      }
+      
+      /* Drop indicator style */
+      .project-drop-indicator {
+        transition: opacity 0.1s ease;
+      }
+      
       #sidebar {
         min-width: 140px;
         max-width: 300px;
@@ -853,17 +868,15 @@
           margin-bottom: 0;
         }
 
-        /* Ensure iframe container takes correct height leaving space for bottom bar */
+        /* Ensure iframe container takes full height in mobile BUT leaves space for bottom bar */
         #fcn {
+          flex: 1 1 0 !important;
           position: relative !important;
           overflow: hidden !important;
-          /* Don't use flex-1, use explicit height calculation */
-          flex: none !important;
-          /* Calculate exact height: viewport - top position - bottom bar */
-          /* From debug: fcn.top = 116px, bottomBar = 72px, so available = 793 - 116 - 72 = 605px */
-          height: calc(100dvh - 116px - 72px) !important;
-          max-height: calc(100dvh - 116px - 72px) !important;
-          min-height: calc(100dvh - 116px - 72px) !important;
+          min-height: 0 !important;
+          /* CRITICAL: Subtract 72px for bottom bar */
+          height: calc(100% - 72px) !important;
+          max-height: calc(100dvh - 72px) !important;
         }
 
         /* Ensure iframes fill the container */
@@ -894,81 +907,7 @@
           display: none !important;
         }
 
-        /* More dropdown menu - Floating menu like tab submenu */
-        .more-dropdown-menu {
-          display: none;
-          position: fixed;
-          background-color: #ffffff;
-          border: 1px solid #e8eaed;
-          border-radius: 8px;
-          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-          z-index: 10000;
-          min-width: 240px;
-          max-width: 280px;
-          max-height: 60vh;
-          overflow: hidden;
-          flex-direction: column;
-        }
-
-        /* Position dropdown to the right of sidebar */
-        #sidebar-more-btn {
-          position: relative;
-        }
-
-        .more-dropdown-menu.active {
-          display: flex;
-        }
-
-        .more-dropdown-content {
-          padding: 4px 0;
-          overflow-y: auto;
-          max-height: 60vh;
-          /* Scrollbar overlay - no reserva espacio cuando no se usa */
-          scrollbar-gutter: auto;
-        }
-
-        /* More dropdown uses same tab-item style as sidebar */
-        .more-dropdown-content .tab-item {
-          margin-bottom: 2px;
-          margin-left: 8px;
-          margin-right: 8px;
-        }
-
-        /* Scrollbar for more dropdown - overlay style, solo aparece cuando se scrollea */
-        .more-dropdown-content::-webkit-scrollbar {
-          width: 6px;
-        }
-
-        .more-dropdown-content::-webkit-scrollbar-track {
-          background: transparent;
-        }
-
-        .more-dropdown-content::-webkit-scrollbar-thumb {
-          background: transparent;
-          border-radius: 3px;
-          transition: background 0.2s ease;
-        }
-
-        /* Mostrar scrollbar solo cuando se está scrolleando o hover */
-        .more-dropdown-content:not(:hover):not(:active)::-webkit-scrollbar-thumb {
-          background: transparent;
-        }
-
-        .more-dropdown-content:hover::-webkit-scrollbar-thumb,
-        .more-dropdown-content:active::-webkit-scrollbar-thumb {
-          background: #d1d5db;
-        }
-
-        /* Firefox: scrollbar overlay - no reserva espacio */
-        .more-dropdown-content {
-          scrollbar-width: thin;
-          scrollbar-color: transparent transparent;
-        }
-
-        .more-dropdown-content:hover,
-        .more-dropdown-content:active {
-          scrollbar-color: #d1d5db transparent;
-        }
+        /* More dropdown removed - no longer needed */
       }
 
       /* URL bar menu popover styles */
@@ -1822,21 +1761,6 @@
               </div>
               <div id="tabs-cont" class="px-2 space-y-0.5"></div>
               <div id="personal-tabs-cont" style="display: none;"></div>
-              <!-- More button (3 dots horizontal + text) - Desktop -->
-              <div id="sidebar-more-btn" class="tab-item px-2 py-1.5 mx-2 flex items-center justify-center gap-3 cursor-pointer hover:bg-gray-100 transition-colors rounded-lg relative" style="display: none;">
-                <span class="text-xs text-gray-600 font-medium">More</span>
-                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-gray-600">
-                  <circle cx="12" cy="12" r="1"></circle>
-                  <circle cx="19" cy="12" r="1"></circle>
-                  <circle cx="5" cy="12" r="1"></circle>
-                </svg>
-                <!-- More dropdown menu -->
-                <div id="more-dropdown" class="more-dropdown-menu">
-                  <div id="more-dropdown-content" class="more-dropdown-content">
-                    <!-- Tabs will be rendered here -->
-                  </div>
-                </div>
-              </div>
             </div>
             
             <!-- Sección Projects -->
@@ -2065,28 +1989,8 @@
     <script src="./scripts/luna-integration-mobile-bottom-bar.js"></script>
     <script src="./scripts/luna-integration.js" type="module"></script>
     <script>
-      // Setup Return Home button
-      (function() {
-        function setupReturnHome() {
-          const returnHomeBtn = document.getElementById('return-home-btn');
-          if (returnHomeBtn) {
-            returnHomeBtn.addEventListener('click', () => {
-              if (window.parent && window.parent !== window) {
-                window.parent.postMessage({ action: 'navigate', to: '/indev' }, '*');
-              } else {
-                window.location.href = '/indev';
-              }
-            });
-          } else {
-            setTimeout(setupReturnHome, 100);
-          }
-        }
-        if (document.readyState === 'loading') {
-          document.addEventListener('DOMContentLoaded', setupReturnHome);
-        } else {
-          setupReturnHome();
-        }
-      })();
+      // Return Home button is now handled by TabManager.home() via domMap
+      // No need for separate setup
     </script>
     <script>
       // Intercept tab close to delete from backend

@@ -137,7 +137,6 @@ router.get('/preferences', async (req, res) => {
     
     const metadata = user?.metadata || {};
     const preferences = {
-      desktop_more_tab_ids: metadata.desktop_more_tab_ids || [],
       mobile_more_tab_ids: metadata.mobile_more_tab_ids || []
     };
     
@@ -151,7 +150,7 @@ router.get('/preferences', async (req, res) => {
 // Update user preferences
 router.put('/preferences', async (req, res) => {
   try {
-    const { desktop_more_tab_ids, mobile_more_tab_ids } = req.body;
+    const { mobile_more_tab_ids } = req.body;
     
     // Get current metadata
     const { data: user, error: fetchError } = await supabase
@@ -168,7 +167,6 @@ router.put('/preferences', async (req, res) => {
     const currentMetadata = user?.metadata || {};
     const updatedMetadata = {
       ...currentMetadata,
-      ...(desktop_more_tab_ids !== undefined && { desktop_more_tab_ids }),
       ...(mobile_more_tab_ids !== undefined && { mobile_more_tab_ids })
     };
     
@@ -184,7 +182,6 @@ router.put('/preferences', async (req, res) => {
     
     res.json({ 
       preferences: {
-        desktop_more_tab_ids: updatedMetadata.desktop_more_tab_ids || [],
         mobile_more_tab_ids: updatedMetadata.mobile_more_tab_ids || []
       }
     });
