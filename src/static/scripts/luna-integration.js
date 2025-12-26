@@ -674,13 +674,20 @@ class LunaIntegration {
           if (activeTab && this.activeSpace) {
             // Check if this tab belongs to the active space
             const activeTabUrl = activeTab.originalUrl || activeTab.url || '';
-            const isSpaceTab = this.spaceTabs.some(spaceTab => {
-              const spaceTabUrl = spaceTab.url || spaceTab.bookmark_url;
-              if (!spaceTabUrl || !activeTabUrl) return false;
-              
-              // Normalize URLs for comparison (handles Notion URLs with/without Worker)
-              return this.normalizeUrl(spaceTabUrl) === this.normalizeUrl(activeTabUrl);
-            });
+            // Check by backendId first (more reliable), then by URL
+            let isSpaceTab = false;
+            if (activeTab.backendId) {
+              isSpaceTab = this.spaceTabs.some(spaceTab => spaceTab.id === activeTab.backendId);
+            }
+            if (!isSpaceTab) {
+              isSpaceTab = this.spaceTabs.some(spaceTab => {
+                const spaceTabUrl = spaceTab.url || spaceTab.bookmark_url;
+                if (!spaceTabUrl || !activeTabUrl) return false;
+                
+                // Normalize URLs for comparison (handles Notion URLs with/without Worker)
+                return this.normalizeUrl(spaceTabUrl) === this.normalizeUrl(activeTabUrl);
+              });
+            }
             
             // If tab doesn't belong to active space, clear active space (hide top bar)
             if (!isSpaceTab && !this.isChatUrl(activeTab.url)) {
@@ -3529,6 +3536,23 @@ class LunaIntegration {
       return spaceTabUrls.has(this.normalizeUrl(tUrl));
     });
     
+    // IMPORTANTE: Deduplicar tabs por backendId - solo mantener el tab más reciente o activo
+    // Esto previene que se muestren tabs duplicados cuando hay múltiples tabs con el mismo backendId
+    const tabsByBackendId = new Map();
+    spaceTabsInTabManager.forEach(t => {
+      if (t.backendId) {
+        const existing = tabsByBackendId.get(t.backendId);
+        // Preferir tab activo, o el más reciente si ninguno está activo
+        if (!existing || (t.active && !existing.active) || (!existing.active && !t.active && t.id > existing.id)) {
+          tabsByBackendId.set(t.backendId, t);
+        }
+      } else {
+        // Tabs sin backendId se mantienen (se deduplican por URL más abajo)
+        tabsByBackendId.set(`no-backend-${t.id}`, t);
+      }
+    });
+    spaceTabsInTabManager = Array.from(tabsByBackendId.values());
+    
     // Ordenar según el orden del backend (position) - mapear cada tab de TabManager con su backend tab
     // IMPORTANTE: Para tabs de Notion, usar originalUrl si está disponible para la comparación
     spaceTabsInTabManager = spaceTabsInTabManager.sort((a, b) => {
@@ -3551,7 +3575,15 @@ class LunaIntegration {
     
     // USAR EXACTAMENTE EL MISMO tabTemplate - CÓDIGO ÚNICO
     // Estos son los MISMOS objetos de TabManager, solo cambia isTopBar=true
+    // IMPORTANTE: Sincronizar el estado active antes de renderizar para evitar desincronización visual
+    const actuallyActiveTab = window.tabManager?.active();
+    const actuallyActiveTabId = actuallyActiveTab?.id;
     spaceTabsInTabManager.forEach(tabManagerTab => {
+      // Sincronizar el estado active con el tab realmente activo
+      const isActuallyActive = tabManagerTab.id === actuallyActiveTabId;
+      if (isActuallyActive !== tabManagerTab.active) {
+        tabManagerTab.active = isActuallyActive;
+      }
       // USAR EL OBJETO REAL DE TabManager - NO CREAR COPIA
       const tabHtml = window.tabManager.tabTemplate(tabManagerTab, true, true); // showMenu=true, isTopBar=true
       
@@ -3716,20 +3748,40 @@ class LunaIntegration {
     const tabManagerTabs = window.tabManager.tabs || [];
     
     // Buscar si el tab ya está abierto en TabManager (es el MISMO tab)
-    // IMPORTANTE: Excluir tabs con /new o tabs://new (estos son tabs "nuevos" no inicializados)
-    // IMPORTANTE: Para tabs de Notion, usar originalUrl si está disponible para la comparación
-    const existingTab = tabManagerTabs.find(t => {
-      // Para tabs de Notion, usar originalUrl si está disponible (es la URL guardada en el backend)
-      const tUrl = (t.originalUrl || t.url || '').trim();
-      if (!tUrl || tUrl === '/new' || tUrl === 'tabs://new') return false;
-      // Comparar URLs normalizadas
-      return this.normalizeUrl(tUrl) === normalizedUrl;
-    });
+    // IMPORTANTE: Usar la misma lógica que renderTopBar para consistencia
+    // 1. Buscar primero por backendId (más confiable, no depende de URLs)
+    // 2. Si no tiene backendId, buscar por URL normalizada
+    let existingTab = null;
+    
+    // Si el tab del backend tiene un ID, buscar por backendId primero
+    if (tab.id) {
+      existingTab = tabManagerTabs.find(t => t.backendId === tab.id);
+    }
+    
+    // Si no se encontró por backendId, buscar por URL (fallback)
+    if (!existingTab) {
+      existingTab = tabManagerTabs.find(t => {
+        // Excluir tabs con /new o tabs://new (estos son tabs "nuevos" no inicializados)
+        const tUrl = (t.originalUrl || t.url || '').trim();
+        if (!tUrl || tUrl === '/new' || tUrl === 'tabs://new') return false;
+        // Comparar URLs normalizadas
+        return this.normalizeUrl(tUrl) === normalizedUrl;
+      });
+    }
 
     if (existingTab) {
       // Tab ya existe - solo activarlo (es el MISMO tab)
+      // IMPORTANTE: Actualizar backendId y spaceId si no los tiene (para evitar duplicados futuros)
+      if (!existingTab.backendId && tab.id) {
+        existingTab.backendId = tab.id;
+      }
+      if (!existingTab.spaceId && tab.space_id) {
+        existingTab.spaceId = tab.space_id;
+      }
+      
       // Usar activate() que maneja correctamente la activación sin ocultar otros tabs innecesariamente
       window.tabManager.activate(existingTab.id);
+      
       // Si es chat, asegurar que esté inicializado INMEDIATAMENTE
       if (this.isChatUrl(url)) {
         const spaceId = url.split('/').pop();
@@ -3748,9 +3800,13 @@ class LunaIntegration {
           }
         }
       }
-      // NO llamar a renderTopBar aquí - activate() ya maneja todo
-      // Solo actualizar el TopBar sin afectar la visibilidad de los tabs
-      this.renderTopBar();
+      
+      // Llamar a renderTopBar para actualizar la selección visual
+      // Usar un pequeño delay para asegurar que activate() termine de actualizar el estado
+      // y evitar condiciones de carrera con el interceptor
+      setTimeout(() => {
+        this.renderTopBar();
+      }, 100);
       return;
     } else {
       // Tab no existe - crear nuevo tab directamente con la URL correcta
@@ -3770,10 +3826,11 @@ class LunaIntegration {
         spaceId: tab.space_id || null // Guardar space_id para identificar tabs del espacio
       };
       
-      // Desactivar todos los tabs existentes
+      // Usar activate() en lugar de establecer active directamente
+      // Esto asegura que el interceptor se ejecute y maneje renderTopBar()
       window.tabManager.tabs.forEach(t => t.active = false);
-      
       window.tabManager.tabs.push(newTab);
+      window.tabManager.activate(newTab.id);
       
       // Crear contenedor apropiado (chat, dashboard, o iframe)
       if (window.tabManager.isChatUrl && window.tabManager.isChatUrl(url)) {
@@ -3805,9 +3862,14 @@ class LunaIntegration {
       if (window.tabManager.track) {
         window.tabManager.track(newTab.id);
       }
+      
+      // Llamar a renderTopBar para actualizar la selección visual
+      // Usar un pequeño delay para asegurar que activate() termine de actualizar el estado
+      // y evitar condiciones de carrera con el interceptor
+      setTimeout(() => {
+        this.renderTopBar();
+      }, 100);
     }
-
-    this.renderTopBar();
   }
 
   isChatUrl(url) {
