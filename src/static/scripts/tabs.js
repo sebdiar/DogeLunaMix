@@ -16,6 +16,10 @@ const createIframe = (url, manager, tab, srcPrefix = '') => {
     zIndex: '10',
     opacity: '1',
     pointerEvents: 'auto',
+    transform: 'scale(0.9)',
+    transformOrigin: 'top left',
+    width: '111.11%', // Compensar el scale 0.9 (100% / 0.9 = 111.11%)
+    height: '111.11%',
   });
   manager.ic.appendChild(f);
   return f;
@@ -24,6 +28,7 @@ const createIframe = (url, manager, tab, srcPrefix = '') => {
 export const TYPE = {
   scr: {
     create: (url, manager, tab) => {
+      // eslint-disable-next-line no-undef
       const sf = scr.createFrame();
       manager.frames[tab.id] = sf;
       const frame = sf.frame;
@@ -32,16 +37,37 @@ export const TYPE = {
       frame.style.zIndex = 10;
       frame.style.opacity = '1';
       frame.style.pointerEvents = 'auto';
+      frame.style.transform = 'scale(0.9)';
+      frame.style.transformOrigin = 'top left';
+      frame.style.width = '111.11%'; // Compensar el scale 0.9 (100% / 0.9 = 111.11%)
+      frame.style.height = '111.11%';
       manager.ic.appendChild(frame);
       sf.go(url);
+      // Update tab URL and URL bar immediately
+      tab.url = url;
+      if (manager.ui && tab.active) {
+        manager.ui.value = url;
+      }
       manager.addLoadListener(tab.id);
     },
     navigate: (url, manager, tab, iframe) => {
-      if (manager.frames[tab.id]) manager.frames[tab.id].go(url);
-      else if (iframe) {
+      if (manager.frames[tab.id]) {
+        manager.frames[tab.id].go(url);
+        // Update tab URL and URL bar immediately
+        tab.url = url;
+        if (manager.ui && tab.active) {
+          manager.ui.value = url;
+        }
+      } else if (iframe) {
+        // eslint-disable-next-line no-undef
         const sf = scr.createFrame(iframe);
         manager.frames[tab.id] = sf;
         sf.go(url);
+        // Update tab URL and URL bar immediately
+        tab.url = url;
+        if (manager.ui && tab.active) {
+          manager.ui.value = url;
+        }
       }
     },
   },
@@ -69,9 +95,11 @@ export const TYPE = {
       f.style.zIndex = isActive ? '10' : '0';
       f.style.opacity = isActive ? '1' : '0';
       f.style.pointerEvents = isActive ? 'auto' : 'none';
-      f.style.width = '100%';
-      f.style.height = '100%';
+      f.style.width = '111.11%'; // Compensar el scale 0.9 (100% / 0.9 = 111.11%)
+      f.style.height = '111.11%';
       f.style.border = 'none';
+      f.style.transform = 'scale(0.9)';
+      f.style.transformOrigin = 'top left';
       
       // Permitir cookies y almacenamiento en el iframe (necesario para login de Notion)
       // Nota: Safari/iOS tiene restricciones estrictas con cookies en iframes cross-origin
@@ -118,7 +146,7 @@ export const TYPE = {
               `;
               iframeDoc.head?.appendChild(style);
             }
-          } catch (e) {
+          } catch {
             // Cross-origin restriction, can't access iframe content
             console.log('Cannot access iframe content (cross-origin)');
           }
@@ -130,7 +158,23 @@ export const TYPE = {
       
       const currentSrc = iframe.src || '';
       if (currentSrc !== url) {
+        // Actualizar historial ANTES de cambiar la URL
+        const decodedUrl = manager.ex(url);
+        const hist = manager.history.get(tab.id) || { urls: [], position: -1 };
+        
+        // Si la URL actual no está en el historial, agregarla
+        if (hist.urls.length === 0 || hist.urls[hist.position] !== decodedUrl) {
+          // Si estamos en medio del historial, truncar desde la posición actual
+          if (hist.position < hist.urls.length - 1) {
+            hist.urls = hist.urls.slice(0, hist.position + 1);
+          }
+          hist.urls.push(decodedUrl);
+          hist.position = hist.urls.length - 1;
+          manager.history.set(tab.id, hist);
+        }
+        
         iframe.src = url;
+        tab.url = url;
         manager.setFrameState(tab.id, true);
       } else if (tab.active) {
         iframe.style.zIndex = '10';
@@ -207,12 +251,10 @@ class TabManager {
       frames: {},
       tabs: [], // Start with no tabs - they will be loaded from backend
       history: new Map(),
-      urlTrack: new Map(),
       nextId: 2,
       maxTabs: 9999, // Effectively unlimited
       minW: 50,
       maxW: 200,
-      urlInterval: 2000, // Reduced frequency for better performance
       maxOpenTabs: 5, // Maximum tabs with loaded content (for memory management)
       inactiveTimeout: 15 * 60 * 1000, // 15 minutes in milliseconds
     });
@@ -268,8 +310,38 @@ class TabManager {
       this.updateWidths();
     });
 
-    // Listen for favicon updates from Notion iframes
+    // Listen for messages from Notion iframes (favicon updates and URL changes)
     window.addEventListener('message', (e) => {
+      // Handle URL changes from Notion iframe (sent by injected script in Cloudflare Worker)
+      if (e.data && e.data.type === 'notion-url-change') {
+        const messageUrl = e.data.url || '';
+        const tab = this.tabs.find(t => {
+          if (!t.url) return false;
+          const tabUrl = t.url.toLowerCase();
+          return (tabUrl.includes('silent-queen-f1d8.sebdiar.workers.dev') || 
+                  tabUrl.includes('notion.so') || 
+                  tabUrl.includes('notion.com')) && t.active;
+        });
+        
+        if (tab && messageUrl) {
+          // Convert to Worker URL format if needed
+          const workerUrl = this.formatInputUrl(messageUrl);
+          const iframe = document.getElementById(`iframe-${tab.id}`);
+          if (iframe) {
+            // Update tab URL and history
+            tab.url = workerUrl;
+            tab.originalUrl = this.getOriginalNotionUrl(workerUrl) || messageUrl;
+            this.updateTabMeta(tab, iframe, workerUrl);
+            // Update URL bar
+            if (this.ui && tab.active) {
+              this.ui.value = tab.originalUrl || messageUrl;
+            }
+          }
+        }
+        return;
+      }
+      
+      // Handle favicon updates
       if (e.data && e.data.type === 'notion-favicon-update') {
         // Find the tab that matches this URL - mejor matching
         const messageUrl = e.data.url || '';
@@ -328,7 +400,7 @@ class TabManager {
     this.render();
     this.createIframes();
     this.updateAddBtn();
-    this.startTracking();
+    // Removed startTracking() - no polling needed
     contentObserver.init();
     setupHotkeys();
 
@@ -351,7 +423,7 @@ class TabManager {
       })
       .filter(Boolean)
       .join('|');
-    const regex = new RegExp(`^https?:\/\/[^\/]+\/(${endpoints})\/`, 'i');
+    const regex = new RegExp(`^https?://[^/]+/(${endpoints})/`, 'i');
     return (url) => this.dnc(url.replace(regex, ''));
   })();
 
@@ -381,7 +453,7 @@ class TabManager {
         const path = url.pathname + url.search + url.hash;
         // Convertir al Cloudflare Worker manteniendo la ruta
         return `https://silent-queen-f1d8.sebdiar.workers.dev${path}`;
-      } catch (e) {
+      } catch {
         // Si falla el parsing, intentar extraer la ruta manualmente
         const match = notionUrl.match(/notion\.(so|com)(\/.*)?/i);
         if (match && match[2]) {
@@ -498,20 +570,7 @@ class TabManager {
     }
   };
 
-  startTracking = () => this.tabs.forEach((t) => this.track(t.id));
-
-  track = (id) => {
-    if (this.urlTrack.has(id)) clearInterval(this.urlTrack.get(id));
-    const iv = setInterval(() => this.checkStudentUrl(id), this.urlInterval);
-    this.urlTrack.set(id, iv);
-  };
-
-  stopTrack = (id) => {
-    if (this.urlTrack.has(id)) {
-      clearInterval(this.urlTrack.get(id));
-      this.urlTrack.delete(id);
-    }
-  };
+  // Removed startTracking, track, stopTrack - no polling needed
 
   isChatUrl = (url) => {
     return url && (url.startsWith('luna://chat/') || url.startsWith('doge://chat/'));
@@ -617,8 +676,7 @@ class TabManager {
     // Remove iframe
     const f = document.getElementById(`iframe-${id}`);
     if (f) {
-      // Stop tracking
-      this.stopTrack(id);
+      // Clean up (no intervals to clean since we removed polling)
       
       // Remove iframe from DOM
       f.remove();
@@ -702,13 +760,19 @@ class TabManager {
           f.id = `iframe-${t.id}`;
           f.className = this.fCss;
           f.style.zIndex = 0;
+          f.style.transform = 'scale(0.9)';
+          f.style.transformOrigin = 'top left';
+          f.style.width = '111.11%'; // Compensar el scale 0.9
+          f.style.height = '111.11%';
           if (this.isNewTab(t.url)) {
             f.src = t.url;
             f.onload = () => {
               try {
                 contentObserver.unbind();
                 contentObserver.bind();
-              } catch {}
+              } catch {
+                // Ignore errors
+              }
             };
           }
           this.ic.appendChild(f);
@@ -722,6 +786,94 @@ class TabManager {
     const activeTab = this.active();
     if (!activeTab) return;
 
+    const iframe = document.getElementById(`iframe-${activeTab.id}`);
+    
+    // Check if it's a Notion iframe (via Cloudflare Worker)
+    const isNotion = activeTab.url && (
+      activeTab.url.includes('silent-queen-f1d8.sebdiar.workers.dev') || 
+      activeTab.url.includes('notion.so') || 
+      activeTab.url.includes('notion.com')
+    );
+    
+    // For Notion, use TabManager history (cross-origin restrictions prevent iframe history access)
+    if (isNotion) {
+      const hist = this.history.get(activeTab.id);
+      if (!hist || hist.position <= 0) {
+        return;
+      }
+
+      hist.position--;
+      const decodedUrl = hist.urls[hist.position];
+      if (decodedUrl) {
+        // Si decodedUrl ya es un URL del Worker, usarlo directamente
+        // Si no, convertirlo al formato del Worker
+        let workerUrl = decodedUrl;
+        if (!decodedUrl.includes('silent-queen-f1d8.sebdiar.workers.dev')) {
+          workerUrl = this.formatInputUrl(decodedUrl);
+        }
+        
+        TYPE.notion.navigate(workerUrl, this, activeTab, iframe);
+        
+        // Update tab URL and originalUrl
+        activeTab.url = workerUrl;
+        // Try to preserve or generate originalUrl
+        if (!activeTab.originalUrl || !decodedUrl.includes('silent-queen-f1d8.sebdiar.workers.dev')) {
+          activeTab.originalUrl = this.getOriginalNotionUrl(workerUrl) || decodedUrl;
+        }
+        
+        // Update URL bar
+        if (this.ui) {
+          this.ui.value = activeTab.originalUrl || decodedUrl;
+        }
+        this.emitNewFrame();
+      }
+      return;
+    }
+    
+    // For Scramjet, access the frame's iframe directly
+    let targetIframe = iframe;
+    if (this.frames[activeTab.id] && this.frames[activeTab.id].frame) {
+      targetIframe = this.frames[activeTab.id].frame;
+    }
+    
+    // Try to use iframe's history directly (works for Scramjet and regular iframes)
+    if (targetIframe && targetIframe.contentWindow) {
+      try {
+        targetIframe.contentWindow.history.back();
+        // Update URL bar after navigation
+        setTimeout(() => {
+          try {
+            const currentUrl = targetIframe.contentWindow.location.href;
+            // Decode URL to remove /scramjet/ prefix and encoding
+            const decodedUrl = this.ex(currentUrl);
+            if (this.ui) {
+              this.ui.value = decodedUrl;
+            }
+            // Also update tab.url with decoded URL (without /scramjet/ prefix)
+            // Don't update title when navigating back/forward - only update URL
+            if (activeTab && decodedUrl !== activeTab.url) {
+              activeTab.url = decodedUrl;
+              // Only update URL and history, don't update title
+              const hist = this.history.get(activeTab.id) || { urls: [decodedUrl], position: 0 };
+              if (!this.history.has(activeTab.id)) {
+                this.history.set(activeTab.id, hist);
+              } else if (hist.urls[hist.position] !== decodedUrl) {
+                hist.urls.length = hist.position + 1;
+                hist.urls.push(decodedUrl);
+                hist.position++;
+              }
+            }
+          } catch {
+            // Cross-origin restriction, can't read location
+          }
+        }, 100);
+        return;
+      } catch {
+        // Cross-origin restriction or other error, fall back to TabManager history
+      }
+    }
+
+    // Fallback: Use TabManager history
     const hist = this.history.get(activeTab.id);
     if (!hist || hist.position <= 0) {
       return;
@@ -731,7 +883,6 @@ class TabManager {
     const decodedUrl = hist.urls[hist.position];
     if (decodedUrl) {
       const handler = TYPE[this.prType] || TYPE.scr;
-      const iframe = document.getElementById(`iframe-${activeTab.id}`);
       handler.navigate(decodedUrl, this, activeTab, iframe);
       // Mostrar URL original si es Notion, sino el URL decodificado
       if (this.ui) {
@@ -749,6 +900,94 @@ class TabManager {
     const activeTab = this.active();
     if (!activeTab) return;
 
+    const iframe = document.getElementById(`iframe-${activeTab.id}`);
+    
+    // Check if it's a Notion iframe (via Cloudflare Worker)
+    const isNotion = activeTab.url && (
+      activeTab.url.includes('silent-queen-f1d8.sebdiar.workers.dev') || 
+      activeTab.url.includes('notion.so') || 
+      activeTab.url.includes('notion.com')
+    );
+    
+    // For Notion, use TabManager history (cross-origin restrictions prevent iframe history access)
+    if (isNotion) {
+      const hist = this.history.get(activeTab.id);
+      if (!hist || hist.position >= hist.urls.length - 1) {
+        return;
+      }
+
+      hist.position++;
+      const decodedUrl = hist.urls[hist.position];
+      if (decodedUrl) {
+        // Si decodedUrl ya es un URL del Worker, usarlo directamente
+        // Si no, convertirlo al formato del Worker
+        let workerUrl = decodedUrl;
+        if (!decodedUrl.includes('silent-queen-f1d8.sebdiar.workers.dev')) {
+          workerUrl = this.formatInputUrl(decodedUrl);
+        }
+        
+        TYPE.notion.navigate(workerUrl, this, activeTab, iframe);
+        
+        // Update tab URL and originalUrl
+        activeTab.url = workerUrl;
+        // Try to preserve or generate originalUrl
+        if (!activeTab.originalUrl || !decodedUrl.includes('silent-queen-f1d8.sebdiar.workers.dev')) {
+          activeTab.originalUrl = this.getOriginalNotionUrl(workerUrl) || decodedUrl;
+        }
+        
+        // Update URL bar
+        if (this.ui) {
+          this.ui.value = activeTab.originalUrl || decodedUrl;
+        }
+        this.emitNewFrame();
+      }
+      return;
+    }
+    
+    // For Scramjet, access the frame's iframe directly
+    let targetIframe = iframe;
+    if (this.frames[activeTab.id] && this.frames[activeTab.id].frame) {
+      targetIframe = this.frames[activeTab.id].frame;
+    }
+    
+    // Try to use iframe's history directly (works for Scramjet and regular iframes)
+    if (targetIframe && targetIframe.contentWindow) {
+      try {
+        targetIframe.contentWindow.history.forward();
+        // Update URL bar after navigation
+        setTimeout(() => {
+          try {
+            const currentUrl = targetIframe.contentWindow.location.href;
+            // Decode URL to remove /scramjet/ prefix and encoding
+            const decodedUrl = this.ex(currentUrl);
+            if (this.ui) {
+              this.ui.value = decodedUrl;
+            }
+            // Also update tab.url with decoded URL (without /scramjet/ prefix)
+            // Don't update title when navigating back/forward - only update URL
+            if (activeTab && decodedUrl !== activeTab.url) {
+              activeTab.url = decodedUrl;
+              // Only update URL and history, don't update title
+              const hist = this.history.get(activeTab.id) || { urls: [decodedUrl], position: 0 };
+              if (!this.history.has(activeTab.id)) {
+                this.history.set(activeTab.id, hist);
+              } else if (hist.urls[hist.position] !== decodedUrl) {
+                hist.urls.length = hist.position + 1;
+                hist.urls.push(decodedUrl);
+                hist.position++;
+              }
+            }
+          } catch {
+            // Cross-origin restriction, can't read location
+          }
+        }, 100);
+        return;
+      } catch {
+        // Cross-origin restriction or other error, fall back to TabManager history
+      }
+    }
+
+    // Fallback: Use TabManager history
     const hist = this.history.get(activeTab.id);
     if (!hist || hist.position >= hist.urls.length - 1) {
       return;
@@ -758,7 +997,6 @@ class TabManager {
     const decodedUrl = hist.urls[hist.position];
     if (decodedUrl) {
       const handler = TYPE[this.prType] || TYPE.scr;
-      const iframe = document.getElementById(`iframe-${activeTab.id}`);
       handler.navigate(decodedUrl, this, activeTab, iframe);
       // Mostrar URL original si es Notion, sino el URL decodificado
       if (this.ui) {
@@ -777,10 +1015,108 @@ class TabManager {
     if (!activeTab) return;
     const iframe = document.getElementById(`iframe-${activeTab.id}`);
     if (!iframe) return;
+    
+    // Check if it's a Notion iframe (via Cloudflare Worker)
+    const isNotion = activeTab.url && (
+      activeTab.url.includes('silent-queen-f1d8.sebdiar.workers.dev') || 
+      activeTab.url.includes('notion.so') || 
+      activeTab.url.includes('notion.com')
+    );
+    
+    // Check if it's a Scramjet iframe
+    const isScramjet = this.frames[activeTab.id] && this.frames[activeTab.id].go;
+    
     try {
-      iframe.contentWindow.location.reload();
-    } catch {
-      // Silent fail - reload errors are usually not actionable
+      if (isNotion) {
+        // For Notion iframes, reload by setting src again (more reliable than contentWindow.location.reload)
+        // Use the current tab URL to ensure we reload the same page
+        const currentUrl = activeTab.url || iframe.src;
+        iframe.src = '';
+        // Use setTimeout to ensure the src is cleared before setting it again
+        setTimeout(() => {
+          iframe.src = currentUrl;
+          // Preserve originalUrl in URL bar after reload
+          if (this.ui && activeTab.originalUrl) {
+            this.ui.value = activeTab.originalUrl;
+          }
+        }, 10);
+      } else if (isScramjet) {
+        // For Scramjet, reload the current page
+        // First try to get the current URL from the iframe, then reload
+        try {
+          if (iframe.contentWindow && iframe.contentWindow.location) {
+            // Get current URL from iframe (may fail due to cross-origin)
+            const currentUrl = iframe.contentWindow.location.href;
+            // Reload using location.reload()
+            iframe.contentWindow.location.reload();
+            // Update tab URL if we got a new URL
+            if (currentUrl && currentUrl !== activeTab.url) {
+              activeTab.url = currentUrl;
+              if (this.ui) {
+                this.ui.value = currentUrl;
+              }
+            }
+          } else {
+            // Fallback: use frame.go with current tab URL
+            const frame = this.frames[activeTab.id];
+            if (frame && frame.go && activeTab.url) {
+              frame.go(activeTab.url);
+              // Update URL bar
+              if (this.ui) {
+                this.ui.value = activeTab.url;
+              }
+            } else {
+              // Last resort: reload by setting src
+              const currentSrc = iframe.src;
+              iframe.src = '';
+              setTimeout(() => {
+                iframe.src = currentSrc;
+              }, 10);
+            }
+          }
+        } catch {
+          // Cross-origin restriction: use frame.go with current tab URL
+          const frame = this.frames[activeTab.id];
+          if (frame && frame.go && activeTab.url) {
+            frame.go(activeTab.url);
+            // Update URL bar
+            if (this.ui) {
+              this.ui.value = activeTab.url;
+            }
+          } else {
+            // Last resort: reload by setting src
+            const currentSrc = iframe.src;
+            iframe.src = '';
+            setTimeout(() => {
+              iframe.src = currentSrc;
+            }, 10);
+          }
+        }
+      } else {
+        // For regular iframes, use contentWindow.location.reload
+        if (iframe.contentWindow) {
+          iframe.contentWindow.location.reload();
+        } else {
+          // Fallback: reload by setting src
+          const currentSrc = iframe.src;
+          iframe.src = '';
+          setTimeout(() => {
+            iframe.src = currentSrc;
+          }, 10);
+        }
+      }
+    } catch (error) {
+      // If contentWindow approach fails, try reloading by setting src
+      try {
+        const currentUrl = activeTab.url || iframe.src;
+        iframe.src = '';
+        setTimeout(() => {
+          iframe.src = currentUrl;
+        }, 10);
+      } catch {
+        // Silent fail - reload errors are usually not actionable
+        console.warn('Failed to reload iframe:', error);
+      }
     }
   };
 
@@ -789,36 +1125,244 @@ class TabManager {
     this.updateUrl(input);
   };
 
+  home = () => {
+    const activeTab = this.active();
+    if (!activeTab) return;
+    
+    // Priority: Use bookmark_url if available (the URL saved when editing the tab)
+    const homeUrl = activeTab.bookmark_url || null;
+    
+    // Check if it's a Notion iframe - check both bookmark_url and current url
+    const isNotion = (homeUrl && (homeUrl.includes('silent-queen-f1d8.sebdiar.workers.dev') || 
+                                   homeUrl.includes('notion.so') || 
+                                   homeUrl.includes('notion.com'))) ||
+                     (activeTab.url && (activeTab.url.includes('silent-queen-f1d8.sebdiar.workers.dev') || 
+                                        activeTab.url.includes('notion.so') || 
+                                        activeTab.url.includes('notion.com'))) ||
+                     (activeTab.originalUrl && (activeTab.originalUrl.includes('notion.so') || 
+                                                 activeTab.originalUrl.includes('notion.com')));
+    
+    // Check if it's a Scramjet iframe
+    const isScramjet = this.frames[activeTab.id] && this.frames[activeTab.id].go;
+    
+    if (isNotion) {
+      let targetUrl = null;
+      let originalTargetUrl = null;
+      
+      if (homeUrl) {
+        // Use bookmark_url if available
+        // Check if it's already in Worker format
+        if (homeUrl.includes('silent-queen-f1d8.sebdiar.workers.dev')) {
+          targetUrl = homeUrl;
+          originalTargetUrl = this.getOriginalNotionUrl(homeUrl) || homeUrl;
+        } else {
+          // Convert to Worker format - bookmark_url is likely in original Notion format
+          originalTargetUrl = homeUrl;
+          targetUrl = this.formatInputUrl(homeUrl);
+        }
+      } else {
+        // Fallback: navigate to workspace root from current URL
+        if (activeTab.originalUrl) {
+          try {
+            const originalUrlObj = new URL(activeTab.originalUrl);
+            const pathParts = originalUrlObj.pathname.split('/').filter(p => p);
+            if (pathParts.length > 0) {
+              originalUrlObj.pathname = '/' + pathParts[0];
+              originalUrlObj.search = '';
+              originalUrlObj.hash = '';
+              originalTargetUrl = originalUrlObj.toString();
+              targetUrl = this.formatInputUrl(originalTargetUrl);
+            } else {
+              originalTargetUrl = activeTab.originalUrl;
+              targetUrl = this.formatInputUrl(activeTab.originalUrl);
+            }
+          } catch {
+            originalTargetUrl = activeTab.originalUrl;
+            targetUrl = this.formatInputUrl(activeTab.originalUrl);
+          }
+        } else if (activeTab.url) {
+          try {
+            const url = new URL(activeTab.url);
+            const pathParts = url.pathname.split('/').filter(p => p);
+            if (pathParts.length > 0) {
+              url.pathname = '/' + pathParts[0];
+              url.search = '';
+              url.hash = '';
+              targetUrl = url.toString();
+              originalTargetUrl = this.getOriginalNotionUrl(targetUrl) || `https://www.notion.so/${pathParts[0]}`;
+            } else {
+              targetUrl = activeTab.url;
+              originalTargetUrl = this.getOriginalNotionUrl(targetUrl) || targetUrl;
+            }
+          } catch {
+            targetUrl = activeTab.url;
+            originalTargetUrl = this.getOriginalNotionUrl(targetUrl) || targetUrl;
+          }
+        }
+      }
+      
+      if (targetUrl) {
+        const iframe = document.getElementById(`iframe-${activeTab.id}`);
+        if (iframe) {
+          TYPE.notion.navigate(targetUrl, this, activeTab, iframe);
+          activeTab.url = targetUrl;
+          activeTab.originalUrl = originalTargetUrl || this.getOriginalNotionUrl(targetUrl) || targetUrl;
+          if (this.ui) {
+            this.ui.value = activeTab.originalUrl || targetUrl;
+          }
+          this.emitNewFrame();
+        } else {
+          console.warn('[Notion Home] Iframe not found for tab:', activeTab.id);
+        }
+      } else {
+        console.warn('[Notion Home] No targetUrl determined. homeUrl:', homeUrl, 'activeTab.bookmark_url:', activeTab.bookmark_url);
+      }
+    } else if (isScramjet) {
+      if (homeUrl) {
+        // Use bookmark_url if available
+        const frame = this.frames[activeTab.id];
+        if (frame && frame.go) {
+          frame.go(homeUrl);
+          activeTab.url = homeUrl;
+          if (this.ui) {
+            this.ui.value = homeUrl;
+          }
+        }
+      } else {
+        // Fallback: navigate to root/home page
+        const frame = this.frames[activeTab.id];
+        if (!frame || !frame.go) {
+          console.warn('[Scramjet Home] Frame not found or go method not available');
+          return;
+        }
+        
+        // Try to get current URL from iframe first
+        let currentUrl = null;
+        try {
+          const targetFrame = frame.frame;
+          if (targetFrame && targetFrame.contentWindow) {
+            currentUrl = targetFrame.contentWindow.location.href;
+          }
+        } catch {
+          // Cross-origin, can't read
+        }
+        
+        // Use current URL from iframe, or fallback to tab.url
+        const urlToUse = currentUrl ? this.ex(currentUrl) : activeTab.url;
+        
+        if (urlToUse) {
+          try {
+            const url = new URL(urlToUse);
+            url.pathname = '/';
+            url.search = '';
+            url.hash = '';
+            frame.go(url.toString());
+            activeTab.url = url.toString();
+            if (this.ui) {
+              this.ui.value = url.toString();
+            }
+          } catch {
+            // If URL parsing fails, try to navigate to root path
+            try {
+              const rootUrl = urlToUse.split('/').slice(0, 3).join('/') + '/';
+              frame.go(rootUrl);
+              activeTab.url = rootUrl;
+              if (this.ui) {
+                this.ui.value = rootUrl;
+              }
+            } catch {
+              console.warn('[Scramjet Home] Failed to navigate to home');
+            }
+          }
+        }
+      }
+    } else {
+      // For regular iframes
+      if (homeUrl) {
+        // Use bookmark_url if available
+        const iframe = document.getElementById(`iframe-${activeTab.id}`);
+        if (iframe) {
+          const handler = TYPE[this.prType] || TYPE.auto;
+          handler.navigate(homeUrl, this, activeTab, iframe);
+          activeTab.url = homeUrl;
+          if (this.ui) {
+            this.ui.value = homeUrl;
+          }
+          this.emitNewFrame();
+        }
+      } else {
+        // Fallback: navigate to root of current domain
+        const iframe = document.getElementById(`iframe-${activeTab.id}`);
+        if (iframe && activeTab.url) {
+          try {
+            const url = new URL(activeTab.url);
+            url.pathname = '/';
+            url.search = '';
+            url.hash = '';
+            const handler = TYPE[this.prType] || TYPE.auto;
+            handler.navigate(url.toString(), this, activeTab, iframe);
+            activeTab.url = url.toString();
+            if (this.ui) {
+              this.ui.value = url.toString();
+            }
+            this.emitNewFrame();
+          } catch {
+            console.warn('Failed to navigate to home');
+          }
+        }
+      }
+    }
+  };
+
   addLoadListener = (id) => {
     const f = document.getElementById(`iframe-${id}`);
     if (!f || f.hasListener) return;
     f.hasListener = true;
+    
+    // Solo usar eventos load, sin polling
     f.addEventListener('load', () => {
-      const t = this.tabs.find((t) => t.id === id);
-      if (!t) return;
-      try {
-        const newUrl = f.contentWindow.location.href;
-        if (newUrl && newUrl !== t.url && newUrl !== 'about:blank')
-          this.updateTabMeta(t, f, newUrl);
-      } catch {}
+      const tab = this.tabs.find((t) => t.id === id);
+      if (!tab) return;
+      
+      // Para Notion, verificar cambios en iframe.src
+      const isNotion = tab.url && (
+        tab.url.includes('silent-queen-f1d8.sebdiar.workers.dev') || 
+        tab.url.includes('notion.so') || 
+        tab.url.includes('notion.com')
+      );
+      
+      if (isNotion) {
+        const currentSrc = f.src;
+        if (currentSrc && currentSrc !== tab.url && currentSrc !== 'about:blank') {
+          this.updateTabMeta(tab, f, currentSrc);
+          if (this.ui && tab.active) {
+            tab.originalUrl = this.getOriginalNotionUrl(currentSrc) || currentSrc;
+            this.ui.value = tab.originalUrl || currentSrc;
+          }
+        }
+      } else {
+        // Para Scramjet y otros tipos, intentar leer URL del iframe
+        const isScramjet = this.frames[id] && this.frames[id].go;
+        const targetFrame = isScramjet && this.frames[id].frame ? this.frames[id].frame : f;
+        
+        try {
+          const newUrl = targetFrame.contentWindow.location.href;
+          const decodedUrl = this.ex(newUrl);
+          if (newUrl && decodedUrl !== tab.url && newUrl !== 'about:blank') {
+            tab.url = decodedUrl;
+            this.updateTabMeta(tab, targetFrame, newUrl);
+            if (this.ui && tab.active) {
+              this.ui.value = decodedUrl;
+            }
+          }
+        } catch {
+          // Ignore cross-origin errors
+        }
+      }
     });
   };
 
-  checkStudentUrl = (id) => {
-    const t = this.tabs.find((t) => t.id === id);
-    const f = document.getElementById(`iframe-${id}`);
-    if (!t?.url || !f || t.url === this.newTabUrl) return;
-    try {
-      const { href: newUrl } = f.contentWindow.location;
-      if (newUrl && newUrl !== t.url && newUrl !== 'about:blank') {
-        this.updateTabMeta(t, f, newUrl);
-        contentObserver.unbind?.();
-        contentObserver.bind?.();
-      }
-    } catch {
-      this.addLoadListener(id);
-    }
-  };
+  // Removed checkStudentUrl - no polling needed, URL updates handled by load events
 
   updateTabMeta = (t, f, newUrl) => {
     try {
@@ -832,17 +1376,38 @@ class TabManager {
         f.style.opacity = 1;
         return;
       }
-    } catch {}
+    } catch {
+      // Ignore cross-origin errors
+    }
 
     const decodedUrl = this.ex(newUrl);
     const hist = this.history.get(t.id) || { urls: [decodedUrl], position: 0 };
 
     if (!this.history.has(t.id)) {
       this.history.set(t.id, hist);
-    } else if (hist.urls[hist.position] !== decodedUrl) {
-      hist.urls.length = hist.position + 1;
-      hist.urls.push(decodedUrl);
-      hist.position++;
+    } else {
+      // Para Notion, siempre agregar al historial si la URL cambió
+      const isNotion = newUrl.includes('silent-queen-f1d8.sebdiar.workers.dev') || 
+                       newUrl.includes('notion.so') || 
+                       newUrl.includes('notion.com');
+      
+      if (isNotion) {
+        // Para Notion, si la URL es diferente a la actual en el historial, agregarla
+        const currentHistUrl = hist.urls[hist.position];
+        if (currentHistUrl !== decodedUrl) {
+          // Si estamos en medio del historial (por ejemplo, después de hacer back), truncar
+          if (hist.position < hist.urls.length - 1) {
+            hist.urls = hist.urls.slice(0, hist.position + 1);
+          }
+          hist.urls.push(decodedUrl);
+          hist.position = hist.urls.length - 1;
+        }
+      } else if (hist.urls[hist.position] !== decodedUrl) {
+        // Para otros tipos, comportamiento normal
+        hist.urls.length = hist.position + 1;
+        hist.urls.push(decodedUrl);
+        hist.position++;
+      }
     }
 
     // Preservar originalUrl si existe antes de actualizar
@@ -867,12 +1432,20 @@ class TabManager {
     // Actualizar indicador del Cloudflare Worker si el tab está activo
     if (t.active) {
       this.updateNotionWorkerIndicator(t);
-      // Actualizar URL en la barra si es Notion
-      if (this.ui && t.originalUrl) {
-        this.ui.value = t.originalUrl;
-      } else if (this.ui) {
-        this.ui.value = decodedUrl;
+      // Actualizar URL en la barra solo si es Notion (para otros tipos, addLoadListener lo actualiza)
+      const isNotion = t.url && (
+        t.url.includes('silent-queen-f1d8.sebdiar.workers.dev') || 
+        t.url.includes('notion.so') || 
+        t.url.includes('notion.com')
+      );
+      if (isNotion && this.ui) {
+        if (t.originalUrl) {
+          this.ui.value = t.originalUrl;
+        } else {
+          this.ui.value = decodedUrl;
+        }
       }
+      // Para Scramjet y otros tipos, NO actualizar aquí - addLoadListener lo hace
     }
 
     // Solo actualizar título si NO tiene un título fijo
@@ -948,7 +1521,7 @@ class TabManager {
     this.render();
     this.createIframes();
     this.updateAddBtn();
-    this.track(t.id);
+    // Removed track() - no polling needed
     if (this.ui) this.ui.value = '';
     this.emitNewFrame();
   };
@@ -959,13 +1532,15 @@ class TabManager {
     if (i === -1) return;
     const wasActive = this.tabs[i].active;
     this.tabs.splice(i, 1);
-    this.stopTrack(id);
     this.history.delete(id);
     // Cleanup frames (ScramJet y Notion)
     if (this.frames[id]) {
       delete this.frames[id];
     }
-    document.getElementById(`iframe-${id}`)?.remove();
+    const f = document.getElementById(`iframe-${id}`);
+    if (f) {
+      f.remove();
+    }
     document.getElementById(`chat-${id}`)?.remove();
     document.getElementById(`dashboard-${id}`)?.remove();
     if (wasActive) {
@@ -1207,10 +1782,14 @@ class TabManager {
     const ev = new CustomEvent('newFrame', { detail });
     try {
       document.dispatchEvent(ev);
-    } catch (err) {}
+    } catch {
+      // Ignore dispatch errors
+    }
     try {
       window.dispatchEvent(ev);
-    } catch (err) {}
+    } catch {
+      // Ignore dispatch errors
+    }
   };
 
   updateUrl = async (input) => {
@@ -1239,6 +1818,10 @@ class TabManager {
       f.style.zIndex = 10;
       f.style.opacity = '1';
       f.style.pointerEvents = 'auto';
+      f.style.transform = 'scale(0.9)';
+      f.style.transformOrigin = 'top left';
+      f.style.width = '111.11%'; // Compensar el scale 0.9
+      f.style.height = '111.11%';
       f.src = this.newTabUrl;
       this.ic.appendChild(f);
       t.url = this.newTabUrl;
@@ -1248,7 +1831,9 @@ class TabManager {
         try {
           contentObserver.unbind();
           contentObserver.bind();
-        } catch {}
+        } catch {
+          // Ignore errors
+        }
       };
       this.showActive();
       this.render();
@@ -1281,16 +1866,32 @@ class TabManager {
     } else handler.navigate(url, this, t, f);
 
     t.url = url;
-    try {
-      // Don't extract title from special URLs
-      if (this.isSpecialUrl(url)) {
-        t.title = t.title || input;
-      } else {
-        t.title = new URL(url).hostname.replace('www.', '');
+    // Only update title if it's dynamic (not fixed by user)
+    // Check if current title is dynamic (equals URL or domain)
+    const currentTitle = t.title || '';
+    const currentDomain = this.domain(url);
+    const decodedUrl = this.ex(url);
+    const isDynamicTitle = !currentTitle || 
+                           currentTitle === t.url || 
+                           currentTitle === decodedUrl ||
+                           currentTitle === currentDomain ||
+                           currentTitle === 'New Tab' ||
+                           currentTitle === 'Untitled';
+    
+    // Only update title if it's dynamic
+    if (isDynamicTitle) {
+      try {
+        // Don't extract title from special URLs
+        if (this.isSpecialUrl(url)) {
+          t.title = t.title || input;
+        } else {
+          t.title = new URL(url).hostname.replace('www.', '');
+        }
+      } catch {
+        t.title = input;
       }
-    } catch {
-      t.title = input;
     }
+    // If title is fixed (user-specified), keep it unchanged
     
     // Mostrar URL original en la barra si es Notion
     if (this.ui && t.originalUrl) {
@@ -1370,7 +1971,9 @@ class TabManager {
             hasCustomIcon = true;
           }
         }
-      } catch {}
+      } catch {
+        // Ignore favicon errors
+      }
     }
     
     // Special icons for chat and dashboard
@@ -1482,23 +2085,9 @@ class TabManager {
         });
       }
       
-      // Excluir tabs que están en "More" dropdown (desktop)
-      // Usar localStorage para persistencia
-      let visibleTabs = tabsToShow;
-      if (window.lunaIntegration && window.lunaIntegration.getDesktopMoreTabIdsSync) {
-        const moreTabIds = window.lunaIntegration.getDesktopMoreTabIdsSync();
-        if (moreTabIds.size > 0) {
-          visibleTabs = tabsToShow.filter(t => {
-            // Normalize to string for consistent comparison
-            const tabId = String(t.backendId || t.id);
-            return !moreTabIds.has(tabId);
-          });
-        }
-      }
-
       // USAR EL MISMO template unificado (showMenu=true para sidebar, isTopBar=false)
       // Este es el ÚNICO código que genera tabs - usado en sidebar Y TopBar
-      this.tc.innerHTML = visibleTabs.map((t) => this.tabTemplate(t, true, false)).join('');
+      this.tc.innerHTML = tabsToShow.map((t) => this.tabTemplate(t, true, false)).join('');
 
       // Setup menu handlers para sidebar tabs
       this.tc.querySelectorAll('.tab-menu-btn').forEach(btn => {
@@ -1512,7 +2101,7 @@ class TabManager {
               try {
                 const response = await window.lunaIntegration.request(`/api/tabs/${tab.backendId}`);
                 window.lunaIntegration.showTabMenu(e, response.tab);
-              } catch (err) {
+              } catch {
                 // Si falla, usar datos del tab actual
                 const backendTab = {
                   id: tab.backendId,
@@ -1578,6 +2167,7 @@ class TabManager {
 
 window.addEventListener('load', async () => {
   window.scr = null;
+  // eslint-disable-next-line no-undef
   const { ScramjetController } = $scramjetLoadController();
   const connection = new BareMuxConnection('/baremux/worker.js');
   const { log, warn, error } = logUtils;
@@ -1613,6 +2203,7 @@ window.addEventListener('load', async () => {
   });
 
   try {
+    // eslint-disable-next-line no-undef
     await scr.init();
     log('scr.init() complete');
   } catch (err) {
@@ -1660,6 +2251,7 @@ window.addEventListener('load', async () => {
     'n-bk': () => tabManager.back(),
     'n-fw': () => tabManager.forward(),
     'n-rl': () => tabManager.reload(),
+    'return-home-btn': () => tabManager.home(),
     'settings-btn': () => {
       // Navigate to settings page
       window.parent.postMessage({ action: 'navigate', to: '/settings' }, '*');

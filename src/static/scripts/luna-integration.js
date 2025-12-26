@@ -8,18 +8,19 @@ class LunaIntegration {
     
     this.activeSpace = null;
     this.projects = [];
+    this.allProjects = []; // Store all projects including archived ones
     this.users = [];
     this.personalTabs = []; // Tabs sin space_id (personales)
     this.spaceTabs = []; // Tabs del space activo
     this.savedPersonalTabs = null; // Tabs personales guardados cuando se abre un espacio
     this.showingModal = false; // Flag to prevent TabManager.add from running
-    this.mouseY = 0; // Track mouse Y for drag and drop
     this.menuCloseListener = null; // Track menu close listener
     this.currentChatId = null; // Current active chat ID for message sending
     this.chatNotificationChannel = null; // Supabase Realtime channel for chat notifications
     this.supabaseClient = null; // Supabase client for realtime
     this.chatSubscriptions = new Map(); // Map of chatId -> subscription channel
     this.lastNotificationTime = new Map(); // Track last notification time per space to prevent duplicates
+    this.showArchivedForParent = new Map(); // Map of parentId -> boolean (track expanded state per parent, null/undefined = root level)
     
     this.init().catch(err => {
       console.error('❌ Error initializing LunaIntegration:', err);
@@ -104,7 +105,7 @@ class LunaIntegration {
           badge.style.visibility = 'hidden';
         }
       });
-    } catch (err) {
+    } catch {
       // On error, hide ALL badges
       const badges = document.querySelectorAll(`.space-unread-badge[data-space-id="${spaceId}"]`);
       badges.forEach(badge => {
@@ -220,7 +221,7 @@ class LunaIntegration {
   urlBase64ToUint8Array(base64String) {
     const padding = '='.repeat((4 - base64String.length % 4) % 4);
     const base64 = (base64String + padding)
-      .replace(/\-/g, '+')
+      .replace(/-/g, '+')
       .replace(/_/g, '/');
 
     const rawData = window.atob(base64);
@@ -325,7 +326,7 @@ class LunaIntegration {
         try {
           const userResponse = await this.request(`/api/users/${message.user_id}`);
           senderName = userResponse.name || userResponse.email?.split('@')[0] || 'Someone';
-        } catch (err) {
+        } catch {
           senderName = 'Someone';
         }
       }
@@ -360,7 +361,7 @@ class LunaIntegration {
           vibrate: [200, 100, 200] // Vibration pattern for mobile
         });
       }
-    } catch (error) {
+    } catch {
       // Fallback to regular Notification API
       try {
         new Notification(notificationTitle, {
@@ -460,7 +461,7 @@ class LunaIntegration {
                   this.updateSpaceBadge(user.id);
                 });
               }
-            } catch (error) {
+            } catch {
               // Fallback: update all badges
               this.updateUnreadBadge();
               this.users.forEach(user => {
@@ -518,28 +519,7 @@ class LunaIntegration {
     document.getElementById('topbar-settings-btn')?.addEventListener('click', () => this.openProjectSettings());
     document.getElementById('project-settings-close')?.addEventListener('click', () => this.closeProjectSettings());
 
-    // Desktop More dropdown handlers
-    const moreBtn = document.getElementById('sidebar-more-btn');
-    if (moreBtn) {
-      moreBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const dropdown = document.getElementById('more-dropdown');
-        if (dropdown && dropdown.classList.contains('active')) {
-          this.hideMoreDropdown();
-        } else {
-          this.showMoreDropdown();
-        }
-      });
-    }
-
-    // Close dropdown when clicking outside
-    document.addEventListener('click', (e) => {
-      const moreBtn = document.getElementById('sidebar-more-btn');
-      const dropdown = document.getElementById('more-dropdown');
-      if (moreBtn && dropdown && !moreBtn.contains(e.target) && !dropdown.contains(e.target)) {
-        this.hideMoreDropdown();
-      }
-    });
+    // More dropdown removed - no longer needed
 
     if (!this.token || !this.user) {
       this.renderUserInfo(); // Render login prompt
@@ -570,8 +550,7 @@ class LunaIntegration {
     // Load preferences from backend first (this will cache them)
     await this.loadPreferences();
 
-    // Update desktop More tabs
-    await this.updateDesktopMoreTabs();
+    // More dropdown removed - no longer needed
 
     // Monitor TabManager for changes
     this.setupTabManagerMonitoring();
@@ -881,33 +860,11 @@ class LunaIntegration {
       
       this.renderPersonalTabs();
       
-      // Setup drag and drop for tabs after render - with support for moving to/from More
+      // Setup drag and drop for tabs after render
       setTimeout(() => {
-        this.setupDragAndDrop('tabs-cont', this.personalTabs, false, async ({ draggedId, targetId, position, dropTarget }) => {
+        this.setupDragAndDrop('tabs-cont', this.personalTabs, false, async ({ draggedId, targetId, position }) => {
           try {
-            // Check if dropping on More dropdown or More button
-            if (dropTarget === 'more-dropdown-content') {
-              const draggedIdStr = String(draggedId);
-              
-              // Move tab to More - try to find tab by id or backendId
-              let tab = this.personalTabs.find(t => {
-                const tId = String(t.id);
-                const tBackendId = t.backendId ? String(t.backendId) : null;
-                return tId === draggedIdStr || tBackendId === draggedIdStr;
-              });
-              
-              if (!tab && window.tabManager) {
-                tab = window.tabManager.tabs.find(t => {
-                  const tId = String(t.id);
-                  const tBackendId = t.backendId ? String(t.backendId) : null;
-                  return tId === draggedIdStr || tBackendId === draggedIdStr;
-                });
-              }
-              
-              const tabIdToMove = tab ? String(tab.backendId || tab.id) : draggedIdStr;
-              await this.moveTabToMore(tabIdToMove);
-              return;
-            }
+            // Desktop More dropdown removed - no longer needed
             
             const oldIndex = this.personalTabs.findIndex(t => t.id === draggedId);
             const newIndex = this.personalTabs.findIndex(t => t.id === targetId);
@@ -980,8 +937,7 @@ class LunaIntegration {
           }
         });
         
-        // Setup drag and drop for More dropdown - with support for moving to sidebar
-        this.setupMoreDropdownDragAndDrop();
+        // More dropdown removed - no longer needed
       }, 150);
     } catch (err) {
       console.error('Failed to load personal tabs:', err);
@@ -1092,6 +1048,8 @@ class LunaIntegration {
         tab.avatar_photo = backendTab.avatar_photo;
         tab.backendId = backendTab.id;
         tab.active = activeTabUrl === normalizedUrl;
+        // IMPORTANTE: Asignar bookmark_url para que funcione el botón Home
+        tab.bookmark_url = backendTab.bookmark_url || null;
         // Preserve or set timestamps for memory management
         if (!tab.createdAt && backendTab.created_at) {
           tab.createdAt = new Date(backendTab.created_at).getTime();
@@ -1105,6 +1063,7 @@ class LunaIntegration {
           id: window.tabManager.nextId++,
           title: backendTab.title || null,
           url: url,
+          bookmark_url: backendTab.bookmark_url || null, // IMPORTANTE: Asignar bookmark_url
           active: false,
           justAdded: false,
           avatar_emoji: backendTab.avatar_emoji,
@@ -1132,13 +1091,12 @@ class LunaIntegration {
     // Reemplazar array completo
     window.tabManager.tabs = newTabs;
     
-    // Renderizar (single consolidated render - updateDesktopMoreTabs sets skipRender=true)
+    // Renderizar (single consolidated render)
     if (window.tabManager.render) window.tabManager.render();
     if (window.tabManager.createIframes) window.tabManager.createIframes();
     if (window.tabManager.showActive) window.tabManager.showActive();
     
-    // Update desktop More tabs after syncing (skip render since we just rendered)
-    await this.updateDesktopMoreTabs(true);
+    // Desktop More dropdown removed - no longer needed
     
     // Si activamos el primer tab, llamar a activate() para cargar su URL automáticamente
     if (shouldActivateFirst && firstTabId && window.tabManager && window.tabManager.activate) {
@@ -1157,7 +1115,13 @@ class LunaIntegration {
     if (!this.token) return;
     
     try {
+      // Load ALL projects (active + archived) in a single request
       const { spaces } = await this.request('/api/spaces?category=project');
+      
+      // Store all projects
+      this.allProjects = spaces || [];
+      
+      // Show ALL projects (active + archived)
       this.projects = spaces || [];
       
       this.renderProjects();
@@ -1172,6 +1136,7 @@ class LunaIntegration {
       }
     }
   }
+
 
   async createMissingDashboardTabs() {
     if (!this.token) return;
@@ -1230,7 +1195,7 @@ class LunaIntegration {
     }
   }
 
-  // Centralized function to setup fixed button listeners (Projects, Users, More)
+  // Centralized function to setup fixed button listeners (Projects, Users, More - mobile only)
   // This should be called whenever these buttons might have lost their listeners
   // setupFixedButtonListeners() ELIMINADO - ahora se maneja en renderMobileBottomBar()
 
@@ -2437,7 +2402,7 @@ class LunaIntegration {
     
     // 2. Event listeners para proyectos
     cloned.querySelectorAll('.project-item').forEach(item => {
-      const projectId = item.closest('[data-sortable-id]')?.getAttribute('data-sortable-id');
+      const projectId = item.closest('[data-project-id]')?.getAttribute('data-project-id');
       if (!projectId) return;
       
       item.addEventListener('click', (e) => {
@@ -2495,7 +2460,7 @@ class LunaIntegration {
     
     // 2. Event listeners para usuarios
     cloned.querySelectorAll('.user-item').forEach(item => {
-      const userId = item.closest('[data-sortable-id]')?.getAttribute('data-sortable-id');
+      const userId = item.getAttribute('data-user-id');
       if (!userId) return;
       
       item.addEventListener('click', (e) => {
@@ -2517,17 +2482,18 @@ class LunaIntegration {
     }, 100);
   }
 
-  // Unified renderMore function - works for both mobile and desktop
+  // Unified renderMore function - works for mobile only (desktop More dropdown removed)
   renderMore(isEditing = false, platform = 'mobile') {
     const isMobile = platform === 'mobile';
-    const containerId = isMobile ? 'mobile-more-content' : 'more-dropdown-content';
+    const containerId = isMobile ? 'mobile-more-content' : null;
+    if (!isMobile) return; // Desktop More dropdown removed
     const container = document.getElementById(containerId);
     if (!container) return;
 
     container.innerHTML = '';
 
-    // Use appropriate tabs array
-    const moreTabs = isMobile ? (this.mobileMoreTabs || []) : (this.desktopMoreTabs || []);
+    // Use mobile tabs array only (desktop More dropdown removed)
+    const moreTabs = isMobile ? (this.mobileMoreTabs || []) : [];
     if (moreTabs.length === 0) {
       container.innerHTML = '<div class="text-center text-gray-500 py-8 px-4">No additional tabs</div>';
       return;
@@ -2654,89 +2620,10 @@ class LunaIntegration {
         container.appendChild(tabItem);
         }
       });
-    } else {
-      // Desktop: render using the SAME template as sidebar tabs (with circles and three dots)
-      moreTabs.forEach((tab, index) => {
-        // Use the exact same template with showMenu=true to get the three dots
-        const tabHtml = window.tabManager.tabTemplate(tab, true, false);
-        const tabWrapper = document.createElement('div');
-        tabWrapper.innerHTML = tabHtml;
-        const tabEl = tabWrapper.firstElementChild;
-        
-        if (tabEl) {
-          // Ensure it has the correct classes and data attributes
-          tabEl.dataset.tabId = tab.id;
-          tabEl.dataset.index = index;
-          tabEl.dataset.sortableId = tab.id;
-          
-          // Ensure it has the tab-item class
-          if (!tabEl.classList.contains('tab-item')) {
-            tabEl.classList.add('tab-item');
-          }
-          
-          // Add mx-2 for margin like sidebar tabs
-          if (!tabEl.classList.contains('mx-2')) {
-            tabEl.classList.add('mx-2');
-          }
-
-          // Setup menu button handler (3 dots) - EXACTLY THE SAME CODE AS TOPBAR AND SIDEBAR
-          const menuBtn = tabEl.querySelector('.tab-menu-btn');
-          if (menuBtn) {
-            menuBtn.onclick = async (e) => {
-              e.stopPropagation();
-              e.stopImmediatePropagation();
-              
-              // If tab has backendId, get updated data from backend
-              if (tab.backendId) {
-                try {
-                  const response = await this.request(`/api/tabs/${tab.backendId}`);
-                  this.showTabMenu(e, response.tab);
-                  return;
-                } catch {
-                  // If fails, use current tab data
-                }
-              }
-              
-              // Use current tab data (fallback or if no backendId)
-              const tabData = {
-                id: tab.backendId || tab.id,
-                title: tab.title,
-                url: tab.url || tab.bookmark_url,
-                bookmark_url: tab.bookmark_url,
-                avatar_emoji: tab.avatar_emoji,
-                avatar_color: tab.avatar_color,
-                avatar_photo: tab.avatar_photo,
-                cookie_container_id: tab.cookie_container_id,
-                space_id: tab.space_id
-              };
-              this.showTabMenu(e, tabData);
-            };
-          }
-
-          if (!isEditing) {
-            tabEl.addEventListener('click', (e) => {
-              // Don't trigger if clicking on menu button or menu dropdown
-              if (e.target.closest('.tab-menu-btn') || e.target.closest('.tab-menu-dropdown')) {
-                return;
-              }
-              if (window.tabManager) {
-                window.tabManager.activate(tab.id);
-                this.hideMoreDropdown();
-              }
-            });
-          }
-
-          container.appendChild(tabEl);
-        }
-      });
     }
 
-    if (isEditing) {
-      if (isMobile) {
-        this.setupMobileMoreDragAndDrop(true);
-      } else {
-        this.setupMoreDropdownDragAndDrop();
-      }
+    if (isEditing && isMobile) {
+      this.setupMobileMoreDragAndDrop(true);
     }
   }
 
@@ -2745,30 +2632,7 @@ class LunaIntegration {
     this.renderMore(isEditing, 'mobile');
   }
 
-  // Show/hide more dropdown
-  showMoreDropdown() {
-    const dropdown = document.getElementById('more-dropdown');
-    const moreBtn = document.getElementById('sidebar-more-btn');
-    if (dropdown && moreBtn) {
-      // Calculate position relative to the button
-      const rect = moreBtn.getBoundingClientRect();
-      dropdown.style.left = `${rect.right + 8}px`;
-      dropdown.style.top = `${rect.top}px`;
-      dropdown.classList.add('active');
-      this.renderMore(false, 'desktop');
-      // Setup drag and drop after rendering
-      setTimeout(() => {
-        this.setupMoreDropdownDragAndDrop();
-      }, 50);
-    }
-  }
-
-  hideMoreDropdown() {
-    const dropdown = document.getElementById('more-dropdown');
-    if (dropdown) {
-      dropdown.classList.remove('active');
-    }
-  }
+  // More dropdown removed - no longer needed
 
   setupMobileMoreDragAndDrop(isEditing) {
     if (!isEditing) return;
@@ -2931,43 +2795,7 @@ class LunaIntegration {
     });
   }
 
-  // Calculate and update desktop More tabs - based on user's custom arrangement
-  // skipRender: set to true when called from syncTabsToTabManager to avoid double render
-  async updateDesktopMoreTabs(skipRender = false) {
-    if (!window.tabManager) return;
-
-    const tabs = window.tabManager.tabs || [];
-    const personalTabs = tabs.filter(t => {
-      const url = t.url || '';
-      return url && url !== '/new' && url !== 'tabs://new' && !t.spaceId && !this.isChatUrl(url);
-    });
-
-    // Load which tabs are in "More" from backend (use sync version if cache available)
-    const moreTabIds = this.getDesktopMoreTabIdsSync();
-    
-    // Filter tabs that are in "More" - normalize IDs to strings for comparison
-    const moreTabs = personalTabs.filter(t => {
-      const tabId = String(t.backendId || t.id);
-      return moreTabIds.has(tabId);
-    });
-    
-    this.desktopMoreTabs = moreTabs;
-
-    // Always show More button if there are personal tabs OR tabs in More (user can move them)
-    const moreBtn = document.getElementById('sidebar-more-btn');
-    if (moreBtn) {
-      if (personalTabs.length > 0 || moreTabs.length > 0) {
-        moreBtn.style.display = 'flex';
-      } else {
-        moreBtn.style.display = 'none';
-      }
-    }
-
-    // Re-render tabs to exclude the ones in "More" (skip if already rendering from sync)
-    if (!skipRender && window.tabManager && window.tabManager.render) {
-      window.tabManager.render();
-    }
-  }
+  // Desktop More dropdown removed - no longer needed
 
   // Cache for preferences to avoid repeated API calls
   _preferencesCache = null;
@@ -2985,18 +2813,18 @@ class LunaIntegration {
     }
 
     if (!this.token) {
-      return { desktop_more_tab_ids: [], mobile_more_tab_ids: [] };
+      return { mobile_more_tab_ids: [] };
     }
 
     try {
       const data = await this.request('/api/users/preferences');
-      this._preferencesCache = data.preferences || { desktop_more_tab_ids: [], mobile_more_tab_ids: [] };
+      this._preferencesCache = data.preferences || { mobile_more_tab_ids: [] };
       this._preferencesCacheTime = Date.now();
       return this._preferencesCache;
     } catch (err) {
       console.error('Failed to load preferences:', err);
       // Return empty defaults on error
-      return { desktop_more_tab_ids: [], mobile_more_tab_ids: [] };
+      return { mobile_more_tab_ids: [] };
     }
   }
 
@@ -3022,26 +2850,7 @@ class LunaIntegration {
     }
   }
 
-  // Get/set which tabs are in "More" - BACKEND for persistence across devices
-  async getDesktopMoreTabIds() {
-    const prefs = await this.loadPreferences();
-    const tabIds = (prefs.desktop_more_tab_ids || []).map(id => String(id));
-    return new Set(tabIds);
-  }
-
-  // Sync version uses cache - call loadPreferences() first to populate cache
-  getDesktopMoreTabIdsSync() {
-    if (this._preferencesCache) {
-      const tabIds = (this._preferencesCache.desktop_more_tab_ids || []).map(id => String(id));
-      return new Set(tabIds);
-    }
-    return new Set();
-  }
-
-  async setDesktopMoreTabIds(tabIds) {
-    const tabIdsArray = Array.from(tabIds).map(id => String(id));
-    await this.savePreferences({ desktop_more_tab_ids: tabIdsArray });
-  }
+  // Desktop More dropdown removed - no longer needed
 
   // Get/set which tabs are in "More" from backend (mobile)
   async getMobileMoreTabIds() {
@@ -3069,110 +2878,7 @@ class LunaIntegration {
   }
 
 
-  // Setup drag and drop for more dropdown (desktop) - reuse existing system
-  setupMoreDropdownDragAndDrop() {
-    const container = document.getElementById('more-dropdown-content');
-    if (!container) return;
-
-    // Use the same drag and drop system as tabs-cont
-    this.setupDragAndDrop('more-dropdown-content', this.desktopMoreTabs || [], false, async ({ draggedId, targetId, position, dropTarget }) => {
-      const draggedIdStr = String(draggedId);
-      
-      try {
-        // Check if dropping on sidebar (tabs-cont) - MOVE OUT OF MORE
-        if (dropTarget === 'tabs-cont') {
-          // Find tab by id or backendId
-          const tab = this.desktopMoreTabs.find(t => 
-            String(t.id) === draggedIdStr || String(t.backendId) === draggedIdStr
-          );
-          const tabIdToMove = tab ? String(tab.backendId || tab.id) : draggedIdStr;
-          await this.moveTabFromMore(tabIdToMove);
-          return;
-        }
-        
-        // Reordering within More dropdown
-        const oldIndex = this.desktopMoreTabs.findIndex(t => 
-          String(t.id) === draggedIdStr || String(t.backendId) === draggedIdStr
-        );
-        const targetIdStr = String(targetId);
-        const newIndex = this.desktopMoreTabs.findIndex(t => 
-          String(t.id) === targetIdStr || String(t.backendId) === targetIdStr
-        );
-        
-        
-        if (oldIndex === -1) {
-          console.error('[More] Could not find dragged tab');
-          return;
-        }
-        
-        let finalIndex = newIndex === -1 ? this.desktopMoreTabs.length : newIndex;
-        if (position === 'after' && newIndex !== -1) {
-          finalIndex = newIndex + 1;
-        }
-        
-        const [draggedTab] = this.desktopMoreTabs.splice(oldIndex, 1);
-        if (oldIndex < finalIndex) finalIndex--;
-        this.desktopMoreTabs.splice(finalIndex, 0, draggedTab);
-        
-        await this.saveDesktopTabsOrder();
-        this.renderMore(false, 'desktop');
-        setTimeout(() => this.setupMoreDropdownDragAndDrop(), 50);
-      } catch (err) {
-        console.error('[More] Failed to handle drag:', err);
-      }
-    });
-  }
-
-  async saveDesktopTabsOrder() {
-    // Save which tabs are in "More" to backend
-    const moreTabIds = new Set((this.desktopMoreTabs || []).map(t => String(t.backendId || t.id)).filter(Boolean));
-    await this.setDesktopMoreTabIds(moreTabIds);
-  }
-
-  // Move tab to/from More - ASYNC for backend persistence
-  async moveTabToMore(tabId) {
-    const tabIdStr = String(tabId);
-    const moreTabIds = await this.getDesktopMoreTabIds();
-    moreTabIds.add(tabIdStr);
-    await this.setDesktopMoreTabIds(moreTabIds);
-    
-    // Update UI
-    await this.updateDesktopMoreTabs();
-    
-    // Force re-render of sidebar tabs
-    if (window.tabManager && window.tabManager.render) {
-      window.tabManager.render();
-    }
-    
-    // Re-render More dropdown if open
-    const dropdown = document.getElementById('more-dropdown');
-    if (dropdown && dropdown.classList.contains('active')) {
-      this.renderMore(false, 'desktop');
-      setTimeout(() => this.setupMoreDropdownDragAndDrop(), 50);
-    }
-  }
-
-  async moveTabFromMore(tabId) {
-    const tabIdStr = String(tabId);
-    const moreTabIds = await this.getDesktopMoreTabIds();
-    moreTabIds.delete(tabIdStr);
-    await this.setDesktopMoreTabIds(moreTabIds);
-    
-    // Update UI
-    await this.updateDesktopMoreTabs();
-    
-    // Force re-render of sidebar tabs
-    if (window.tabManager && window.tabManager.render) {
-      window.tabManager.render();
-    }
-    
-    // Re-render More dropdown if open
-    const dropdown = document.getElementById('more-dropdown');
-    if (dropdown && dropdown.classList.contains('active')) {
-      this.renderMore(false, 'desktop');
-      setTimeout(() => this.setupMoreDropdownDragAndDrop(), 50);
-    }
-  }
+  // Desktop More dropdown removed - no longer needed
 
   async saveMobileTabsOrder() {
     // Get current order from DOM (bottom bar tabs)
@@ -4118,7 +3824,7 @@ class LunaIntegration {
     menu.className = 'tab-menu-dropdown absolute bg-white border border-[#e8eaed] rounded-lg shadow-lg py-1 min-w-[160px]';
     menu.style.left = `${rect.left}px`;
     menu.style.top = `${rect.bottom + 4}px`;
-    menu.style.zIndex = '10001'; // Higher than more-dropdown (10000) to appear on top
+    menu.style.zIndex = '10001'; // High z-index to appear on top
 
     // Cookie containers list (hardcoded for now, can be made dynamic later)
     const cookieContainers = [
@@ -5152,6 +4858,11 @@ class LunaIntegration {
     const container = document.getElementById('projects-cont');
     if (!container) return;
     
+    // Ensure container has position relative for drop indicators
+    if (window.getComputedStyle(container).position === 'static') {
+      container.style.position = 'relative';
+    }
+    
     // También actualizar vista móvil SIEMPRE (usa el mismo código)
     setTimeout(() => {
       const mobileProjectsView = document.getElementById('mobile-projects-view');
@@ -5168,33 +4879,126 @@ class LunaIntegration {
       return;
     }
 
-    // Build hierarchy tree - EXACTLY like luna-chat
+    // Build hierarchy tree - organized: active first, then archived (with separator, collapsed by default)
     const buildTree = () => {
-      const roots = this.projects.filter(p => !p.parent_id);
-      const children = this.projects.filter(p => p.parent_id);
+      // Separate roots: active first, then archived
+      const allRoots = this.projects.filter(p => !p.parent_id);
+      const activeRoots = allRoots.filter(p => !p.archived);
+      const archivedRoots = allRoots.filter(p => p.archived === true);
+      
+      // Sort each group by position
+      activeRoots.sort((a, b) => (a.position || 0) - (b.position || 0));
+      archivedRoots.sort((a, b) => (a.position || 0) - (b.position || 0));
+      
+      const allChildren = this.projects.filter(p => p.parent_id);
       
       const tree = [];
       
       const addChildren = (parent, depth = 0) => {
+        const isArchived = parent.archived === true;
+        const parentId = parent.parent_id || null; // null for root level
+        
+        // Only add archived projects if they are expanded for this specific parent
+        const showArchived = this.showArchivedForParent.get(parentId) || false;
+        if (isArchived && !showArchived) {
+          return; // Skip archived projects if collapsed for this parent
+        }
+        
+        // Add the project itself
         tree.push({ ...parent, depth });
         
         // Use is_expanded exactly like luna-chat (defaults to true if undefined)
         if (parent.is_expanded !== false) {
-          const kids = children.filter(c => c.parent_id === parent.id);
-          kids.sort((a, b) => (a.position || 0) - (b.position || 0));
-          kids.forEach(kid => addChildren(kid, depth + 1));
+          // Get children for this parent
+          const parentChildren = allChildren.filter(c => c.parent_id === parent.id);
+          
+          // Separate: active first, then archived
+          const activeKids = parentChildren.filter(c => !c.archived);
+          const archivedKids = parentChildren.filter(c => c.archived === true);
+          
+          // Sort each group by position
+          activeKids.sort((a, b) => (a.position || 0) - (b.position || 0));
+          archivedKids.sort((a, b) => (a.position || 0) - (b.position || 0));
+          
+          // Add active children first
+          activeKids.forEach(kid => addChildren(kid, depth + 1));
+          
+          // Add separator before archived children (show separator if there are archived kids)
+          // This is the ONLY place where separators are added for children
+          if (archivedKids.length > 0) {
+            tree.push({ isSeparator: true, depth: depth + 1, parentId: parent.id });
+          }
+          
+          // Add archived children (only if expanded for this specific parent)
+          const showArchivedForThisParent = this.showArchivedForParent.get(parent.id) || false;
+          if (showArchivedForThisParent) {
+            archivedKids.forEach(kid => addChildren(kid, depth + 1));
+          }
         }
       };
       
-      roots.sort((a, b) => (a.position || 0) - (b.position || 0));
-      roots.forEach(root => addChildren(root));
+      // Add active roots first
+      activeRoots.forEach(root => addChildren(root));
+      
+      // Add separator before archived roots (show separator if there are archived roots, even if no active roots)
+      if (archivedRoots.length > 0) {
+        tree.push({ isSeparator: true, depth: 0, parentId: null }); // null = root level
+      }
+      
+      // Add archived roots (only if expanded for root level)
+      const showArchivedRoots = this.showArchivedForParent.get(null) || false;
+      if (showArchivedRoots) {
+        archivedRoots.forEach(root => addChildren(root));
+      }
+      
       return tree;
     };
 
     const hierarchicalProjects = buildTree();
     
     container.innerHTML = '';
-    hierarchicalProjects.forEach(project => {
+    
+    hierarchicalProjects.forEach(item => {
+      // Handle separator (clickable to expand/collapse archived projects for specific parent)
+      if (item.isSeparator) {
+        const parentId = item.parentId !== undefined ? item.parentId : null;
+        const showArchived = this.showArchivedForParent.get(parentId) || false;
+        
+        // Create container for the separator (just the arrow icon)
+        const separatorWrapper = document.createElement('div');
+        separatorWrapper.className = 'flex items-center justify-center my-1 cursor-pointer group';
+        separatorWrapper.style.marginLeft = `${item.depth * 16}px`;
+        separatorWrapper.title = showArchived ? 'Click to hide archived projects' : 'Click to show archived projects';
+        separatorWrapper.setAttribute('data-parent-id', parentId || 'root');
+        
+        // Icon container (centered, compact) - just the arrow
+        const iconContainer = document.createElement('div');
+        iconContainer.className = 'flex items-center justify-center text-gray-400 group-hover:text-gray-500 transition-all';
+        iconContainer.style.flexShrink = '0';
+        iconContainer.style.transform = showArchived ? 'rotate(180deg)' : 'rotate(0deg)';
+        iconContainer.style.transition = 'transform 0.2s ease';
+        iconContainer.innerHTML = `
+          <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="6 9 12 15 18 9"></polyline>
+          </svg>
+        `;
+        
+        // Assemble separator (just the arrow)
+        separatorWrapper.appendChild(iconContainer);
+        
+        // Make separator clickable to toggle archived projects for this specific parent
+        separatorWrapper.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const currentState = this.showArchivedForParent.get(parentId) || false;
+          this.showArchivedForParent.set(parentId, !currentState);
+          this.renderProjects();
+        });
+        
+        container.appendChild(separatorWrapper);
+        return;
+      }
+      
+      const project = item;
       const isActive = this.activeSpace?.id === project.id;
       const hasChildren = this.projects.some(p => p.parent_id === project.id);
       
@@ -5211,12 +5015,13 @@ class LunaIntegration {
       const wrapperEl = document.createElement('div');
       wrapperEl.style.marginLeft = `${project.depth * 16}px`; // EXACTLY like luna-chat (16px per depth)
       wrapperEl.className = 'relative';
-      wrapperEl.setAttribute('data-sortable-id', project.id);
+      wrapperEl.setAttribute('data-project-id', project.id);
       
+      const isArchived = project.archived === true;
       const projectEl = document.createElement('div');
       projectEl.className = `project-item group flex items-center gap-2 px-2 py-1.5 rounded-lg transition-all ${
         isActive ? 'bg-[#4285f4]/10 text-[#4285f4] font-medium shadow-sm' : 'text-[#202124] hover:bg-[#e8eaed]'
-      }`;
+      } ${isArchived ? 'opacity-60' : ''}`;
       projectEl.style.cursor = 'pointer';
       
       // Chevron for expand/collapse (EXACTLY like luna-chat) - más compacto
@@ -5237,11 +5042,11 @@ class LunaIntegration {
         </div>
         <span class="flex-1 text-xs truncate">${this.escapeHTML(project.name)}</span>
         <div class="space-unread-badge" data-space-id="${project.id}" style="display: none; position: absolute; top: 4px; right: 28px; background-color: #ea4335; color: white; border-radius: 50%; width: 18px; height: 18px; min-width: 18px; align-items: center; justify-content: center; font-size: 10px; font-weight: 600; z-index: 10;"></div>
-          <button class="project-archive-btn opacity-0 group-hover:opacity-100 hover:text-[#4285f4] transition-opacity p-0.5 cursor-pointer" data-project-id="${project.id}" title="Archive" style="cursor: pointer;">
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="20 6 9 17 4 12"></polyline>
-            </svg>
-          </button>
+        <button class="project-archive-btn opacity-0 group-hover:opacity-100 hover:text-[#4285f4] transition-opacity p-0.5 cursor-pointer" data-project-id="${project.id}" title="Archive" style="cursor: pointer;">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="20 6 9 17 4 12"></polyline>
+          </svg>
+        </button>
       `;
       
       // Set event listener AFTER setting innerHTML
@@ -5288,26 +5093,266 @@ class LunaIntegration {
       container.appendChild(wrapperEl);
     });
     
-    // Setup drag and drop for projects
-    this.setupDragAndDrop('projects-cont', this.projects, true, async ({ draggedId, targetId, position, targetParentId }) => {
-      try {
-        await this.request(`/api/spaces/reorder`, {
-          method: 'POST',
-          body: JSON.stringify({
-            spaceId: draggedId,
-            targetId,
-            position,
-            targetParentId
-          })
-        });
-        await this.loadProjects();
-      } catch (err) {
-        console.error('Failed to reorder projects:', err);
-      }
-    });
+    // Setup simple drag and drop for projects (only parent-child relationships)
+    this.setupSimpleProjectDragAndDrop();
     
     // Don't update badges here - they will be updated via realtime when messages arrive
     // Only update on initial load (handled in setupChatNotifications)
+  }
+
+  // Enhanced drag and drop for projects with visual feedback
+  setupSimpleProjectDragAndDrop() {
+    const container = document.getElementById('projects-cont');
+    if (!container) return;
+
+    let draggedElement = null;
+    let draggedProjectId = null;
+    let draggedProject = null;
+    let dropIndicator = null;
+    let dragStartY = 0;
+    let isDragging = false;
+    const activationDistance = 5;
+
+    container.addEventListener('mousedown', (e) => {
+      // Only allow drag on project items, not on buttons
+      const projectItem = e.target.closest('.project-item');
+      if (!projectItem) return;
+      
+      // Don't start drag if clicking on buttons
+      if (e.target.closest('.expand-btn') || e.target.closest('.project-archive-btn')) {
+        return;
+      }
+
+      const wrapper = projectItem.closest('[data-project-id]');
+      if (!wrapper) return;
+
+      draggedProjectId = wrapper.getAttribute('data-project-id');
+      draggedProject = this.projects.find(p => p.id === draggedProjectId);
+      draggedElement = wrapper;
+      dragStartY = e.clientY;
+      isDragging = false;
+      
+      // Hide archive buttons during drag
+      container.querySelectorAll('.project-archive-btn').forEach(btn => {
+        btn.style.display = 'none';
+      });
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (!draggedElement || !draggedProjectId) return;
+      
+      const distance = Math.abs(e.clientY - dragStartY);
+      if (distance >= activationDistance && !isDragging) {
+        isDragging = true;
+        
+        // Freeze sidebar - disable hover effects
+        container.classList.add('dragging-active');
+        draggedElement.classList.add('dragging-item');
+        draggedElement.style.opacity = '0.5';
+        draggedElement.style.cursor = 'grabbing';
+      }
+      
+      if (!isDragging) return;
+      
+      e.preventDefault();
+      
+      // Find the target element under the cursor
+      const elementAtPoint = document.elementFromPoint(e.clientX, e.clientY);
+      if (!elementAtPoint) {
+        this.clearDropIndicator();
+        return;
+      }
+      
+      // Find closest project element
+      const targetWrapper = elementAtPoint.closest('[data-project-id]');
+      const targetProjectId = targetWrapper?.getAttribute('data-project-id');
+      
+      // Check if we're over the container itself (for moving to root)
+      const isOverContainer = container.contains(elementAtPoint) && !targetWrapper;
+      
+      if (isOverContainer && draggedProject?.parent_id) {
+        // Show indicator at top of container for "move to root"
+        this.showDropIndicator(container, 'top', 'Move to root level');
+        dropIndicator = { type: 'root', targetId: null };
+      } else if (targetWrapper && targetProjectId !== draggedProjectId) {
+        const targetProject = this.projects.find(p => p.id === targetProjectId);
+        if (!targetProject) return;
+        
+        // Determine if we can reorder (same parent) or make child (different parent)
+        const canReorder = draggedProject?.parent_id === targetProject?.parent_id;
+        const canMakeChild = targetProjectId !== draggedProjectId;
+        
+        // Calculate position (before/after)
+        const targetRect = targetWrapper.getBoundingClientRect();
+        const relativeY = e.clientY - targetRect.top;
+        const position = relativeY < targetRect.height / 2 ? 'before' : 'after';
+        
+        if (canReorder) {
+          // Show reorder indicator (blue line)
+          this.showDropIndicator(targetWrapper, position, 'Reorder');
+          dropIndicator = { type: 'reorder', targetId: targetProjectId, position };
+        } else if (canMakeChild) {
+          // Show child indicator (different style)
+          this.showDropIndicator(targetWrapper, 'inside', 'Make child');
+          dropIndicator = { type: 'child', targetId: targetProjectId };
+        }
+      } else {
+        this.clearDropIndicator();
+        dropIndicator = null;
+      }
+    });
+
+    document.addEventListener('mouseup', async () => {
+      if (!draggedElement || !draggedProjectId) {
+        this.cleanupDrag();
+        return;
+      }
+
+      // Cleanup visual feedback
+      this.cleanupDrag();
+      
+      if (!isDragging || !dropIndicator) {
+        draggedElement = null;
+        draggedProjectId = null;
+        draggedProject = null;
+        dropIndicator = null;
+        return;
+      }
+      
+      try {
+        if (dropIndicator.type === 'root') {
+          // Moving to root level
+          await this.request('/api/spaces/reorder', {
+            method: 'POST',
+            body: JSON.stringify({
+              spaceId: draggedProjectId,
+              targetId: null,
+              position: 'after',
+              targetParentId: null
+            })
+          });
+        } else if (dropIndicator.type === 'reorder') {
+          // Reordering within same parent (no Notion sync needed)
+          await this.request('/api/spaces/reorder', {
+            method: 'POST',
+            body: JSON.stringify({
+              spaceId: draggedProjectId,
+              targetId: dropIndicator.targetId,
+              position: dropIndicator.position,
+              targetParentId: draggedProject?.parent_id || null
+            })
+          });
+        } else if (dropIndicator.type === 'child') {
+          // Making child (syncs with Notion)
+          await this.request('/api/spaces/reorder', {
+            method: 'POST',
+            body: JSON.stringify({
+              spaceId: draggedProjectId,
+              targetId: dropIndicator.targetId,
+              position: 'inside',
+              targetParentId: dropIndicator.targetId
+            })
+          });
+        }
+        
+        // Reload projects to reflect the change
+        await this.loadProjects();
+      } catch (err) {
+        console.error('Failed to move project:', err);
+        await this.loadProjects();
+      }
+      
+      draggedElement = null;
+      draggedProjectId = null;
+      draggedProject = null;
+      dropIndicator = null;
+    });
+  }
+
+  cleanupDrag() {
+    const container = document.getElementById('projects-cont');
+    if (container) {
+      container.classList.remove('dragging-active');
+      container.querySelectorAll('.dragging-item').forEach(el => {
+        el.classList.remove('dragging-item');
+        el.style.opacity = '';
+        el.style.cursor = '';
+      });
+      // Show archive buttons again
+      container.querySelectorAll('.project-archive-btn').forEach(btn => {
+        btn.style.display = '';
+      });
+    }
+    this.clearDropIndicator();
+  }
+
+  showDropIndicator(targetElement, position, label = '') {
+    this.clearDropIndicator();
+    
+    const indicator = document.createElement('div');
+    indicator.className = 'project-drop-indicator';
+    indicator.setAttribute('data-indicator-label', label);
+    
+    const rect = targetElement.getBoundingClientRect();
+    const container = document.getElementById('projects-cont');
+    const containerRect = container.getBoundingClientRect();
+    
+    if (position === 'top' && targetElement === container) {
+      // Show at top of container
+      indicator.style.cssText = `
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 0;
+        height: 2px;
+        background-color: #4285f4;
+        z-index: 1000;
+        pointer-events: none;
+      `;
+      container.appendChild(indicator);
+    } else if (position === 'before') {
+      indicator.style.cssText = `
+        position: absolute;
+        left: ${rect.left - containerRect.left}px;
+        width: ${rect.width}px;
+        top: ${rect.top - containerRect.top}px;
+        height: 2px;
+        background-color: #4285f4;
+        z-index: 1000;
+        pointer-events: none;
+      `;
+      container.appendChild(indicator);
+    } else if (position === 'after') {
+      indicator.style.cssText = `
+        position: absolute;
+        left: ${rect.left - containerRect.left}px;
+        width: ${rect.width}px;
+        top: ${rect.bottom - containerRect.top}px;
+        height: 2px;
+        background-color: #4285f4;
+        z-index: 1000;
+        pointer-events: none;
+      `;
+      container.appendChild(indicator);
+    } else if (position === 'inside') {
+      // Highlight the target element
+      targetElement.style.backgroundColor = '#e8f0fe';
+      targetElement.style.borderLeft = '3px solid #4285f4';
+    }
+  }
+
+  clearDropIndicator() {
+    const container = document.getElementById('projects-cont');
+    if (!container) return;
+    
+    // Remove indicator line
+    container.querySelectorAll('.project-drop-indicator').forEach(el => el.remove());
+    
+    // Reset all project styles
+    container.querySelectorAll('[data-project-id]').forEach(el => {
+      el.style.backgroundColor = '';
+      el.style.borderLeft = '';
+    });
   }
 
   async toggleProjectExpanded(projectId) {
@@ -5335,16 +5380,30 @@ class LunaIntegration {
     });
   }
 
+
   async archiveProject(projectId) {
     const project = this.projects.find(p => p.id === projectId);
     if (!project) return;
     
-    // Optimistic UI: Remove project immediately from view
+    // Optimistic UI: Mark as archived and update arrays
+    project.archived = true;
+    
+    // Remove from active projects list
     const projectIndex = this.projects.findIndex(p => p.id === projectId);
     if (projectIndex !== -1) {
       this.projects.splice(projectIndex, 1);
-      this.renderProjects(); // Update UI immediately
     }
+    
+    // Update in allProjects array
+    const allProjectsIndex = this.allProjects.findIndex(p => p.id === projectId);
+    if (allProjectsIndex !== -1) {
+      this.allProjects[allProjectsIndex].archived = true;
+    } else {
+      this.allProjects.push({ ...project, archived: true });
+    }
+    
+    // Re-render to show archived project within its parent (if parent is also archived)
+    this.renderProjects();
     
     // Close active space if it was the archived project
     if (this.activeSpace?.id === projectId) {
@@ -5365,10 +5424,14 @@ class LunaIntegration {
     } catch (err) {
       console.error('Failed to archive project:', err);
       // Restore project if archive failed
+      project.archived = false;
       if (projectIndex !== -1) {
         this.projects.splice(projectIndex, 0, project);
-        this.renderProjects();
       }
+      if (allProjectsIndex !== -1) {
+        this.allProjects[allProjectsIndex].archived = false;
+      }
+      this.renderProjects();
       alert('Failed to archive project. Please try again.');
     }
   }
@@ -5418,7 +5481,7 @@ class LunaIntegration {
       userEl.className = `user-item flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer transition-all relative ${
         isActive ? 'bg-[#4285f4]/10 text-[#4285f4] font-medium shadow-sm' : 'text-[#202124] hover:bg-[#e8eaed]'
       }`;
-      userEl.setAttribute('data-sortable-id', user.id);
+      userEl.setAttribute('data-user-id', user.id);
       
       userEl.innerHTML = `
         <div class="w-6 h-6 rounded-full bg-gray-200 flex items-center justify-center text-gray-600 text-xs font-medium flex-shrink-0 overflow-hidden">
@@ -5458,42 +5521,6 @@ class LunaIntegration {
         this.updateSpaceBadge(user.id);
       });
     }, 100);
-    
-    // Setup drag and drop for users
-    this.setupDragAndDrop('users-cont', this.users, false, async ({ draggedId, targetId, position }) => {
-      try {
-        const oldIndex = this.users.findIndex(u => u.id === draggedId);
-        const newIndex = this.users.findIndex(u => u.id === targetId);
-        
-        let finalIndex = newIndex;
-        if (position === 'after') {
-          finalIndex = newIndex + 1;
-        }
-        
-        const updates = [];
-        const newUsers = [...this.users];
-        const [dragged] = newUsers.splice(oldIndex, 1);
-        
-        // Ajustar finalIndex si removimos un elemento antes de la posición objetivo
-        if (oldIndex < finalIndex) {
-          finalIndex -= 1;
-        }
-        
-        newUsers.splice(finalIndex, 0, dragged);
-        
-        newUsers.forEach((user, index) => {
-          updates.push({ id: user.id, position: index });
-        });
-        
-        await this.request('/api/spaces/reorder', {
-          method: 'POST',
-          body: JSON.stringify({ updates })
-        });
-        await this.loadUsers();
-      } catch (err) {
-        console.error('Failed to reorder users:', err);
-      }
-    });
   }
 
   async createProject() {
@@ -5999,7 +6026,7 @@ class LunaIntegration {
     }
   }
 
-  async loadChatMessages(container, chatId, spaceId = null, skipRealtime = false) {
+  async loadChatMessages(container, chatId, _spaceId = null, skipRealtime = false) { // eslint-disable-line no-unused-vars
     const messagesContainer = container.querySelector('.chat-messages');
     if (!messagesContainer) return;
 
@@ -6096,7 +6123,7 @@ class LunaIntegration {
       const oldChannel = this.chatSubscriptions.get(chatId);
       try {
         oldChannel.unsubscribe();
-      } catch (e) {
+      } catch {
         // Ignore errors when unsubscribing
       }
       this.chatSubscriptions.delete(chatId);
@@ -6129,7 +6156,7 @@ class LunaIntegration {
             table: 'chat_messages',
             filter: `chat_id=eq.${chatId}`
           },
-        (payload) => {
+        () => {
           // Reload messages when new one arrives (skip realtime setup to avoid loop)
           const wrapper = messagesContainer.closest('.chat-wrapper');
           if (wrapper) {
@@ -6270,27 +6297,7 @@ class LunaIntegration {
       this.mouseY = e.clientY;
       this.mouseX = e.clientX;
       if (isDragging && draggedElement) {
-        const elementAtPoint = document.elementFromPoint(e.clientX, e.clientY);
-        const moreBtn = document.getElementById('sidebar-more-btn');
-        const moreDropdown = document.getElementById('more-dropdown-content');
-        const moreDropdownMenu = document.getElementById('more-dropdown');
-        
-        // Simple visual feedback - solid color when over More button/dropdown
-        if (containerId === 'tabs-cont' && moreBtn) {
-          const isOverMore = moreBtn.contains(elementAtPoint) || moreBtn === elementAtPoint;
-          const isOverMoreDropdown = moreDropdown && (moreDropdown.contains(elementAtPoint) || moreDropdown === elementAtPoint);
-          const isOverMoreMenu = moreDropdownMenu && (moreDropdownMenu.contains(elementAtPoint) || moreDropdownMenu === elementAtPoint);
-          
-          if (isOverMore || isOverMoreDropdown || isOverMoreMenu) {
-            moreBtn.style.backgroundColor = '#e8f0fe';
-            // Open dropdown if not already open
-            if (moreDropdownMenu && !moreDropdownMenu.classList.contains('active')) {
-              this.showMoreDropdown();
-            }
-          } else {
-            moreBtn.style.backgroundColor = '';
-          }
-        }
+        // Desktop More dropdown removed - no longer needed
         
         this.handleDragMove(e, container, items, allowHierarchy, (indicator) => {
           dropIndicator = indicator;
@@ -6353,12 +6360,7 @@ class LunaIntegration {
         dropIndicator = null;
         
         // Clean up visual feedback
-        const moreBtnCleanup = document.getElementById('sidebar-more-btn');
         const tabsContCleanup = document.getElementById('tabs-cont');
-        if (moreBtnCleanup) {
-          moreBtnCleanup.style.backgroundColor = '';
-          moreBtnCleanup.style.border = '';
-        }
         if (tabsContCleanup) {
           tabsContCleanup.style.backgroundColor = '';
         }
@@ -6374,113 +6376,33 @@ class LunaIntegration {
             draggedElement.classList.remove('dragging-item');
           }
           
-          // Check if dropping on a different container (for moving between sidebar and More)
+          // Desktop More dropdown removed - no longer needed
+          // Try data-sortable-id first, then fallback to data-tab-id
           const elementAtPoint = document.elementFromPoint(e.clientX, e.clientY);
-          const tabsContDrop = document.getElementById('tabs-cont');
-          const moreDropdown = document.getElementById('more-dropdown-content');
-          const moreDropdownMenu = document.getElementById('more-dropdown');
-          const moreBtnDrop = document.getElementById('sidebar-more-btn');
-          let dropTarget = containerId;
-          
-          // Helper to check if element is within a target (including children)
-          const isWithinElement = (element, target) => {
-            if (!element || !target) return false;
-            if (element === target) return true;
-            if (target.contains(element)) return true;
-            // Also check if element or its parents match the target
-            let current = element;
-            while (current && current !== document.body) {
-              if (current === target) return true;
-              current = current.parentElement;
-            }
-            return false;
-          };
-          
-          // Check if dropping on More button or dropdown (from sidebar tabs)
-          if (containerId === 'tabs-cont') {
-            // Check if over More button (highest priority) - check elementAtPoint and its parents
-            if (moreBtnDrop && isWithinElement(elementAtPoint, moreBtnDrop)) {
-              dropTarget = 'more-dropdown-content';
-              // Open dropdown if not already open
-              if (moreDropdownMenu && !moreDropdownMenu.classList.contains('active')) {
-                this.showMoreDropdown();
-                // Wait a bit for dropdown to render
-                await new Promise(resolve => setTimeout(resolve, 100));
-              }
-            } 
-            // Check if over dropdown menu
-            else if (moreDropdownMenu && isWithinElement(elementAtPoint, moreDropdownMenu)) {
-              dropTarget = 'more-dropdown-content';
-            }
-            // Check if over dropdown content
-            else if (moreDropdown && isWithinElement(elementAtPoint, moreDropdown)) {
-              dropTarget = 'more-dropdown-content';
-            }
-          } else if (containerId === 'more-dropdown-content') {
-            // Check if dropping back to sidebar - detect sidebar element or tabs-cont
-            const sidebar = document.getElementById('sidebar');
-            if (tabsContDrop && isWithinElement(elementAtPoint, tabsContDrop)) {
-              dropTarget = 'tabs-cont';
-            } else if (sidebar && isWithinElement(elementAtPoint, sidebar) && !isWithinElement(elementAtPoint, moreBtnDrop) && !isWithinElement(elementAtPoint, moreDropdownMenu)) {
-              // Dropped on sidebar but not on More button/dropdown - move to tabs-cont
-              dropTarget = 'tabs-cont';
-            } else if (moreBtnDrop && isWithinElement(elementAtPoint, moreBtnDrop)) {
-              // Dropping on More button stays in More (already there)
-              dropTarget = 'more-dropdown-content';
-            }
+          let overElement = elementAtPoint?.closest('[data-sortable-id]');
+          if (!overElement) {
+            overElement = elementAtPoint?.closest('[data-tab-id]');
           }
-          
-          
-          // Handle dropping on different container (move between sidebar and More)
-          if (dropTarget !== containerId) {
-            if (!onReorder) {
-              console.error('[Drag] ERROR: onReorder callback is not defined!');
-            } else {
-              isReordering = true;
-              try {
-                await onReorder({ 
-                  draggedId, 
-                  targetId: null, 
-                  position: 'after',
-                  dropTarget: dropTarget
-                });
-              } catch (err) {
-                console.error('[Drag] Move between containers failed:', err);
-                console.error('[Drag] Error stack:', err.stack);
-              } finally {
-                setTimeout(() => {
-                  isReordering = false;
-                }, 100);
-              }
-            }
-          } else {
-            // Try data-sortable-id first, then fallback to data-tab-id
-            let overElement = elementAtPoint?.closest('[data-sortable-id]');
-            if (!overElement) {
-              overElement = elementAtPoint?.closest('[data-tab-id]');
-            }
-            if (overElement && overElement !== draggedElement && onReorder) {
-              const targetId = overElement.dataset.sortableId || overElement.dataset.tabId;
-              
-              // Prevenir múltiples llamadas
-              isReordering = true;
-              
-              // OPTIMISTIC UI: Actualizar inmediatamente antes de la llamada al backend
-              try {
-                await onReorder({ 
-                  draggedId, 
-                  targetId, 
-                  position: finalDropIndicator?.position || 'after',
-                  dropTarget: dropTarget
-                });
-              } catch (err) {
-                console.error('Reorder failed:', err);
-              } finally {
-                // Resetear flag después de un delay para permitir re-drag
-                setTimeout(() => {
-                  isReordering = false;
-                }, 100);
-              }
+          if (overElement && overElement !== draggedElement && onReorder) {
+            const targetId = overElement.dataset.sortableId || overElement.dataset.tabId;
+            
+            // Prevenir múltiples llamadas
+            isReordering = true;
+            
+            // OPTIMISTIC UI: Actualizar inmediatamente antes de la llamada al backend
+            try {
+              await onReorder({ 
+                draggedId, 
+                targetId, 
+                position: finalDropIndicator?.position || 'after'
+              });
+            } catch (err) {
+              console.error('Reorder failed:', err);
+            } finally {
+              // Resetear flag después de un delay para permitir re-drag
+              setTimeout(() => {
+                isReordering = false;
+              }, 100);
             }
           }
         }
@@ -6783,7 +6705,6 @@ function fixPWAHeight() {
   if (window.matchMedia('(display-mode: standalone)').matches && window.matchMedia('(max-width: 768px)').matches) {
     const correctHeight = screen.height + 'px';
     const bottomBarHeight = 72; // Height of mobile bottom bar
-    const contentHeight = (screen.height - bottomBarHeight) + 'px';
     
     // Set body to full screen height
     document.body.style.setProperty('height', correctHeight, 'important');
