@@ -51,3 +51,4 @@ echo "  3. Accept notification permissions when prompted"
 echo "  4. Send a test message to see push notifications"
 echo ""
 
+

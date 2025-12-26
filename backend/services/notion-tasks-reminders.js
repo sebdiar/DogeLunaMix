@@ -5,7 +5,7 @@
 
 import supabase from '../config/database.js';
 import { queryTasksByDueDate } from './notion-tasks.js';
-import { getOrCreateChatForSpace } from '../routes/chat.js';
+import { getOrCreateChatForSpace, sendSystemMessageNotifications } from '../routes/chat.js';
 
 /**
  * Send morning reminders for tasks that are due today
@@ -99,6 +99,11 @@ export async function sendMorningTaskReminders() {
               console.error(`Error sending reminder for task "${task.title}" to project "${project.name}":`, messageError);
               errors++;
             } else {
+              // Send push notifications for system message (in background)
+              setImmediate(async () => {
+                await sendSystemMessageNotifications(chatId, messageText);
+              });
+              
               console.log(`✅ Reminder sent for task "${task.title}" to project "${project.name}"`);
               remindersSent++;
             }

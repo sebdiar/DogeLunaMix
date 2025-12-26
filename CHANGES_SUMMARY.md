@@ -331,3 +331,4 @@ Consulta estos archivos para más detalles:
 - `TESTING_PUSH_NOTIFICATIONS.md` - Guía paso a paso de testing local
 - `DEPLOY_TO_REPLIT.md` - Guía de deploy a producción
 
+

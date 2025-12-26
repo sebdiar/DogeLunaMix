@@ -6,6 +6,22 @@ import webpush from 'web-push';
 const router = express.Router();
 router.use(authenticate);
 
+// VAPID configuration (required for push notifications)
+const vapidPublicKey = process.env.VAPID_PUBLIC_KEY;
+const vapidPrivateKey = process.env.VAPID_PRIVATE_KEY;
+const vapidMailto = process.env.VAPID_MAILTO || 'mailto:support@dogeluna.com';
+
+if (vapidPublicKey && vapidPrivateKey) {
+  webpush.setVapidDetails(
+    vapidMailto,
+    vapidPublicKey,
+    vapidPrivateKey
+  );
+  console.log('✅ VAPID keys configured for push notifications in chat.js');
+} else {
+  console.warn('⚠️  VAPID keys not configured in chat.js - push notifications will not work');
+}
+
 // Helper: Send push notifications to users
 async function sendPushNotificationsToUsers(userIds, title, body, data) {
   try {
@@ -15,9 +31,17 @@ async function sendPushNotificationsToUsers(userIds, title, body, data) {
       .select('*')
       .in('user_id', userIds);
 
-    if (error || !subscriptions || subscriptions.length === 0) {
+    if (error) {
+      console.error('[PUSH] Error fetching subscriptions:', error);
       return;
     }
+
+    if (!subscriptions || subscriptions.length === 0) {
+      console.log(`[PUSH] No subscriptions found for ${userIds.length} user(s)`);
+      return;
+    }
+
+    console.log(`[PUSH] Found ${subscriptions.length} subscription(s) for ${userIds.length} user(s)`);
 
     // Prepare notification payload
     const payload = JSON.stringify({
@@ -29,23 +53,83 @@ async function sendPushNotificationsToUsers(userIds, title, body, data) {
     });
 
     // Send notifications to all subscriptions
-    await Promise.allSettled(
+    const results = await Promise.allSettled(
       subscriptions.map(async (sub) => {
         try {
           await webpush.sendNotification(sub.subscription, payload);
+          console.log(`[PUSH] Notification sent to user ${sub.user_id}`);
+          return { success: true, userId: sub.user_id };
         } catch (error) {
+          console.error(`[PUSH] Failed to send to user ${sub.user_id}:`, error.message);
           // If subscription is invalid (410 Gone), remove it
           if (error.statusCode === 410) {
             await supabase
               .from('push_subscriptions')
               .delete()
               .eq('id', sub.id);
+            console.log(`[PUSH] Removed invalid subscription for user ${sub.user_id}`);
           }
+          return { success: false, userId: sub.user_id, error: error.message };
         }
       })
     );
+
+    const successful = results.filter(r => r.status === 'fulfilled' && r.value.success).length;
+    const failed = results.length - successful;
+    console.log(`[PUSH] Results: ${successful} sent, ${failed} failed`);
   } catch (error) {
-    console.error('Failed to send push notifications:', error);
+    console.error('[PUSH] Failed to send push notifications:', error);
+    console.error('[PUSH] Error stack:', error.stack);
+  }
+}
+
+// Helper: Send push notifications for system messages
+async function sendSystemMessageNotifications(chatId, messageText) {
+  try {
+    // Get all participants in this chat
+    const { data: participants } = await supabase
+      .from('chat_participants')
+      .select('user_id')
+      .eq('chat_id', chatId);
+    
+    if (!participants || participants.length === 0) {
+      console.log(`[SYSTEM NOTIF] No participants found for chat ${chatId}`);
+      return;
+    }
+    
+    const recipientIds = participants.map(p => p.user_id);
+    console.log(`[SYSTEM NOTIF] Sending to ${recipientIds.length} participant(s) in chat ${chatId}`);
+    
+    // Truncate message for notification
+    const notificationBody = messageText.length > 100 
+      ? messageText.substring(0, 100) + '...' 
+      : messageText;
+    
+    // Get space_id for this chat to include in notification data
+    const { data: spaceChat } = await supabase
+      .from('space_chats')
+      .select('space_id')
+      .eq('chat_id', chatId)
+      .single();
+    
+    // Send push notification to all participants
+    await sendPushNotificationsToUsers(
+      recipientIds,
+      'System',
+      notificationBody,
+      {
+        type: 'chat_message',
+        chatId: chatId,
+        spaceId: spaceChat?.space_id || null,
+        isSystemMessage: true
+      }
+    );
+    
+    console.log(`[SYSTEM NOTIF] Notifications sent successfully for chat ${chatId}`);
+  } catch (error) {
+    console.error('[SYSTEM NOTIF] Error sending system message notifications:', error);
+    console.error('[SYSTEM NOTIF] Error stack:', error.stack);
+    // Don't throw - system messages should still be saved even if notifications fail
   }
 }
 
@@ -371,6 +455,11 @@ async function getOrCreateChatForSpace(spaceId, userId) {
             user_id: null, // null = system message
             message: messageText
           });
+        
+        // Send push notifications for system message (in background)
+        setImmediate(async () => {
+          await sendSystemMessageNotifications(chatId, messageText);
+        });
       }
     }
   }
@@ -727,11 +816,12 @@ router.get('/space/:spaceId/unread-count', async (req, res) => {
       .maybeSingle();
     
     // Count messages after the last read message
+    // Include: messages from other users AND system messages (user_id = null)
     let query = supabase
       .from('chat_messages')
       .select('id', { count: 'exact', head: true })
       .eq('chat_id', chatId)
-      .neq('user_id', req.userId); // Only count messages from other users
+      .or(`user_id.is.null,user_id.neq.${req.userId}`); // Include system messages (null) and messages from other users
     
     if (readStatus?.last_read_message_id) {
       // Count messages created after the last read message
@@ -823,11 +913,12 @@ router.get('/unread-count/users-only', async (req, res) => {
     for (const chatId of participantChatIds) {
       const lastReadMessageId = readStatusMap.get(chatId);
 
+      // Include: messages from other users AND system messages (user_id = null)
       let query = supabase
         .from('chat_messages')
         .select('id', { count: 'exact', head: true })
         .eq('chat_id', chatId)
-        .neq('user_id', req.userId);
+        .or(`user_id.is.null,user_id.neq.${req.userId}`);
 
       if (lastReadMessageId) {
         const { data: lastReadMessage } = await supabase
@@ -886,11 +977,12 @@ router.get('/unread-count', async (req, res) => {
     for (const chatId of chatIds) {
       const lastReadMessageId = readStatusMap.get(chatId);
       
+      // Include: messages from other users AND system messages (user_id = null)
       let query = supabase
         .from('chat_messages')
         .select('id', { count: 'exact', head: true })
         .eq('chat_id', chatId)
-        .neq('user_id', req.userId); // Only count messages from other users
+        .or(`user_id.is.null,user_id.neq.${req.userId}`); // Include system messages (null) and messages from other users
 
       if (lastReadMessageId) {
         // Get the timestamp of the last read message
@@ -1391,6 +1483,11 @@ router.post('/space/:spaceId/members', async (req, res) => {
           user_id: null, // null = system message
           message: messageText
         });
+      
+      // Send push notifications for system message (in background)
+      setImmediate(async () => {
+        await sendSystemMessageNotifications(chatId, messageText);
+      });
     }
     
     res.json({ success: true, added: results });
@@ -1481,6 +1578,11 @@ router.delete('/space/:spaceId/members', async (req, res) => {
             user_id: null, // null = system message
             message: messageText
           });
+        
+        // Send push notifications for system message (in background)
+        setImmediate(async () => {
+          await sendSystemMessageNotifications(spaceChat.chat_id, messageText);
+        });
       }
     }
     
@@ -1491,8 +1593,70 @@ router.delete('/space/:spaceId/members', async (req, res) => {
   }
 });
 
+// Test endpoint: Send a test system message notification
+router.post('/test/system-message', authenticate, async (req, res) => {
+  try {
+    const { chatId, message } = req.body;
+    
+    if (!chatId) {
+      return res.status(400).json({ error: 'chatId is required' });
+    }
+    
+    // Verify user has access to this chat
+    const { data: participant } = await supabase
+      .from('chat_participants')
+      .select('id')
+      .eq('chat_id', chatId)
+      .eq('user_id', req.userId)
+      .single();
+    
+    if (!participant) {
+      return res.status(403).json({ error: 'Access denied to this chat' });
+    }
+    
+    // Create test system message
+    const testMessage = message || `🧪 Test system message - ${new Date().toLocaleString()}`;
+    
+    // Insert system message
+    const { data: newMessage, error: insertError } = await supabase
+      .from('chat_messages')
+      .insert({
+        chat_id: chatId,
+        user_id: null, // null = system message
+        message: testMessage
+      })
+      .select('id, chat_id, message, created_at')
+      .single();
+    
+    if (insertError) {
+      console.error('Error inserting test system message:', insertError);
+      return res.status(500).json({ error: 'Failed to insert test message' });
+    }
+    
+    // Send push notifications for system message (in background)
+    setImmediate(async () => {
+      await sendSystemMessageNotifications(chatId, testMessage);
+    });
+    
+    res.json({ 
+      success: true, 
+      message: 'Test system message sent',
+      data: {
+        messageId: newMessage.id,
+        chatId: newMessage.chat_id,
+        message: newMessage.message,
+        createdAt: newMessage.created_at,
+        notificationSent: true
+      }
+    });
+  } catch (error) {
+    console.error('Test system message error:', error);
+    res.status(500).json({ error: 'Failed to send test system message' });
+  }
+});
+
 export default router;
-export { getOrCreateChatForSpace };
+export { getOrCreateChatForSpace, sendSystemMessageNotifications };
 
 
 

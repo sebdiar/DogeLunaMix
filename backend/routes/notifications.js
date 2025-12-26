@@ -161,6 +161,84 @@ router.post('/send', authenticate, async (req, res) => {
   }
 });
 
+// Test endpoint: Send a test system message notification to current user
+router.post('/test/system', authenticate, async (req, res) => {
+  try {
+    const { title, body } = req.body;
+    
+    const testTitle = title || 'System';
+    const testBody = body || `🧪 Test system notification - ${new Date().toLocaleString()}`;
+    
+    // Send push notification to current user
+    const { data: subscriptions, error } = await supabase
+      .from('push_subscriptions')
+      .select('*')
+      .eq('user_id', req.userId);
+    
+    if (error) {
+      console.error('Error fetching subscriptions:', error);
+      return res.status(500).json({ error: 'Failed to fetch subscriptions' });
+    }
+    
+    if (!subscriptions || subscriptions.length === 0) {
+      return res.status(400).json({ 
+        error: 'No active push subscriptions found for your account',
+        hint: 'Make sure you have granted notification permissions and subscribed to push notifications'
+      });
+    }
+    
+    // Prepare notification payload
+    const payload = JSON.stringify({
+      title: testTitle,
+      body: testBody,
+      icon: '/icon.svg',
+      badge: '/icon.svg',
+      data: {
+        type: 'test_system_message',
+        timestamp: new Date().toISOString()
+      }
+    });
+    
+    // Send notifications to all subscriptions
+    const results = await Promise.allSettled(
+      subscriptions.map(async (sub) => {
+        try {
+          await webpush.sendNotification(sub.subscription, payload);
+          return { success: true, subscriptionId: sub.id };
+        } catch (error) {
+          console.error(`Failed to send test push to subscription ${sub.id}:`, error);
+          
+          // If subscription is invalid (410 Gone), remove it
+          if (error.statusCode === 410) {
+            await supabase
+              .from('push_subscriptions')
+              .delete()
+              .eq('id', sub.id);
+          }
+          
+          return { success: false, subscriptionId: sub.id, error: error.message };
+        }
+      })
+    );
+    
+    const sent = results.filter(r => r.status === 'fulfilled' && r.value.success).length;
+    const failed = results.length - sent;
+    
+    res.json({ 
+      success: true, 
+      message: 'Test system notification sent',
+      sent, 
+      failed,
+      total: results.length,
+      title: testTitle,
+      body: testBody
+    });
+  } catch (error) {
+    console.error('Test system notification error:', error);
+    res.status(500).json({ error: 'Failed to send test system notification' });
+  }
+});
+
 export default router;
 
 

@@ -2,7 +2,7 @@ import express from 'express';
 import supabase from '../config/database.js';
 import { authenticate } from '../middleware/auth.js';
 import { getTaskDetails } from '../services/notion-tasks.js';
-import { getOrCreateChatForSpace } from './chat.js';
+import { getOrCreateChatForSpace, sendSystemMessageNotifications } from './chat.js';
 import { getNotionPageIcon } from '../services/notion.js';
 
 const router = express.Router();
@@ -840,6 +840,11 @@ async function handleTaskCreated(taskData, apiKey) {
       throw messageError;
     }
 
+    // Send push notifications for system message (in background)
+    setImmediate(async () => {
+      await sendSystemMessageNotifications(chatId, messageText);
+    });
+
     // Update cache with current task state
     updateTaskStateCache(taskId, taskDetails.isDone || false);
 
@@ -1059,6 +1064,11 @@ async function handleTaskUpdated(taskData, apiKey) {
       console.error('Error sending task update message to chat:', messageError);
       throw messageError;
     }
+
+    // Send push notifications for system message (in background)
+    setImmediate(async () => {
+      await sendSystemMessageNotifications(chatId, messageText);
+    });
 
     // Update cache with current task state
     updateTaskStateCache(taskId, taskDetails.isDone || false);

@@ -180,3 +180,4 @@ Ver consola en el panel de Replit
 
 **¿Listo para empezar?** Abre `TESTING_PUSH_NOTIFICATIONS.md` y sigue los pasos.
 
+

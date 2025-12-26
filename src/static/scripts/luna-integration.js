@@ -97,36 +97,40 @@ class LunaIntegration {
       badges.forEach((badge) => {
         if (unreadCount > 0) {
           badge.textContent = unreadCount > 99 ? '99+' : String(unreadCount);
-          badge.style.display = 'flex';
-          badge.style.visibility = 'visible';
+          // Force display and visibility - use important styles to prevent hiding
+          badge.style.setProperty('display', 'flex', 'important');
+          badge.style.setProperty('visibility', 'visible', 'important');
+          badge.style.setProperty('opacity', '1', 'important');
         } else {
           badge.textContent = '';
-          badge.style.display = 'none';
-          badge.style.visibility = 'hidden';
+          badge.style.setProperty('display', 'none', 'important');
+          badge.style.setProperty('visibility', 'hidden', 'important');
         }
       });
-    } catch {
+    } catch (error) {
+      console.error(`[BADGE] Error updating badge for space ${spaceId}:`, error);
       // On error, hide ALL badges
       const badges = document.querySelectorAll(`.space-unread-badge[data-space-id="${spaceId}"]`);
       badges.forEach(badge => {
         badge.textContent = '';
-        badge.style.display = 'none';
-        badge.style.visibility = 'hidden';
+        badge.style.setProperty('display', 'none', 'important');
+        badge.style.setProperty('visibility', 'hidden', 'important');
       });
     }
   }
 
   async updateSpaceUnreadBadges() {
     try {
-      // Update badges for all projects
-      for (const project of this.projects || []) {
-        await this.updateSpaceBadge(project.id);
-      }
+      // Collect all space IDs
+      const spaceIds = [
+        ...(this.projects || []).map(p => p.id),
+        ...(this.users || []).map(u => u.id)
+      ];
       
-      // Update badges for all users
-      for (const user of this.users || []) {
-        await this.updateSpaceBadge(user.id);
-      }
+      // Update all badges in parallel (much faster than sequential)
+      await Promise.allSettled(
+        spaceIds.map(spaceId => this.updateSpaceBadge(spaceId))
+      );
     } catch (error) {
       console.error('Failed to update space unread badges:', error);
     }
@@ -546,6 +550,13 @@ class LunaIntegration {
 
     // Setup global chat notifications (listens to ALL user chats)
     await this.setupChatNotifications();
+    
+    // Final badge update after everything is loaded and rendered
+    // This ensures badges are visible after page refresh
+    // Shorter timeout since updates are now parallel
+    setTimeout(() => {
+      this.updateSpaceUnreadBadges();
+    }, 200);
 
     // Load preferences from backend first (this will cache them)
     await this.loadPreferences();
@@ -3380,9 +3391,14 @@ class LunaIntegration {
     // NO cerrar tabs - los tabs se mantienen abiertos como en un browser normal
     // Solo cambiar qué espacio está activo y qué se muestra en TopBar vs sidebar
     
+    // Only update active state, don't re-render entire sidebar
     this.activeSpace = space;
-    this.renderProjects();
-    this.renderUsers();
+    
+    // Update visual state of active project/user without full re-render
+    this.updateActiveSpaceVisualState();
+    
+    // Update badges (no need to wait for render since we're not re-rendering)
+    this.updateSpaceUnreadBadges();
 
       // Load tabs for this space - NO cambiar TabManager, solo mostrar en TopBar
       try {
@@ -5203,8 +5219,40 @@ class LunaIntegration {
     // Setup simple drag and drop for projects (only parent-child relationships)
     this.setupSimpleProjectDragAndDrop();
     
-    // Don't update badges here - they will be updated via realtime when messages arrive
-    // Only update on initial load (handled in setupChatNotifications)
+    // Update all badges after rendering (they start with display: none)
+    // Use setTimeout to ensure DOM is fully updated
+    // Shorter timeout since updates are now parallel
+    setTimeout(() => {
+      this.updateSpaceUnreadBadges();
+    }, 100);
+  }
+
+  // Update visual state of active space without full re-render
+  updateActiveSpaceVisualState() {
+    if (!this.activeSpace) return;
+    
+    // Remove active state from all projects and users
+    document.querySelectorAll('.project-item').forEach(el => {
+      el.classList.remove('bg-[#4285f4]/10', 'text-[#4285f4]', 'font-medium', 'shadow-sm');
+      el.classList.add('hover:bg-[#e8eaed]');
+    });
+    document.querySelectorAll('.user-item').forEach(el => {
+      el.classList.remove('bg-[#4285f4]/10', 'text-[#4285f4]', 'font-medium', 'shadow-sm');
+      el.classList.add('hover:bg-[#e8eaed]');
+    });
+    
+    // Add active state to current space
+    // data-project-id is on the wrapper, so find the wrapper first
+    const projectWrapper = document.querySelector(`[data-project-id="${this.activeSpace.id}"]`);
+    const projectItem = projectWrapper?.querySelector('.project-item');
+    const userItem = document.querySelector(`.user-item[data-user-id="${this.activeSpace.id}"]`);
+    
+    const activeElement = projectItem || userItem;
+    
+    if (activeElement) {
+      activeElement.classList.add('bg-[#4285f4]/10', 'text-[#4285f4]', 'font-medium', 'shadow-sm');
+      activeElement.classList.remove('hover:bg-[#e8eaed]', 'hover:bg-[#f5f7fa]');
+    }
   }
 
   // Enhanced drag and drop for projects with visual feedback
