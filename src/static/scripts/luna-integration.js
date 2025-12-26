@@ -1125,6 +1125,13 @@ class LunaIntegration {
       // Load ALL projects (active + archived) in a single request
       const { spaces } = await this.request('/api/spaces?category=project');
       
+      console.log('[FRONTEND] Received projects from backend:', spaces?.length || 0);
+      if (spaces && spaces.length > 0) {
+        spaces.forEach(s => {
+          console.log(`[FRONTEND] Project: ${s.name} (id: ${s.id}, parent_id: ${s.parent_id || 'none'}, isGhost: ${s.isGhost || false})`);
+        });
+      }
+      
       // Store all projects
       this.allProjects = spaces || [];
       
@@ -4958,6 +4965,10 @@ class LunaIntegration {
     const buildTree = () => {
       // Separate roots: active first, then archived
       const allRoots = this.projects.filter(p => !p.parent_id);
+      console.log(`[FRONTEND] Building tree: ${this.projects.length} total projects, ${allRoots.length} roots`);
+      allRoots.forEach(r => {
+        console.log(`[FRONTEND] Root: ${r.name} (id: ${r.id}, isGhost: ${r.isGhost || false})`);
+      });
       const activeRoots = allRoots.filter(p => !p.archived);
       const archivedRoots = allRoots.filter(p => p.archived === true);
       
@@ -5076,6 +5087,7 @@ class LunaIntegration {
       const project = item;
       const isActive = this.activeSpace?.id === project.id;
       const hasChildren = this.projects.some(p => p.parent_id === project.id);
+      const isGhost = project.isGhost === true || project.isReadOnly === true;
       
       let iconHtml = '';
       if (project.avatar_photo) {
@@ -5094,10 +5106,18 @@ class LunaIntegration {
       
       const isArchived = project.archived === true;
       const projectEl = document.createElement('div');
+      // Ghost parents: gray, semi-transparent, no hover, normal cursor (just not clickable)
+      const ghostStyles = isGhost 
+        ? 'opacity-50 bg-gray-100 text-gray-500' 
+        : '';
+      const hoverStyles = isGhost 
+        ? '' 
+        : (isActive ? 'bg-[#4285f4]/10 text-[#4285f4] font-medium shadow-sm' : 'text-[#202124] hover:bg-[#e8eaed]');
+      
       projectEl.className = `project-item group flex items-center gap-2 px-2 py-1.5 rounded-lg transition-all ${
-        isActive ? 'bg-[#4285f4]/10 text-[#4285f4] font-medium shadow-sm' : 'text-[#202124] hover:bg-[#e8eaed]'
-      } ${isArchived ? 'opacity-60' : ''}`;
-      projectEl.style.cursor = 'pointer';
+        hoverStyles
+      } ${isArchived ? 'opacity-60' : ''} ${ghostStyles}`;
+      projectEl.style.cursor = isGhost ? 'default' : 'pointer';
       
       // Chevron for expand/collapse (EXACTLY like luna-chat) - más compacto
       const chevronHtml = hasChildren 
@@ -5116,53 +5136,65 @@ class LunaIntegration {
           ${iconHtml}
         </div>
         <span class="flex-1 text-xs truncate">${this.escapeHTML(project.name)}</span>
-        <div class="space-unread-badge" data-space-id="${project.id}" style="display: none; position: absolute; top: 4px; right: 28px; background-color: #ea4335; color: white; border-radius: 50%; width: 18px; height: 18px; min-width: 18px; align-items: center; justify-content: center; font-size: 10px; font-weight: 600; z-index: 10;"></div>
-        <button class="project-archive-btn opacity-0 group-hover:opacity-100 hover:text-[#4285f4] transition-opacity p-0.5 cursor-pointer" data-project-id="${project.id}" title="Archive" style="cursor: pointer;">
-          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="20 6 9 17 4 12"></polyline>
-          </svg>
-        </button>
+        ${!isGhost ? `<div class="space-unread-badge" data-space-id="${project.id}" style="display: none; position: absolute; top: 4px; right: 28px; background-color: #ea4335; color: white; border-radius: 50%; width: 18px; height: 18px; min-width: 18px; align-items: center; justify-content: center; font-size: 10px; font-weight: 600; z-index: 10;"></div>
+        <button class="project-archive-btn opacity-0 group-hover:opacity-100 hover:text-[#4285f4] transition-opacity p-0.5 cursor-pointer" data-project-id="${project.id}" title="${isArchived ? 'Unarchive' : 'Archive'}" style="cursor: pointer;">
+          ${isArchived 
+            ? '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18"></path><path d="M19 5l-2 2"></path><path d="M5 19l-2-2"></path><path d="M3 12a9 9 0 0 1 9-9"></path><path d="M21 12a9 9 0 0 1-9 9"></path></svg>'
+            : '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>'
+          }
+        </button>` : ''}
       `;
       
       // Set event listener AFTER setting innerHTML
-      projectEl.addEventListener('click', (e) => {
-        // Handle expand/collapse button
-        const expandBtn = e.target.closest('.expand-btn');
-        if (expandBtn) {
-          e.stopPropagation();
-          const projectId = expandBtn.getAttribute('data-project-id');
+      // Ghost parents are not clickable - they're just visual indicators
+      if (!isGhost) {
+        projectEl.addEventListener('click', (e) => {
+          // Handle expand/collapse button
+          const expandBtn = e.target.closest('.expand-btn');
+          if (expandBtn) {
+            e.stopPropagation();
+            const projectId = expandBtn.getAttribute('data-project-id');
+            this.toggleProjectExpanded(projectId);
+            return;
+          }
+          
+          // Handle archive button (checkmark)
+          const archiveBtn = e.target.closest('.project-archive-btn');
+          if (archiveBtn) {
+            e.stopPropagation();
+            const projectId = archiveBtn.getAttribute('data-project-id');
+            this.archiveProject(projectId);
+            return;
+          }
+          
+          // Don't trigger click if clicking on drag indicator or archive button
+          if (!e.target.closest('.drop-indicator') && !e.target.closest('.project-archive-btn')) {
+            // DESACTIVAR TODOS LOS PROYECTOS/USUARIOS PRIMERO - solo uno activo
+            document.querySelectorAll('.project-item').forEach(el => {
+              el.classList.remove('bg-[#4285f4]/10', 'text-[#4285f4]', 'font-medium', 'shadow-sm');
+              el.classList.add('hover:bg-[#f5f7fa]');
+            });
+            document.querySelectorAll('.user-item').forEach(el => {
+              el.classList.remove('bg-[#4285f4]/10', 'text-[#4285f4]', 'font-medium', 'shadow-sm');
+              el.classList.add('hover:bg-[#e8eaed]');
+            });
+            
+            // Activar este proyecto
+            projectEl.classList.add('bg-[#4285f4]/10', 'text-[#4285f4]', 'font-medium', 'shadow-sm');
+            projectEl.classList.remove('hover:bg-[#f5f7fa]');
+            
+            this.selectProject(project.id);
+          }
+        });
+      } else {
+        // For ghost parents, the entire project is clickable to expand/collapse
+        projectEl.addEventListener('click', (e) => {
+          // Allow clicks anywhere on the ghost parent to toggle expand/collapse
+          const projectId = project.id;
           this.toggleProjectExpanded(projectId);
-          return;
-        }
-        
-        // Handle archive button (checkmark)
-        const archiveBtn = e.target.closest('.project-archive-btn');
-        if (archiveBtn) {
           e.stopPropagation();
-          const projectId = archiveBtn.getAttribute('data-project-id');
-          this.archiveProject(projectId);
-          return;
-        }
-        
-        // Don't trigger click if clicking on drag indicator or archive button
-        if (!e.target.closest('.drop-indicator') && !e.target.closest('.project-archive-btn')) {
-          // DESACTIVAR TODOS LOS PROYECTOS/USUARIOS PRIMERO - solo uno activo
-          document.querySelectorAll('.project-item').forEach(el => {
-            el.classList.remove('bg-[#4285f4]/10', 'text-[#4285f4]', 'font-medium', 'shadow-sm');
-            el.classList.add('hover:bg-[#f5f7fa]');
-          });
-          document.querySelectorAll('.user-item').forEach(el => {
-            el.classList.remove('bg-[#4285f4]/10', 'text-[#4285f4]', 'font-medium', 'shadow-sm');
-            el.classList.add('hover:bg-[#e8eaed]');
-          });
-          
-          // Activar este proyecto
-          projectEl.classList.add('bg-[#4285f4]/10', 'text-[#4285f4]', 'font-medium', 'shadow-sm');
-          projectEl.classList.remove('hover:bg-[#f5f7fa]');
-          
-          this.selectProject(project.id);
-        }
-      });
+        });
+      }
       
       wrapperEl.appendChild(projectEl);
       container.appendChild(wrapperEl);
@@ -5203,6 +5235,12 @@ class LunaIntegration {
 
       draggedProjectId = wrapper.getAttribute('data-project-id');
       draggedProject = this.projects.find(p => p.id === draggedProjectId);
+      
+      // Don't allow dragging ghost parents
+      if (draggedProject && (draggedProject.isGhost === true || draggedProject.isReadOnly === true)) {
+        return;
+      }
+      
       draggedElement = wrapper;
       dragStartY = e.clientY;
       isDragging = false;
@@ -5252,6 +5290,13 @@ class LunaIntegration {
       } else if (targetWrapper && targetProjectId !== draggedProjectId) {
         const targetProject = this.projects.find(p => p.id === targetProjectId);
         if (!targetProject) return;
+        
+        // Don't allow dropping on ghost parents
+        if (targetProject.isGhost === true || targetProject.isReadOnly === true) {
+          this.clearDropIndicator();
+          dropIndicator = null;
+          return;
+        }
         
         // Determine if we can reorder (same parent) or make child (different parent)
         const canReorder = draggedProject?.parent_id === targetProject?.parent_id;
@@ -5434,6 +5479,9 @@ class LunaIntegration {
     const project = this.projects.find(p => p.id === projectId);
     if (!project) return;
 
+    // Check if this is a ghost parent - if so, only update locally, don't call backend
+    const isGhost = project.isGhost === true || project.isReadOnly === true;
+    
     // OPTIMISTIC UI: Update local state immediately for instant feedback
     const newExpanded = !project.is_expanded;
     project.is_expanded = newExpanded;
@@ -5441,73 +5489,100 @@ class LunaIntegration {
     // Re-render immediately to show updated hierarchy
     this.renderProjects();
     
-    // Update backend in background (don't wait for response)
-    this.request(`/api/spaces/${projectId}`, {
-      method: 'PUT',
-      body: JSON.stringify({
-        is_expanded: newExpanded
-      })
-    }).catch(err => {
-      // If backend update fails, revert the change
-      console.error('Failed to toggle project expanded:', err);
-      project.is_expanded = !newExpanded;
-      this.renderProjects();
-    });
+    // Only update backend if NOT a ghost parent
+    if (!isGhost) {
+      // Update backend in background (don't wait for response)
+      this.request(`/api/spaces/${projectId}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          is_expanded: newExpanded
+        })
+      }).catch(err => {
+        // If backend update fails, revert the change
+        console.error('Failed to toggle project expanded:', err);
+        project.is_expanded = !newExpanded;
+        this.renderProjects();
+      });
+    } else {
+      console.log(`[FRONTEND] Toggled ghost parent ${project.name} expanded state locally (no backend update)`);
+    }
   }
 
 
   async archiveProject(projectId) {
-    const project = this.projects.find(p => p.id === projectId);
+    // Find project in allProjects (includes archived ones) or in projects
+    const project = this.allProjects.find(p => p.id === projectId) || this.projects.find(p => p.id === projectId);
     if (!project) return;
     
-    // Optimistic UI: Mark as archived and update arrays
-    project.archived = true;
+    // Toggle archived state
+    const newArchivedState = !project.archived;
     
-    // Remove from active projects list
-    const projectIndex = this.projects.findIndex(p => p.id === projectId);
-    if (projectIndex !== -1) {
-      this.projects.splice(projectIndex, 1);
-    }
+    // Optimistic UI: Update archived state
+    project.archived = newArchivedState;
     
     // Update in allProjects array
     const allProjectsIndex = this.allProjects.findIndex(p => p.id === projectId);
     if (allProjectsIndex !== -1) {
-      this.allProjects[allProjectsIndex].archived = true;
+      this.allProjects[allProjectsIndex].archived = newArchivedState;
     } else {
-      this.allProjects.push({ ...project, archived: true });
+      this.allProjects.push({ ...project, archived: newArchivedState });
     }
     
-    // Re-render to show archived project within its parent (if parent is also archived)
+    // Update in projects array (active projects list)
+    const projectIndex = this.projects.findIndex(p => p.id === projectId);
+    if (newArchivedState) {
+      // Archive: remove from active projects list
+      if (projectIndex !== -1) {
+        this.projects.splice(projectIndex, 1);
+      }
+      
+      // Close active space if it was the archived project
+      if (this.activeSpace?.id === projectId) {
+        this.clearActiveSpace();
+      }
+    } else {
+      // Unarchive: add back to active projects list if not already there
+      if (projectIndex === -1) {
+        this.projects.push(project);
+      }
+    }
+    
+    // Re-render to show updated state
     this.renderProjects();
     
-    // Close active space if it was the archived project
-    if (this.activeSpace?.id === projectId) {
-      this.clearActiveSpace();
-    }
-    
     try {
-      // Archive in backend (this may take a moment due to Notion sync)
+      // Update in backend (this may take a moment due to Notion sync)
       await this.request(`/api/spaces/${projectId}/archive`, {
         method: 'PATCH',
-        body: JSON.stringify({ archived: true })
+        body: JSON.stringify({ archived: newArchivedState })
       });
       
       // Reload projects to ensure sync is correct (in background)
       this.loadProjects().catch(err => {
-        console.error('Failed to reload projects after archiving:', err);
+        console.error('Failed to reload projects after archive toggle:', err);
       });
     } catch (err) {
-      console.error('Failed to archive project:', err);
-      // Restore project if archive failed
-      project.archived = false;
-      if (projectIndex !== -1) {
-        this.projects.splice(projectIndex, 0, project);
-      }
+      console.error('Failed to toggle archive project:', err);
+      // Restore project state if update failed
+      project.archived = !newArchivedState;
       if (allProjectsIndex !== -1) {
-        this.allProjects[allProjectsIndex].archived = false;
+        this.allProjects[allProjectsIndex].archived = !newArchivedState;
+      }
+      
+      // Restore in projects array
+      if (newArchivedState) {
+        // Was trying to archive, restore to active
+        if (projectIndex === -1) {
+          this.projects.push(project);
+        }
+      } else {
+        // Was trying to unarchive, remove from active
+        if (projectIndex !== -1) {
+          this.projects.splice(projectIndex, 1);
+        }
       }
       this.renderProjects();
-      alert('Failed to archive project. Please try again.');
+      alert(`Failed to ${newArchivedState ? 'archive' : 'unarchive'} project. Please try again.`);
     }
   }
 

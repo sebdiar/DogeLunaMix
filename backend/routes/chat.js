@@ -70,7 +70,93 @@ async function getOrCreateChatForSpace(spaceId, userId) {
   
   if (spaceChats && spaceChats.length > 0) {
     const spaceChat = spaceChats[0];
-    // Chat exists - ensure user is a participant
+    
+    // IMPORTANT: Check if this is a ghost parent before adding user as participant
+    // A ghost parent is a space where:
+    // 1. User doesn't own it
+    // 2. User has access to a child space with this as parent
+    // 3. User is NOT a direct participant of this space's chat
+    if (space.user_id !== userId) {
+      // Check if user has access to any child space with this as parent
+      const { data: userChats } = await supabase
+        .from('chat_participants')
+        .select('chat_id')
+        .eq('user_id', userId);
+      
+      if (userChats && userChats.length > 0) {
+        const chatIds = userChats.map(c => c.chat_id);
+        const { data: userSpaceChats } = await supabase
+          .from('space_chats')
+          .select('space_id')
+          .in('chat_id', chatIds);
+        
+        if (userSpaceChats) {
+          const accessibleSpaceIds = userSpaceChats.map(sc => sc.space_id);
+          const { data: childSpaces } = await supabase
+            .from('spaces')
+            .select('id')
+            .eq('parent_id', spaceId)
+            .in('id', accessibleSpaceIds)
+            .limit(1);
+          
+          // If user has access to a child space with this as parent,
+          // this is a ghost parent - NEVER add user as participant
+          if (childSpaces && childSpaces.length > 0) {
+            const { data: existingParticipant } = await supabase
+              .from('chat_participants')
+              .select('id')
+              .eq('chat_id', spaceChat.chat_id)
+              .eq('user_id', userId)
+              .maybeSingle();
+            
+            if (!existingParticipant) {
+              console.log(`[CHAT] Blocked adding user ${userId} to ghost parent ${space.name} (${spaceId}) - user has access to child space`);
+              // Don't add user as participant - this is a ghost parent
+              return spaceChat.chat_id; // Return chat_id but don't add as participant
+            } else {
+              // User is already a participant - this shouldn't happen for ghost parents
+              // But if it does, we should remove them (this is a cleanup case)
+              console.log(`[CHAT] WARNING: User ${userId} is already participant of ghost parent ${space.name} (${spaceId}) - this should not happen`);
+            }
+          }
+        }
+      }
+    }
+    
+    // Chat exists - ensure user is a participant (only if not a ghost parent)
+    // Double-check: if user doesn't own space and has access to a child, don't add
+    if (space.user_id !== userId) {
+      const { data: userChats } = await supabase
+        .from('chat_participants')
+        .select('chat_id')
+        .eq('user_id', userId);
+      
+      if (userChats && userChats.length > 0) {
+        const chatIds = userChats.map(c => c.chat_id);
+        const { data: userSpaceChats } = await supabase
+          .from('space_chats')
+          .select('space_id')
+          .in('chat_id', chatIds);
+        
+        if (userSpaceChats) {
+          const accessibleSpaceIds = userSpaceChats.map(sc => sc.space_id);
+          const { data: childSpaces } = await supabase
+            .from('spaces')
+            .select('id')
+            .eq('parent_id', spaceId)
+            .in('id', accessibleSpaceIds)
+            .limit(1);
+          
+          // If user has access to a child, this is a ghost parent - don't add
+          if (childSpaces && childSpaces.length > 0) {
+            console.log(`[CHAT] Blocked adding user ${userId} to ghost parent ${space.name} (${spaceId}) - final check`);
+            return spaceChat.chat_id; // Return chat_id but don't add as participant
+          }
+        }
+      }
+    }
+    
+    // Only add as participant if user owns the space OR doesn't have access to a child
     const { data: existingParticipant } = await supabase
       .from('chat_participants')
       .select('id')
@@ -289,7 +375,61 @@ async function getOrCreateChatForSpace(spaceId, userId) {
     }
   }
   
-  // Ensure user is a participant
+  // IMPORTANT: Check if this is a ghost parent before adding user as participant
+  // A ghost parent is a space where user has access to a child but not to the parent itself
+  if (space.user_id !== userId) {
+    // Check if user has access to any child space with this as parent
+    const { data: userChats } = await supabase
+      .from('chat_participants')
+      .select('chat_id')
+      .eq('user_id', userId);
+    
+    if (userChats && userChats.length > 0) {
+      const chatIds = userChats.map(c => c.chat_id);
+      const { data: userSpaceChats } = await supabase
+        .from('space_chats')
+        .select('space_id')
+        .in('chat_id', chatIds);
+      
+      if (userSpaceChats) {
+        const accessibleSpaceIds = userSpaceChats.map(sc => sc.space_id);
+        const { data: childSpaces } = await supabase
+          .from('spaces')
+          .select('id')
+          .eq('parent_id', spaceId)
+          .in('id', accessibleSpaceIds)
+          .limit(1);
+        
+        // If user has access to a child but is NOT a participant of this space's chat,
+        // this is a ghost parent - don't add user as participant
+        if (childSpaces && childSpaces.length > 0) {
+          const { data: existingParticipant } = await supabase
+            .from('chat_participants')
+            .select('id')
+            .eq('chat_id', chatId)
+            .eq('user_id', userId)
+            .maybeSingle();
+          
+          if (existingParticipant) {
+            // User is already a participant but shouldn't be - remove them
+            console.log(`[CHAT] Removing user ${userId} from ghost parent ${space.name} (${spaceId}) - user has access to child but not parent`);
+            await supabase
+              .from('chat_participants')
+              .delete()
+              .eq('chat_id', chatId)
+              .eq('user_id', userId);
+            return chatId; // Return chatId but don't add user as participant
+          } else {
+            console.log(`[CHAT] Blocked adding user ${userId} to ghost parent ${space.name} (${spaceId}) - user has access to child but not parent`);
+            // Don't add user as participant - this is a ghost parent
+            return chatId; // Return chatId but don't add user as participant
+          }
+        }
+      }
+    }
+  }
+  
+  // Ensure user is a participant (only if not a ghost parent)
   const { data: existingParticipant } = await supabase
     .from('chat_participants')
     .select('id')

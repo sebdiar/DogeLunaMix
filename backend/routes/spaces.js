@@ -11,6 +11,8 @@ router.get('/', async (req, res) => {
   try {
     const { category } = req.query;
     
+    console.log(`[SPACES] GET /api/spaces?category=${category} for userId=${req.userId}`);
+    
     // For projects, get both:
     // 1. Projects owned by the user
     // 2. Projects where the user is a member (participant in the chat)
@@ -40,11 +42,12 @@ router.get('/', async (req, res) => {
       .order('created_at', { ascending: true });
     
     if (error) {
-      console.error('Error fetching spaces:', error);
+      console.error('[SPACES] Error fetching spaces:', error);
       return res.status(500).json({ error: 'Failed to fetch spaces' });
     }
     
     let spaces = spacesData || [];
+    console.log(`[SPACES] Found ${spaces.length} spaces owned by user (category=${category})`);
     
     // For projects and user spaces, also include spaces where user is a member (but not owner)
     if (category === 'project' || category === 'user' || !category) {
@@ -54,6 +57,8 @@ router.get('/', async (req, res) => {
         .select('chat_id')
         .eq('user_id', req.userId);
       
+      console.log(`[SPACES] User ${req.userId} is participant in ${userChats?.length || 0} chats, category=${category}`);
+      
       if (userChats && userChats.length > 0) {
         const chatIds = userChats.map(c => c.chat_id);
         
@@ -62,6 +67,8 @@ router.get('/', async (req, res) => {
           .from('space_chats')
           .select('space_id, chat_id')
           .in('chat_id', chatIds);
+        
+        console.log(`[SPACES] Found ${spaceChats?.length || 0} space_chats linked to user's chats`);
         
         if (spaceChats && spaceChats.length > 0) {
           const spaceIds = spaceChats.map(sc => sc.space_id);
@@ -90,15 +97,63 @@ router.get('/', async (req, res) => {
             .order('position', { ascending: true, nullsFirst: false })
             .order('created_at', { ascending: true });
           
+          if (memberSpacesError) {
+            console.error(`[SPACES] Error fetching member spaces for category=${category}:`, memberSpacesError);
+          }
+          
           if (!memberSpacesError && memberSpaces) {
+            console.log(`[SPACES] Found ${memberSpaces.length} member spaces for category=${category}, userId=${req.userId}`);
+            
             // Add member spaces to the list, avoiding duplicates
             const existingIds = new Set(spaces.map(s => s.id));
+            
+            // Collect parent IDs from child spaces that user has access to
+            const parentIdsToInclude = new Set();
             memberSpaces.forEach(s => {
               if (!existingIds.has(s.id)) {
+                console.log(`[SPACES] Adding shared space: ${s.name} (id: ${s.id}, category: ${s.category}, parent_id: ${s.parent_id || 'none'})`);
                 spaces.push(s);
                 existingIds.add(s.id);
               }
+              // If this is a child space (has parent_id), we need to include the parent as a ghost
+              if (s.parent_id && !existingIds.has(s.parent_id)) {
+                parentIdsToInclude.add(s.parent_id);
+                console.log(`[SPACES] Will include ghost parent: ${s.parent_id} for child space: ${s.name}`);
+              }
             });
+            
+            // Fetch parent spaces and mark them as ghost (read-only, visible but not clickable)
+            // IMPORTANT: Only include ghost parents if they match the requested category
+            if (parentIdsToInclude.size > 0) {
+              let parentSpacesQuery = supabase
+                .from('spaces')
+                .select('*')
+                .in('id', Array.from(parentIdsToInclude));
+              
+              // Filter ghost parents by category to ensure projects don't appear in users section
+              if (category) {
+                parentSpacesQuery = parentSpacesQuery.eq('category', category);
+              }
+              
+              const { data: parentSpaces, error: parentError } = await parentSpacesQuery;
+              
+              if (!parentError && parentSpaces) {
+                console.log(`[SPACES] Found ${parentSpaces.length} ghost parents to include`);
+                parentSpaces.forEach(parent => {
+                  // Mark as ghost - visible but not accessible
+                  parent.isGhost = true;
+                  parent.isReadOnly = true;
+                  // Double-check category matches before adding
+                  if (!category || parent.category === category) {
+                    if (!existingIds.has(parent.id)) {
+                      console.log(`[SPACES] Adding ghost parent: ${parent.name} (id: ${parent.id}, category: ${parent.category})`);
+                      spaces.push(parent);
+                      existingIds.add(parent.id);
+                    }
+                  }
+                });
+              }
+            }
           }
         }
       }
