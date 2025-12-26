@@ -6740,9 +6740,6 @@ const initLunaIntegration = () => {
       try {
         lunaIntegration = new LunaIntegration();
         window.lunaIntegration = lunaIntegration;
-        
-        // Fix PWA height after initialization
-        setTimeout(fixPWAHeight, 100);
       } catch (err) {
         console.error('Error creating LunaIntegration:', err);
       }
