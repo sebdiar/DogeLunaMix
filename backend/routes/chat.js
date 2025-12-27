@@ -145,14 +145,29 @@ async function getOrCreateChatForSpace(spaceId, userId) {
   if (!space) return null;
   
   // Check if chat already exists for this space
-  // Use limit(1) instead of maybeSingle() to get the first one if multiple exist
+  // Get ALL chats for this space to detect duplicates
   const { data: spaceChats } = await supabase
     .from('space_chats')
     .select('chat_id')
-    .eq('space_id', spaceId)
-    .limit(1);
+    .eq('space_id', spaceId);
   
   if (spaceChats && spaceChats.length > 0) {
+    // If there are multiple chats, log a warning and keep only the first one
+    // Delete the duplicates
+    if (spaceChats.length > 1) {
+      console.warn(`[CHAT] WARNING: Space ${spaceId} has ${spaceChats.length} chats! Keeping first chat ${spaceChats[0].chat_id} and removing duplicates.`);
+      const duplicateChatIds = spaceChats.slice(1).map(sc => sc.chat_id);
+      
+      // Delete duplicate space_chats entries
+      await supabase
+        .from('space_chats')
+        .delete()
+        .eq('space_id', spaceId)
+        .in('chat_id', duplicateChatIds);
+      
+      console.log(`[CHAT] Removed ${duplicateChatIds.length} duplicate chat(s) for space ${spaceId}`);
+    }
+    
     const spaceChat = spaceChats[0];
     
     // IMPORTANT: Check if this is a ghost parent before adding user as participant
@@ -322,18 +337,40 @@ async function getOrCreateChatForSpace(spaceId, userId) {
   if (sharedChatId) {
     // Use the existing shared chat
     chatId = sharedChatId;
-    // Check if space_chat already exists before inserting
+    // IMPORTANT: Check if this space already has ANY chat (not just this specific chat_id)
+    // If it does, we should NOT create a new association - one space should only have one chat
     const { data: existingSpaceChat } = await supabase
       .from('space_chats')
-      .select('id')
+      .select('chat_id')
       .eq('space_id', spaceId)
-      .eq('chat_id', chatId)
       .maybeSingle();
     
-    if (!existingSpaceChat) {
-      await supabase
+    if (existingSpaceChat) {
+      // Space already has a chat - use that one instead of the shared chat
+      console.log(`[CHAT] Space ${spaceId} already has chat ${existingSpaceChat.chat_id}, not using shared chat ${sharedChatId}`);
+      chatId = existingSpaceChat.chat_id;
+    } else {
+      // No chat exists for this space - safe to associate the shared chat
+      const { error: insertError } = await supabase
         .from('space_chats')
         .insert({ space_id: spaceId, chat_id: chatId });
+      
+      if (insertError) {
+        // If insert fails (e.g., race condition), get the existing chat
+        if (insertError.code === '23505') { // unique_violation
+          const { data: existingChat } = await supabase
+            .from('space_chats')
+            .select('chat_id')
+            .eq('space_id', spaceId)
+            .maybeSingle();
+          
+          if (existingChat) {
+            chatId = existingChat.chat_id;
+          }
+        } else {
+          console.error('[CHAT] Error inserting shared chat:', insertError);
+        }
+      }
     }
   } else {
     // Before creating a new chat, double-check if one was created by another concurrent request
@@ -808,12 +845,22 @@ router.get('/space/:spaceId/unread-count', async (req, res) => {
     }
     
     // Get the last read message ID for this user in this chat
-    const { data: readStatus } = await supabase
+    const { data: readStatus, error: readStatusError } = await supabase
       .from('chat_message_reads')
       .select('last_read_message_id, last_read_at')
       .eq('chat_id', chatId)
       .eq('user_id', req.userId)
       .maybeSingle();
+    
+    if (readStatusError) {
+      console.error('[UNREAD-COUNT] Error fetching read status:', readStatusError);
+    }
+    
+    console.log(`[UNREAD-COUNT] Read status for chat ${chatId}, user ${req.userId}:`, {
+      hasReadStatus: !!readStatus,
+      lastReadMessageId: readStatus?.last_read_message_id,
+      lastReadAt: readStatus?.last_read_at
+    });
     
     // Count messages after the last read message
     // Include: messages from other users AND system messages (user_id = null)
@@ -825,17 +872,27 @@ router.get('/space/:spaceId/unread-count', async (req, res) => {
     
     if (readStatus?.last_read_message_id) {
       // Count messages created after the last read message
-      const { data: lastReadMessage } = await supabase
+      const { data: lastReadMessage, error: lastReadMessageError } = await supabase
         .from('chat_messages')
         .select('created_at')
         .eq('id', readStatus.last_read_message_id)
         .maybeSingle();
       
-      if (lastReadMessage) {
-        // Count messages created after the last read message (strictly greater than)
-        query = query.gt('created_at', lastReadMessage.created_at);
+      if (lastReadMessageError) {
+        console.error('[UNREAD-COUNT] Error fetching last read message:', lastReadMessageError);
       }
-      // If last_read_message_id doesn't exist in chat_messages (deleted), count all messages
+      
+      if (lastReadMessage) {
+        console.log(`[UNREAD-COUNT] Last read message timestamp: ${lastReadMessage.created_at}`);
+        // Count messages created after the last read message (strictly greater than)
+        // This ensures we only count messages that arrived AFTER the user last read
+        query = query.gt('created_at', lastReadMessage.created_at);
+      } else {
+        // If last_read_message_id doesn't exist in chat_messages (deleted), count all messages
+        console.log(`[UNREAD-COUNT] Last read message ${readStatus.last_read_message_id} not found, counting all messages`);
+      }
+    } else {
+      console.log(`[UNREAD-COUNT] No read status found, counting all messages from other users`);
     }
     // If no read status, count all messages from other users (user has never read)
     
@@ -846,7 +903,10 @@ router.get('/space/:spaceId/unread-count', async (req, res) => {
       return res.json({ unreadCount: 0 });
     }
     
-    res.json({ unreadCount: count || 0 });
+    const unreadCount = count || 0;
+    console.log(`[UNREAD-COUNT] Unread count for chat ${chatId}, space ${spaceId}: ${unreadCount}`);
+    
+    res.json({ unreadCount });
   } catch (error) {
     console.error('Get unread count error:', error);
     res.status(500).json({ error: 'Failed to get unread count' });
@@ -1011,6 +1071,176 @@ router.get('/unread-count', async (req, res) => {
   }
 });
 
+// Get unread counts for all spaces in a single request (optimized)
+router.get('/unread-counts/all', async (req, res) => {
+  try {
+    const userId = req.userId;
+    
+    // Get all spaces (projects + users) for this user
+    const { data: spaces, error: spacesError } = await supabase
+      .from('spaces')
+      .select('id, category')
+      .eq('user_id', userId);
+    
+    if (spacesError) {
+      console.error('[UNREAD-ALL] Error fetching spaces:', spacesError);
+      return res.status(500).json({ error: 'Failed to fetch spaces' });
+    }
+    
+    if (!spaces || spaces.length === 0) {
+      return res.json({ unreadCounts: {} });
+    }
+    
+    const spaceIds = spaces.map(s => s.id);
+    
+    // Get all chats for these spaces
+    const { data: spaceChats, error: chatsError } = await supabase
+      .from('space_chats')
+      .select('space_id, chat_id')
+      .in('space_id', spaceIds);
+    
+    if (chatsError) {
+      console.error('[UNREAD-ALL] Error fetching chats:', chatsError);
+      return res.status(500).json({ error: 'Failed to fetch chats' });
+    }
+    
+    if (!spaceChats || spaceChats.length === 0) {
+      return res.json({ unreadCounts: {} });
+    }
+    
+    // Group chats by space_id
+    const chatsBySpace = {};
+    spaceChats.forEach(sc => {
+      if (!chatsBySpace[sc.space_id]) {
+        chatsBySpace[sc.space_id] = [];
+      }
+      chatsBySpace[sc.space_id].push(sc.chat_id);
+    });
+    
+    // Get all read statuses for this user
+    const chatIds = [...new Set(spaceChats.map(sc => sc.chat_id))];
+    const { data: readStatuses, error: readError } = await supabase
+      .from('chat_message_reads')
+      .select('chat_id, last_read_message_id, last_read_at')
+      .eq('user_id', userId)
+      .in('chat_id', chatIds);
+    
+    if (readError) {
+      console.error('[UNREAD-ALL] Error fetching read statuses:', readError);
+      return res.status(500).json({ error: 'Failed to fetch read statuses' });
+    }
+    
+    // Create map of chat_id -> last_read_message_id
+    const readStatusMap = new Map();
+    if (readStatuses) {
+      for (const status of readStatuses) {
+        readStatusMap.set(status.chat_id, status.last_read_message_id);
+      }
+    }
+    
+    // Get last_read timestamps for all chats
+    const lastReadMessageIds = Array.from(readStatusMap.values()).filter(Boolean);
+    let lastReadTimestamps = new Map();
+    
+    if (lastReadMessageIds.length > 0) {
+      const { data: lastReadMessages, error: lastReadMessagesError } = await supabase
+        .from('chat_messages')
+        .select('id, created_at')
+        .in('id', lastReadMessageIds);
+      
+      if (lastReadMessagesError) {
+        console.error('[UNREAD-ALL] Error fetching last read messages:', lastReadMessagesError);
+      }
+      
+      if (lastReadMessages) {
+        lastReadMessages.forEach(msg => {
+          lastReadTimestamps.set(msg.id, msg.created_at);
+        });
+        console.log(`[UNREAD-ALL] Found ${lastReadMessages.length} last read messages out of ${lastReadMessageIds.length} requested`);
+      } else {
+        console.log(`[UNREAD-ALL] No last read messages found for ${lastReadMessageIds.length} message IDs`);
+      }
+    }
+    
+    // Count unread messages for each chat
+    const unreadCounts = {};
+    
+    // Process all chats in batches
+    const batchSize = 50;
+    for (let i = 0; i < chatIds.length; i += batchSize) {
+      const batch = chatIds.slice(i, i + batchSize);
+      
+      // Get counts for this batch
+      const countPromises = batch.map(async (chatId) => {
+        const lastReadId = readStatusMap.get(chatId);
+        let query = supabase
+          .from('chat_messages')
+          .select('id', { count: 'exact', head: true })
+          .eq('chat_id', chatId)
+          .or(`user_id.is.null,user_id.neq.${userId}`);
+        
+        if (lastReadId) {
+          const lastReadTime = lastReadTimestamps.get(lastReadId);
+          if (lastReadTime) {
+            query = query.gt('created_at', lastReadTime);
+          } else {
+            console.log(`[UNREAD-ALL] Warning: last_read_message_id ${lastReadId} not found in lastReadTimestamps map`);
+          }
+        } else {
+          // No read status - count ALL messages from others/system (this is correct behavior)
+          console.log(`[UNREAD-ALL] Chat ${chatId} has no read status - counting all messages from others/system`);
+        }
+        
+        const { count, error: countError } = await query;
+        if (countError) {
+          console.error(`[UNREAD-ALL] Error counting unread for chat ${chatId}:`, countError);
+        }
+        const unreadCount = count || 0;
+        if (unreadCount > 0) {
+          console.log(`[UNREAD-ALL] Chat ${chatId} has ${unreadCount} unread messages (lastReadId: ${lastReadId || 'none'}, lastReadTime: ${lastReadId ? (lastReadTimestamps.get(lastReadId) || 'N/A') : 'N/A'})`);
+        }
+        return { chatId, count: unreadCount };
+      });
+      
+      const results = await Promise.allSettled(countPromises);
+      results.forEach((result) => {
+        if (result.status === 'fulfilled') {
+          const { chatId, count } = result.value;
+          // Find which space(s) this chat belongs to
+          spaceChats
+            .filter(sc => sc.chat_id === chatId)
+            .forEach(sc => {
+              if (!unreadCounts[sc.space_id]) {
+                unreadCounts[sc.space_id] = 0;
+              }
+              unreadCounts[sc.space_id] += count;
+              if (count > 0) {
+                console.log(`[UNREAD-ALL] Chat ${chatId} has ${count} unread messages, adding to space ${sc.space_id}`);
+              }
+            });
+        } else {
+          console.error(`[UNREAD-ALL] Error counting unread for chat:`, result.reason);
+        }
+      });
+    }
+    
+    // Filter out spaces with 0 unread count (only return spaces with actual unread messages)
+    const filteredUnreadCounts = {};
+    Object.entries(unreadCounts).forEach(([spaceId, count]) => {
+      if (count > 0) {
+        filteredUnreadCounts[spaceId] = count;
+        console.log(`[UNREAD-ALL] Space ${spaceId} has ${count} unread messages`);
+      }
+    });
+    
+    console.log(`[UNREAD-ALL] Returning ${Object.keys(filteredUnreadCounts).length} spaces with unread messages out of ${Object.keys(unreadCounts).length} total spaces checked`);
+    res.json({ unreadCounts: filteredUnreadCounts });
+  } catch (error) {
+    console.error('[UNREAD-ALL] Error:', error);
+    res.status(500).json({ error: 'Failed to get unread counts' });
+  }
+});
+
 // Mark messages as read for a space
 router.post('/space/:spaceId/mark-read', async (req, res) => {
   try {
@@ -1027,6 +1257,16 @@ router.post('/space/:spaceId/mark-read', async (req, res) => {
     }
     
     console.log(`[MARK-READ] Using chat ${chatId} for space ${spaceId}`);
+    
+    // Check if there are multiple chats for this space (shouldn't happen, but log if it does)
+    const { data: allSpaceChats } = await supabase
+      .from('space_chats')
+      .select('chat_id')
+      .eq('space_id', spaceId);
+    
+    if (allSpaceChats && allSpaceChats.length > 1) {
+      console.warn(`[MARK-READ] WARNING: Space ${spaceId} has ${allSpaceChats.length} chats associated! This should not happen. Chats:`, allSpaceChats.map(sc => sc.chat_id));
+    }
     
     // Get the most recent message in this chat
     const { data: latestMessage } = await supabase
@@ -1067,18 +1307,18 @@ router.post('/space/:spaceId/mark-read', async (req, res) => {
     
     console.log(`[MARK-READ] Latest message: ${latestMessage.id}, created_at: ${latestMessage.created_at}`);
     
-    // Upsert the read status
+    // Upsert the read status - use the latest message's timestamp to ensure we mark ALL messages up to this point as read
     // Use onConflict to specify which columns to check for conflicts
-      const { error: upsertError } = await supabase
-        .from('chat_message_reads')
-        .upsert({
-          chat_id: chatId,
-          user_id: req.userId,
-          last_read_message_id: latestMessage.id,
-          last_read_at: new Date().toISOString()
-        }, {
-          onConflict: 'chat_id,user_id'
-        });
+    const { error: upsertError } = await supabase
+      .from('chat_message_reads')
+      .upsert({
+        chat_id: chatId,
+        user_id: req.userId,
+        last_read_message_id: latestMessage.id,
+        last_read_at: latestMessage.created_at // Use message timestamp, not current time
+      }, {
+        onConflict: 'chat_id,user_id'
+      });
     
     if (upsertError) {
       console.error('[MARK-READ] Error marking as read:', upsertError);
@@ -1269,7 +1509,7 @@ router.get('/:chatId/messages', async (req, res) => {
         user_id,
         message,
         created_at,
-        user:users!chat_messages_user_id_fkey(id, name, email)
+        user:users!chat_messages_user_id_fkey(id, name, email, avatar_photo)
       `)
       .eq('chat_id', chatId)
       .order('created_at', { ascending: false }) // Most recent first
@@ -1335,7 +1575,7 @@ router.post('/:chatId/messages', async (req, res) => {
         user_id,
         message,
         created_at,
-        user:users!chat_messages_user_id_fkey(id, name, email)
+        user:users!chat_messages_user_id_fkey(id, name, email, avatar_photo)
       `)
       .single();
     

@@ -101,10 +101,37 @@ class LunaIntegration {
           badge.style.setProperty('display', 'flex', 'important');
           badge.style.setProperty('visibility', 'visible', 'important');
           badge.style.setProperty('opacity', '1', 'important');
+          badge.style.setProperty('top', '50%', 'important');
+          badge.style.setProperty('transform', 'translateY(-50%)', 'important');
+          badge.style.setProperty('right', '8px', 'important');
+          
+          // Adjust archive button position when badge is visible
+          const projectItem = badge.closest('.project-item');
+          if (projectItem) {
+            const archiveBtn = projectItem.querySelector('.project-archive-btn');
+            if (archiveBtn) {
+              archiveBtn.style.position = 'absolute';
+              archiveBtn.style.right = '30px';
+              archiveBtn.style.top = '50%';
+              archiveBtn.style.transform = 'translateY(-50%)';
+            }
+          }
         } else {
           badge.textContent = '';
           badge.style.setProperty('display', 'none', 'important');
           badge.style.setProperty('visibility', 'hidden', 'important');
+          
+          // Reset archive button position when badge is hidden
+          const projectItem = badge.closest('.project-item');
+          if (projectItem) {
+            const archiveBtn = projectItem.querySelector('.project-archive-btn');
+            if (archiveBtn) {
+              archiveBtn.style.position = 'absolute';
+              archiveBtn.style.right = '8px';
+              archiveBtn.style.top = '50%';
+              archiveBtn.style.transform = 'translateY(-50%)';
+            }
+          }
         }
       });
     } catch (error) {
@@ -120,19 +147,98 @@ class LunaIntegration {
   }
 
   async updateSpaceUnreadBadges() {
+    // Prevent multiple simultaneous calls
+    if (this._updatingBadges) {
+      return; // Already updating, skip
+    }
+    this._updatingBadges = true;
+    
     try {
-      // Collect all space IDs
-      const spaceIds = [
+      // First, hide all badges to ensure clean state (before making request)
+      const allBadges = document.querySelectorAll('.space-unread-badge');
+      allBadges.forEach(badge => {
+        badge.style.display = 'none';
+        badge.textContent = '';
+        
+        // Reset archive button position
+        const projectItem = badge.closest('.project-item');
+        if (projectItem) {
+          const archiveBtn = projectItem.querySelector('.project-archive-btn');
+          if (archiveBtn) {
+            archiveBtn.style.right = '8px';
+          }
+        }
+      });
+      
+      // Use single endpoint instead of multiple parallel requests
+      const { unreadCounts } = await this.request('/api/chat/unread-counts/all');
+      
+      console.log(`[BADGES] Received unread counts for ${Object.keys(unreadCounts || {}).length} spaces:`, unreadCounts);
+      
+      // Update all badges at once (only spaces with count > 0 will be in unreadCounts)
+      Object.entries(unreadCounts || {}).forEach(([spaceId, count]) => {
+        const badges = document.querySelectorAll(`.space-unread-badge[data-space-id="${spaceId}"]`);
+        badges.forEach(badge => {
+          if (count > 0) {
+            badge.textContent = count > 99 ? '99+' : String(count);
+            badge.style.display = 'flex';
+            badge.style.alignItems = 'center';
+            badge.style.justifyContent = 'center';
+            badge.style.top = '50%';
+            badge.style.transform = 'translateY(-50%)';
+            badge.style.right = '8px';
+            
+            // Adjust archive button position when badge is visible
+            const projectItem = badge.closest('.project-item');
+            if (projectItem) {
+              const archiveBtn = projectItem.querySelector('.project-archive-btn');
+              if (archiveBtn) {
+                archiveBtn.style.right = '30px'; // Move left when badge is visible
+              }
+            }
+          } else {
+            badge.style.display = 'none';
+            
+            // Reset archive button position when badge is hidden
+            const projectItem = badge.closest('.project-item');
+            if (projectItem) {
+              const archiveBtn = projectItem.querySelector('.project-archive-btn');
+              if (archiveBtn) {
+                archiveBtn.style.right = '8px'; // Back to original position
+              }
+            }
+          }
+        });
+      });
+      
+      // Also update spaces that don't have unread counts (hide their badges)
+      const allSpaceIds = [
         ...(this.projects || []).map(p => p.id),
         ...(this.users || []).map(u => u.id)
       ];
       
-      // Update all badges in parallel (much faster than sequential)
-      await Promise.allSettled(
-        spaceIds.map(spaceId => this.updateSpaceBadge(spaceId))
-      );
+      allSpaceIds.forEach(spaceId => {
+        if (!unreadCounts || !unreadCounts[spaceId]) {
+          const badges = document.querySelectorAll(`.space-unread-badge[data-space-id="${spaceId}"]`);
+          badges.forEach(badge => {
+            badge.textContent = '';
+            badge.style.display = 'none';
+            
+            // Reset archive button position when badge is hidden
+            const projectItem = badge.closest('.project-item');
+            if (projectItem) {
+              const archiveBtn = projectItem.querySelector('.project-archive-btn');
+              if (archiveBtn) {
+                archiveBtn.style.right = '8px'; // Back to original position
+              }
+            }
+          });
+        }
+      });
     } catch (error) {
       console.error('Failed to update space unread badges:', error);
+    } finally {
+      this._updatingBadges = false;
     }
   }
 
@@ -551,12 +657,8 @@ class LunaIntegration {
     // Setup global chat notifications (listens to ALL user chats)
     await this.setupChatNotifications();
     
-    // Final badge update after everything is loaded and rendered
-    // This ensures badges are visible after page refresh
-    // Shorter timeout since updates are now parallel
-    setTimeout(() => {
-      this.updateSpaceUnreadBadges();
-    }, 200);
+    // Badges are updated in initNotifications() - no need to update again here
+    // This prevents duplicate calls and flashing badges
 
     // Load preferences from backend first (this will cache them)
     await this.loadPreferences();
@@ -716,11 +818,8 @@ class LunaIntegration {
           if (activeTab && this.isChatUrl(activeTab.url)) {
             const spaceId = activeTab.url.split('/').pop();
             if (spaceId) {
+              // markChatAsReadIfVisible will update badges after marking as read
               this.markChatAsReadIfVisible(spaceId);
-              // Also update badge immediately to reflect the change
-              setTimeout(() => {
-                this.updateSpaceBadge(spaceId);
-              }, 500);
             }
           }
         }, 50);
@@ -3397,8 +3496,8 @@ class LunaIntegration {
     // Update visual state of active project/user without full re-render
     this.updateActiveSpaceVisualState();
     
-    // Update badges (no need to wait for render since we're not re-rendering)
-    this.updateSpaceUnreadBadges();
+    // DON'T update all badges when switching projects - only update when needed
+    // Badges are updated when messages are marked as read, not on every project switch
 
       // Load tabs for this space - NO cambiar TabManager, solo mostrar en TopBar
       try {
@@ -5152,8 +5251,8 @@ class LunaIntegration {
           ${iconHtml}
         </div>
         <span class="flex-1 text-xs truncate">${this.escapeHTML(project.name)}</span>
-        ${!isGhost ? `<div class="space-unread-badge" data-space-id="${project.id}" style="display: none; position: absolute; top: 4px; right: 28px; background-color: #ea4335; color: white; border-radius: 50%; width: 18px; height: 18px; min-width: 18px; align-items: center; justify-content: center; font-size: 10px; font-weight: 600; z-index: 10;"></div>
-        <button class="project-archive-btn opacity-0 group-hover:opacity-100 hover:text-[#4285f4] transition-opacity p-0.5 cursor-pointer" data-project-id="${project.id}" title="${isArchived ? 'Unarchive' : 'Archive'}" style="cursor: pointer;">
+        ${!isGhost ? `<div class="space-unread-badge" data-space-id="${project.id}" style="display: none; position: absolute; top: 50%; transform: translateY(-50%); right: 8px; background-color: #ea4335; color: white; border-radius: 50%; width: 18px; height: 18px; min-width: 18px; align-items: center; justify-content: center; font-size: 10px; font-weight: 600; z-index: 10; line-height: 1;"></div>
+        <button class="project-archive-btn opacity-0 group-hover:opacity-100 hover:text-[#4285f4] transition-opacity p-0.5 cursor-pointer" data-project-id="${project.id}" title="${isArchived ? 'Unarchive' : 'Archive'}" style="cursor: pointer; position: absolute; right: 8px; top: 50%; transform: translateY(-50%); z-index: 5;">
           ${isArchived 
             ? '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18"></path><path d="M19 5l-2 2"></path><path d="M5 19l-2-2"></path><path d="M3 12a9 9 0 0 1 9-9"></path><path d="M21 12a9 9 0 0 1-9 9"></path></svg>'
             : '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>'
@@ -5219,12 +5318,8 @@ class LunaIntegration {
     // Setup simple drag and drop for projects (only parent-child relationships)
     this.setupSimpleProjectDragAndDrop();
     
-    // Update all badges after rendering (they start with display: none)
-    // Use setTimeout to ensure DOM is fully updated
-    // Shorter timeout since updates are now parallel
-    setTimeout(() => {
-      this.updateSpaceUnreadBadges();
-    }, 100);
+    // Badges are updated in initNotifications() - no need to update again here
+    // This prevents duplicate calls and flashing badges
   }
 
   // Update visual state of active space without full re-render
@@ -5686,7 +5781,7 @@ class LunaIntegration {
           ${user.other_user_photo ? `<img src="${user.other_user_photo}" alt="" class="w-full h-full object-cover" />` : `<span class="text-xs">${initial}</span>`}
         </div>
         <span class="flex-1 text-xs truncate">${this.escapeHTML(displayName)}</span>
-        <div class="space-unread-badge" data-space-id="${user.id}" style="display: none; position: absolute; top: 4px; right: 8px; background-color: #ea4335; color: white; border-radius: 50%; width: 18px; height: 18px; min-width: 18px; align-items: center; justify-content: center; font-size: 10px; font-weight: 600; z-index: 10;"></div>
+        <div class="space-unread-badge" data-space-id="${user.id}" style="display: none; position: absolute; top: 50%; transform: translateY(-50%); right: 8px; background-color: #ea4335; color: white; border-radius: 50%; width: 18px; height: 18px; min-width: 18px; align-items: center; justify-content: center; font-size: 10px; font-weight: 600; z-index: 10; line-height: 1;"></div>
       `;
       
       // Set event listener AFTER setting innerHTML
@@ -6115,21 +6210,21 @@ class LunaIntegration {
     if (!wrapper.querySelector('.chat-container')) {
       wrapper.innerHTML = `
         <div class="chat-container" style="display: flex; flex-direction: column; height: 100%;">
-          <div class="chat-messages" style="flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; background: #ffffff;" data-chat-id="">
+          <div class="chat-messages" style="flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 0; background: #ffffff;" data-chat-id="">
             <!-- Messages will be rendered here -->
           </div>
           <div class="chat-input-container" style="border-top: 1px solid #e8eaed; padding: 12px 16px; background: #ffffff;">
-            <form class="chat-form" style="display: flex; gap: 8px;">
-              <input 
-                type="text" 
+            <form class="chat-form" style="display: flex; gap: 8px; align-items: flex-end;">
+              <textarea 
                 class="chat-input" 
                 placeholder="Type a message..." 
-                style="flex: 1; padding: 10px 14px; border: 1px solid #e8eaed; border-radius: 20px; outline: none; font-size: 14px; font-family: 'Geist', sans-serif; background: #f5f7fa;"
+                rows="1"
+                style="flex: 1; padding: 10px 14px; border: 1px solid #e8eaed; border-radius: 20px; outline: none; font-size: 14px; font-family: 'Geist', sans-serif; background: #f5f7fa; resize: none; min-height: 20px; max-height: 120px; overflow-y: auto; word-wrap: break-word; user-select: text; -webkit-user-select: text;"
                 autocomplete="off"
-              />
+              ></textarea>
               <button 
                 type="submit"
-                style="padding: 10px 20px; background: #4285f4; color: white; border: none; border-radius: 20px; cursor: pointer; font-size: 14px; font-weight: 500; font-family: 'Geist', sans-serif;"
+                style="padding: 10px 20px; background: #4285f4; color: white; border: none; border-radius: 20px; cursor: pointer; font-size: 14px; font-weight: 500; font-family: 'Geist', sans-serif; align-self: flex-end;"
               >
                 Send
               </button>
@@ -6140,14 +6235,38 @@ class LunaIntegration {
 
       // Attach send handler inmediatamente
       const form = wrapper.querySelector('.chat-form');
-      if (form) {
+      const textarea = wrapper.querySelector('.chat-input');
+      
+      if (form && textarea) {
+        // Auto-resize textarea
+        const autoResize = () => {
+          textarea.style.height = 'auto';
+          const newHeight = Math.min(textarea.scrollHeight, 120);
+          textarea.style.height = newHeight + 'px';
+        };
+        
+        textarea.addEventListener('input', autoResize);
+        
+        // Handle Enter key (send) vs Shift+Enter (new line)
+        textarea.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            const message = textarea.value?.trim();
+            if (message && this.currentChatId) {
+              this.sendChatMessage(this.currentChatId, message);
+              textarea.value = '';
+              textarea.style.height = 'auto';
+            }
+          }
+        });
+        
         form.addEventListener('submit', (e) => {
           e.preventDefault();
-          const input = wrapper.querySelector('.chat-input');
-          const message = input?.value?.trim();
+          const message = textarea.value?.trim();
           if (message && this.currentChatId) {
             this.sendChatMessage(this.currentChatId, message);
-            input.value = '';
+            textarea.value = '';
+            textarea.style.height = 'auto';
           }
         });
       }
@@ -6186,21 +6305,21 @@ class LunaIntegration {
 
     wrapper.innerHTML = `
       <div class="chat-container" style="display: flex; flex-direction: column; height: 100%;">
-        <div class="chat-messages" style="flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; background: #ffffff;" data-chat-id="${chatId}">
+        <div class="chat-messages" style="flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 0; background: #ffffff;" data-chat-id="${chatId}">
           <!-- Messages will be rendered here -->
         </div>
         <div class="chat-input-container" style="border-top: 1px solid #e8eaed; padding: 12px 16px; background: #ffffff;">
-          <form class="chat-form" style="display: flex; gap: 8px;">
-            <input 
-              type="text" 
+          <form class="chat-form" style="display: flex; gap: 8px; align-items: flex-end;">
+            <textarea 
               class="chat-input" 
               placeholder="Type a message..." 
-              style="flex: 1; padding: 10px 14px; border: 1px solid #e8eaed; border-radius: 20px; outline: none; font-size: 14px; font-family: 'Geist', sans-serif; background: #f5f7fa;"
+              rows="1"
+              style="flex: 1; padding: 10px 14px; border: 1px solid #e8eaed; border-radius: 20px; outline: none; font-size: 14px; font-family: 'Geist', sans-serif; background: #f5f7fa; resize: none; min-height: 20px; max-height: 120px; overflow-y: auto; white-space: pre-wrap; word-wrap: break-word; user-select: text; -webkit-user-select: text;"
               autocomplete="off"
-            />
+            ></textarea>
             <button 
               type="submit"
-              style="padding: 10px 20px; background: #4285f4; color: white; border: none; border-radius: 20px; cursor: pointer; font-size: 14px; font-weight: 500; font-family: 'Geist', sans-serif;"
+              style="padding: 10px 20px; background: #4285f4; color: white; border: none; border-radius: 20px; cursor: pointer; font-size: 14px; font-weight: 500; font-family: 'Geist', sans-serif; align-self: flex-end;"
             >
               Send
             </button>
@@ -6211,14 +6330,38 @@ class LunaIntegration {
 
     // Attach send handler
     const form = wrapper.querySelector('.chat-form');
-    if (form) {
+    const textarea = wrapper.querySelector('.chat-input');
+    
+    if (form && textarea) {
+      // Auto-resize textarea
+      const autoResize = () => {
+        textarea.style.height = 'auto';
+        const newHeight = Math.min(textarea.scrollHeight, 120);
+        textarea.style.height = newHeight + 'px';
+      };
+      
+      textarea.addEventListener('input', autoResize);
+      
+      // Handle Enter key (send) vs Shift+Enter (new line)
+      textarea.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          const message = textarea.value?.trim();
+          if (message) {
+            this.sendChatMessage(chatId, message);
+            textarea.value = '';
+            textarea.style.height = 'auto';
+          }
+        }
+      });
+      
       form.addEventListener('submit', (e) => {
         e.preventDefault();
-        const input = wrapper.querySelector('.chat-input');
-        const message = input?.value?.trim();
+        const message = textarea.value?.trim();
         if (message) {
           this.sendChatMessage(chatId, message);
-          input.value = '';
+          textarea.value = '';
+          textarea.style.height = 'auto';
         }
       });
     }
@@ -6229,14 +6372,44 @@ class LunaIntegration {
     if (!messagesContainer) return;
 
     try {
-      const { messages } = await this.request(`/api/chat/${chatId}/messages`);
+      // Load only last 20 messages initially
+      const { messages } = await this.request(`/api/chat/${chatId}/messages?limit=20`);
+      
+      // Store pagination state
+      if (!messagesContainer.dataset.chatId || messagesContainer.dataset.chatId !== chatId) {
+        messagesContainer.dataset.chatId = chatId;
+        messagesContainer.dataset.hasMore = messages.length === 20 ? 'true' : 'false';
+        messagesContainer.dataset.oldestMessageId = messages.length > 0 ? messages[0].id : null;
+        messagesContainer.dataset.oldestMessageTime = messages.length > 0 ? messages[0].created_at : null;
+      }
+      
       this.renderChatMessages(messagesContainer, messages || []);
       
       // Scroll to bottom
       messagesContainer.scrollTop = messagesContainer.scrollHeight;
       
-      // DON'T mark as read here - only mark as read when tab becomes visible
-      // This is handled by markChatAsReadIfVisible() called from tab activation
+      // Setup scroll listener for loading more messages
+      if (!messagesContainer.dataset.scrollListenerAdded) {
+        messagesContainer.dataset.scrollListenerAdded = 'true';
+        messagesContainer.addEventListener('scroll', () => {
+          // Load more when scrolled near top (within 200px)
+          if (messagesContainer.scrollTop < 200 && messagesContainer.dataset.hasMore === 'true' && messagesContainer.dataset.loading !== 'true') {
+            this.loadMoreMessages(messagesContainer, chatId);
+          }
+        });
+      }
+      
+      // Mark as read if this chat tab is currently active/visible
+      if (_spaceId && !skipRealtime) {
+        const activeTab = window.tabManager?.active();
+        if (activeTab) {
+          const chatUrl = `luna://chat/${_spaceId}`;
+          if (activeTab.url === chatUrl) {
+            // Tab is active and we just loaded messages - mark as read immediately
+            this.markChatAsReadIfVisible(_spaceId);
+          }
+        }
+      }
       
       // Setup realtime subscription for this chat (only if not skipping)
       if (!skipRealtime) {
@@ -6247,6 +6420,58 @@ class LunaIntegration {
       }
     } catch (err) {
       console.error('Failed to load messages:', err);
+      const messagesContainer = container.querySelector('.chat-messages');
+      if (messagesContainer) {
+        messagesContainer.innerHTML = `
+          <div style="padding: 20px; text-align: center; color: #5f6368;">
+            Failed to load messages
+          </div>
+        `;
+      }
+    }
+  }
+
+  // Load more messages when scrolling up (lazy loading)
+  async loadMoreMessages(messagesContainer, chatId) {
+    if (messagesContainer.dataset.loading === 'true') return; // Prevent duplicate loads
+    
+    const oldestMessageTime = messagesContainer.dataset.oldestMessageTime;
+    if (!oldestMessageTime || messagesContainer.dataset.hasMore !== 'true') return;
+    
+    messagesContainer.dataset.loading = 'true';
+    
+    try {
+      // Load 20 more messages before this timestamp
+      const { messages } = await this.request(
+        `/api/chat/${chatId}/messages?limit=20&before=${encodeURIComponent(oldestMessageTime)}`
+      );
+      
+      if (messages && messages.length > 0) {
+        // Save scroll position
+        const scrollHeight = messagesContainer.scrollHeight;
+        const scrollTop = messagesContainer.scrollTop;
+        
+        // Prepend new messages (they're already in correct order from API)
+        const existingMessages = Array.from(messagesContainer.children);
+        this.renderChatMessages(messagesContainer, messages, true); // true = prepend mode
+        
+        // Restore scroll position
+        setTimeout(() => {
+          const newScrollHeight = messagesContainer.scrollHeight;
+          messagesContainer.scrollTop = scrollTop + (newScrollHeight - scrollHeight);
+        }, 0);
+        
+        // Update pagination state
+        messagesContainer.dataset.oldestMessageId = messages[0].id;
+        messagesContainer.dataset.oldestMessageTime = messages[0].created_at;
+        messagesContainer.dataset.hasMore = messages.length === 20 ? 'true' : 'false';
+      } else {
+        messagesContainer.dataset.hasMore = 'false';
+      }
+    } catch (err) {
+      console.error('Failed to load more messages:', err);
+    } finally {
+      messagesContainer.dataset.loading = 'false';
     }
   }
   
@@ -6261,19 +6486,27 @@ class LunaIntegration {
     const chatUrl = `luna://chat/${spaceId}`;
     if (activeTab.url !== chatUrl) return;
     
-    // Active tab is the chat for this space - mark as read
+    // Prevent multiple simultaneous calls
+    const markReadKey = `mark-read-${spaceId}`;
+    if (this[markReadKey]) {
+      return; // Already marking as read
+    }
+    this[markReadKey] = true;
+    
     try {
-      console.log(`[MARK READ] Attempting to mark as read: ${spaceId}`);
-      const response = await this.request(`/api/chat/space/${spaceId}/mark-read`, {
+      // Mark as read - backend handles the update immediately
+      await this.request(`/api/chat/space/${spaceId}/mark-read`, {
         method: 'POST',
-        body: JSON.stringify({}) // Send empty body
+        body: JSON.stringify({})
       });
-      console.log(`[MARK READ] Success for ${spaceId}:`, response);
-      // Update badges after marking as read
-      this.updateUnreadBadge();
-      this.updateSpaceBadge(spaceId);
+      
+      // Update only the badge for this specific space (no delay needed, backend is synchronous)
+      await this.updateSpaceBadge(spaceId);
+      await this.updateUnreadBadge();
     } catch (markReadErr) {
       console.error(`[MARK READ] Error for ${spaceId}:`, markReadErr);
+    } finally {
+      this[markReadKey] = false;
     }
   }
   
@@ -6354,14 +6587,55 @@ class LunaIntegration {
             table: 'chat_messages',
             filter: `chat_id=eq.${chatId}`
           },
-        () => {
-          // Reload messages when new one arrives (skip realtime setup to avoid loop)
+        async (payload) => {
+          // Check if user is near bottom (within 100px) - if so, auto-scroll and add new message
+          const isNearBottom = messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight < 100;
+          
+          // Load only the last message to append it
+          try {
+            const { messages } = await this.request(`/api/chat/${chatId}/messages?limit=1`);
+            if (messages && messages.length > 0) {
+              const newMessage = messages[0];
+              
+              // Check if message already exists (prevent duplicates)
+              const existingMessage = messagesContainer.querySelector(`[data-message-id="${newMessage.id}"]`);
+              if (!existingMessage) {
+                // Get the last message element to check if we need spacing
+                const lastMessageEl = messagesContainer.lastElementChild;
+                const needsSpacing = lastMessageEl && lastMessageEl.getAttribute('data-message-id');
+                
+                // Append new message at the end
+                this.renderChatMessages(messagesContainer, [newMessage], false, true); // append mode
+                
+                // Auto-scroll to bottom if user was near bottom
+                if (isNearBottom) {
+                  setTimeout(() => {
+                    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                  }, 0);
+                }
+              }
+            }
+          } catch (err) {
+            console.error('Failed to load new message:', err);
+            // Fallback: reload last 20 messages if loading single message fails
+            const wrapper = messagesContainer.closest('.chat-wrapper');
+            if (wrapper) {
+              const spaceId = wrapper?.dataset?.spaceId || this.activeSpace?.id;
+              // Only reload if user is near bottom (to avoid disrupting scroll position)
+              if (isNearBottom) {
+                this.loadChatMessages(wrapper, chatId, spaceId, true); // skipRealtime = true
+              }
+            }
+          }
+          
+          // Update unread badges when new message arrives
+          // This ensures badges update even if chat is not visible
+          await this.updateSpaceUnreadBadges();
+          
+          // If this chat tab is currently visible, mark the new messages as read
           const wrapper = messagesContainer.closest('.chat-wrapper');
           if (wrapper) {
             const spaceId = wrapper?.dataset?.spaceId || this.activeSpace?.id;
-            this.loadChatMessages(wrapper, chatId, spaceId, true); // skipRealtime = true
-            
-            // If this chat tab is currently visible, mark the new messages as read
             if (spaceId) {
               // Small delay to ensure messages are loaded before marking as read
               setTimeout(() => {
@@ -6428,11 +6702,10 @@ class LunaIntegration {
     }, 2000);
   }
 
-  renderChatMessages(container, messages) {
+  renderChatMessages(container, messages, prepend = false, append = false) {
     const user = this.user;
-    container.innerHTML = '';
-
-    if (messages.length === 0) {
+    
+    if (!prepend && !append && messages.length === 0) {
       container.innerHTML = `
         <div style="text-align: center; color: #5f6368; padding: 40px 20px; flex: 1; display: flex; align-items: center; justify-content: center;">
           No messages yet. Start the conversation!
@@ -6441,36 +6714,178 @@ class LunaIntegration {
       return;
     }
 
-    messages.forEach(msg => {
-      const isOwn = msg.user_id === user?.id;
-      const userName = msg.user?.name || msg.user?.email || 'Unknown';
-      const time = new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if ((prepend || append) && messages.length === 0) {
+      return; // Don't render anything if prepending/appending empty messages
+    }
 
-      const msgEl = document.createElement('div');
-      msgEl.style.cssText = `display: flex; ${isOwn ? 'justify-content: flex-end;' : 'justify-content: flex-start;'}; margin-bottom: 4px;`;
-      
-      msgEl.innerHTML = `
-        <div style="max-width: 60%; ${isOwn ? 'margin-left: auto;' : 'margin-right: auto;'}">
-          ${!isOwn ? `<div style="font-size: 12px; color: #5f6368; margin-bottom: 4px; padding: 0 12px;">${this.escapeHTML(userName)}</div>` : ''}
-          <div style="
-            padding: 10px 14px;
-            border-radius: ${isOwn ? '18px 18px 4px 18px' : '18px 18px 18px 4px'};
-            background: ${isOwn ? '#4285f4' : '#f1f3f5'};
-            color: ${isOwn ? '#ffffff' : '#202124'};
-            font-size: 14px;
-            line-height: 1.4;
-            word-wrap: break-word;
-          ">
-            ${this.escapeHTML(msg.message)}
-          </div>
-          <div style="font-size: 11px; color: ${isOwn ? '#4285f4' : '#5f6368'}; margin-top: 4px; padding: 0 12px; text-align: ${isOwn ? 'right' : 'left'};">
-            ${time}
-          </div>
-        </div>
-      `;
-      
-      container.appendChild(msgEl);
+    // Group consecutive messages from the same user
+    const groupedMessages = [];
+    let currentGroup = null;
+
+    messages.forEach((msg, index) => {
+      const isOwn = msg.user_id === user?.id;
+      const prevMsg = index > 0 ? messages[index - 1] : null;
+      const isNewGroup = !prevMsg || prevMsg.user_id !== msg.user_id;
+
+      if (isNewGroup) {
+        if (currentGroup) {
+          groupedMessages.push(currentGroup);
+        }
+        currentGroup = {
+          userId: msg.user_id,
+          isOwn: isOwn,
+          userName: msg.user?.name || msg.user?.email || 'Unknown',
+          avatarPhoto: msg.user?.avatar_photo || null,
+          messages: [msg]
+        };
+      } else {
+        currentGroup.messages.push(msg);
+      }
     });
+
+    if (currentGroup) {
+      groupedMessages.push(currentGroup);
+    }
+
+    // Create fragment for efficient DOM manipulation
+    const fragment = document.createDocumentFragment();
+
+    // Render grouped messages
+    groupedMessages.forEach((group, groupIndex) => {
+      const isFirstGroup = groupIndex === 0;
+      const prevGroup = groupIndex > 0 ? groupedMessages[groupIndex - 1] : null;
+      const isDifferentUser = !prevGroup || prevGroup.userId !== group.userId;
+
+      // Add spacing between different users
+      // When appending, check if last message in container is from same user
+      if (append && isFirstGroup) {
+        const lastMessageEl = container.lastElementChild;
+        if (lastMessageEl && lastMessageEl.getAttribute('data-message-id')) {
+          const lastMessageUserId = lastMessageEl.getAttribute('data-user-id');
+          if (lastMessageUserId && lastMessageUserId === String(group.userId)) {
+            // Same user, no spacer needed
+          } else {
+            // Different user, add spacer
+            const spacer = document.createElement('div');
+            spacer.style.cssText = 'height: 8px;';
+            fragment.appendChild(spacer);
+          }
+        }
+      } else if (!isFirstGroup && isDifferentUser) {
+        const spacer = document.createElement('div');
+        spacer.style.cssText = 'height: 8px;';
+        fragment.appendChild(spacer);
+      }
+
+      group.messages.forEach((msg, msgIndex) => {
+        const isFirstInGroup = msgIndex === 0;
+        const time = new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const cleanMessage = msg.message?.trim() || '';
+        const messageHTML = cleanMessage ? this.escapeHTML(cleanMessage).replace(/\n/g, '<br>') : '';
+
+        const msgEl = document.createElement('div');
+        msgEl.setAttribute('data-message-id', msg.id);
+        msgEl.setAttribute('data-created-at', msg.created_at);
+        msgEl.setAttribute('data-user-id', msg.user_id || '');
+        const marginBottom = msgIndex < group.messages.length - 1 ? '3px' : '8px'; // Small spacing between messages in same group, normal spacing between groups
+        
+        // Avatar always at top, aligned with name
+        msgEl.style.cssText = `display: flex; ${group.isOwn ? 'justify-content: flex-end;' : 'justify-content: flex-start;'}; margin-bottom: ${marginBottom}; position: relative; align-items: flex-start; gap: 8px;`;
+        
+        // Avatar (only for first message in group, always at top)
+        let avatarHTML = '';
+        if (isFirstInGroup) {
+          if (group.avatarPhoto) {
+            avatarHTML = `
+              <img 
+                src="${this.escapeHTML(group.avatarPhoto)}" 
+                alt="${this.escapeHTML(group.userName)}"
+                style="width: 32px; height: 32px; border-radius: 50%; object-fit: cover; flex-shrink: 0; margin-top: ${!group.isOwn ? '16px' : '0'}; ${group.isOwn ? 'order: 2;' : 'order: 0;'}"
+              />
+            `;
+          } else {
+            // Fallback: show initials
+            const initials = group.userName.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase();
+            const bgColor = group.isOwn ? '#4285f4' : '#e8eaed';
+            const textColor = group.isOwn ? '#ffffff' : '#5f6368';
+            avatarHTML = `
+              <div style="width: 32px; height: 32px; border-radius: 50%; background: ${bgColor}; color: ${textColor}; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 500; flex-shrink: 0; margin-top: ${!group.isOwn ? '16px' : '0'}; ${group.isOwn ? 'order: 2;' : 'order: 0;'}">
+                ${this.escapeHTML(initials)}
+              </div>
+            `;
+          }
+        } else {
+          // Spacer for alignment when no avatar (same height as avatar)
+          avatarHTML = `<div style="width: 32px; flex-shrink: 0; ${group.isOwn ? 'order: 2;' : 'order: 0;'}"></div>`;
+        }
+
+        msgEl.innerHTML = `
+          ${avatarHTML}
+          <div style="max-width: calc(60% - 40px); ${group.isOwn ? 'margin-left: auto;' : 'margin-right: auto;'} position: relative; ${group.isOwn ? 'order: 1;' : 'order: 1;'}">
+            ${isFirstInGroup && !group.isOwn ? `<div style="font-size: 12px; color: #5f6368; margin-bottom: 4px; padding: 0 12px;">${this.escapeHTML(group.userName)}</div>` : ''}
+            <div class="chat-message-bubble" style="
+              padding: 10px 14px;
+              border-radius: ${group.isOwn ? (isFirstInGroup ? '18px 18px 4px 18px' : '18px 4px 4px 18px') : (isFirstInGroup ? '18px 18px 18px 4px' : '4px 18px 18px 4px')};
+              background: ${group.isOwn ? '#4285f4' : '#f1f3f5'};
+              color: ${group.isOwn ? '#ffffff' : '#202124'};
+              font-size: 14px;
+              line-height: 1.4;
+              word-wrap: break-word;
+              user-select: text;
+              -webkit-user-select: text;
+              cursor: text;
+              position: relative;
+            ">
+              ${messageHTML}
+              <div class="chat-message-time" style="
+                font-size: 11px;
+                color: ${group.isOwn ? '#4285f4' : '#5f6368'};
+                position: absolute;
+                ${group.isOwn ? 'left: -55px;' : 'right: -55px;'}
+                top: 50%;
+                transform: translateY(-50%);
+                white-space: nowrap;
+                opacity: 0;
+                transition: opacity 0.2s ease;
+                pointer-events: none;
+                z-index: 10;
+              ">
+                ${time}
+              </div>
+            </div>
+          </div>
+        `;
+        
+        // Add hover effect to show time
+        const messageBubble = msgEl.querySelector('.chat-message-bubble');
+        if (messageBubble) {
+          messageBubble.addEventListener('mouseenter', () => {
+            const timeEl = msgEl.querySelector('.chat-message-time');
+            if (timeEl) {
+              timeEl.style.opacity = '1';
+            }
+          });
+          messageBubble.addEventListener('mouseleave', () => {
+            const timeEl = msgEl.querySelector('.chat-message-time');
+            if (timeEl) {
+              timeEl.style.opacity = '0';
+            }
+          });
+        }
+        
+        fragment.appendChild(msgEl);
+      });
+    });
+
+    // Append, prepend, or replace fragment
+    if (prepend) {
+      container.insertBefore(fragment, container.firstChild);
+    } else if (append) {
+      container.appendChild(fragment);
+    } else {
+      container.innerHTML = '';
+      container.appendChild(fragment);
+    }
   }
 
   // Drag and Drop implementation - copied from luna-chat
@@ -6886,9 +7301,7 @@ class LunaIntegration {
         
         // Mark as read after sending (user is actively viewing this chat)
         if (spaceId) {
-          setTimeout(() => {
-            this.markChatAsReadIfVisible(spaceId);
-          }, 300);
+          this.markChatAsReadIfVisible(spaceId);
         }
       }
     } catch (err) {
