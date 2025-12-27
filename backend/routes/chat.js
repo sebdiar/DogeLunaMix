@@ -299,8 +299,12 @@ async function getOrCreateChatForSpace(spaceId, userId) {
       }
     }
   } else if (space.category === 'user') {
-    // For user spaces, find if there's already a chat shared between these two users
-    // Find the other user by name/email
+    // For user spaces: SIMPLE LOGIC
+    // 1. Find the other user by name/email
+    // 2. Look ONLY in chats associated with USER spaces (category = 'user')
+    // 3. Find a chat where BOTH users are participants AND exactly 2 participants total
+    // 4. If found, use it. If not, create new.
+    
     const { data: otherUser } = await supabase
       .from('users')
       .select('id')
@@ -309,25 +313,75 @@ async function getOrCreateChatForSpace(spaceId, userId) {
       .maybeSingle();
     
     if (otherUser) {
-      // Find all chats where both users are participants
-      const { data: userChats } = await supabase
-        .from('chat_participants')
-        .select('chat_id')
-        .eq('user_id', userId);
+      // Get ALL chats associated with USER spaces ONLY (not projects)
+      const { data: allUserSpaces } = await supabase
+        .from('spaces')
+        .select('id')
+        .eq('category', 'user');
       
-      if (userChats && userChats.length > 0) {
-        const chatIds = userChats.map(c => c.chat_id);
+      if (allUserSpaces && allUserSpaces.length > 0) {
+        const userSpaceIds = allUserSpaces.map(s => s.id);
         
-        // Check which of these chats also has the other user as participant
-        const { data: sharedChats } = await supabase
-          .from('chat_participants')
+        // Get chats ONLY from user spaces
+        const { data: userSpaceChats } = await supabase
+          .from('space_chats')
           .select('chat_id')
-          .in('chat_id', chatIds)
-          .eq('user_id', otherUser.id);
+          .in('space_id', userSpaceIds);
         
-        if (sharedChats && sharedChats.length > 0) {
-          // Found a shared chat - use it
-          sharedChatId = sharedChats[0].chat_id;
+        if (userSpaceChats && userSpaceChats.length > 0) {
+          const userChatIds = [...new Set(userSpaceChats.map(sc => sc.chat_id))];
+          
+          // Find chats where BOTH users are participants
+          const { data: user1Chats } = await supabase
+            .from('chat_participants')
+            .select('chat_id')
+            .eq('user_id', userId)
+            .in('chat_id', userChatIds);
+          
+          if (user1Chats && user1Chats.length > 0) {
+            const user1ChatIds = user1Chats.map(c => c.chat_id);
+            
+            // Check which chats also have the other user
+            const { data: sharedChats } = await supabase
+              .from('chat_participants')
+              .select('chat_id')
+              .in('chat_id', user1ChatIds)
+              .eq('user_id', otherUser.id);
+            
+            if (sharedChats && sharedChats.length > 0) {
+              // Verify each chat has EXACTLY 2 participants (one-on-one)
+              for (const sharedChat of sharedChats) {
+                const { count } = await supabase
+                  .from('chat_participants')
+                  .select('id', { count: 'exact', head: true })
+                  .eq('chat_id', sharedChat.chat_id);
+                
+                // EXACTLY 2 participants = one-on-one chat
+                if (count === 2) {
+                  // Verify this chat is ONLY associated with USER spaces (not projects)
+                  const { data: chatSpaces } = await supabase
+                    .from('space_chats')
+                    .select('spaces!inner(category)')
+                    .eq('chat_id', sharedChat.chat_id);
+                  
+                  if (chatSpaces && chatSpaces.length > 0) {
+                    // ALL spaces must be user spaces
+                    const allAreUserSpaces = chatSpaces.every(sc => sc.spaces.category === 'user');
+                    if (allAreUserSpaces) {
+                      sharedChatId = sharedChat.chat_id;
+                      console.log(`[CHAT] Found one-on-one chat ${sharedChatId} between ${userId} and ${otherUser.id} (only user spaces, exactly 2 participants)`);
+                      break;
+                    }
+                  } else {
+                    // Chat not associated with any space - safe to use
+                    sharedChatId = sharedChat.chat_id;
+                    console.log(`[CHAT] Found one-on-one chat ${sharedChatId} between ${userId} and ${otherUser.id} (no space associations, exactly 2 participants)`);
+                    break;
+                  }
+                }
+              }
+            }
+          }
         }
       }
     }
@@ -337,42 +391,63 @@ async function getOrCreateChatForSpace(spaceId, userId) {
   if (sharedChatId) {
     // Use the existing shared chat
     chatId = sharedChatId;
-    // IMPORTANT: Check if this space already has ANY chat (not just this specific chat_id)
-    // If it does, we should NOT create a new association - one space should only have one chat
-    const { data: existingSpaceChat } = await supabase
-      .from('space_chats')
-      .select('chat_id')
-      .eq('space_id', spaceId)
-      .maybeSingle();
     
-    if (existingSpaceChat) {
-      // Space already has a chat - use that one instead of the shared chat
-      console.log(`[CHAT] Space ${spaceId} already has chat ${existingSpaceChat.chat_id}, not using shared chat ${sharedChatId}`);
-      chatId = existingSpaceChat.chat_id;
-    } else {
-      // No chat exists for this space - safe to associate the shared chat
-      const { error: insertError } = await supabase
+    // CRITICAL: Verify that the shared chat is NOT associated with a space of different category
+    // User spaces should NEVER share chats with project spaces
+    const { data: existingSpaceChats } = await supabase
+      .from('space_chats')
+      .select('space_id, spaces!inner(category)')
+      .eq('chat_id', sharedChatId);
+    
+    if (existingSpaceChats && existingSpaceChats.length > 0) {
+      const hasDifferentCategory = existingSpaceChats.some(sc => sc.spaces.category !== space.category);
+      if (hasDifferentCategory) {
+        console.warn(`[CHAT] WARNING: Shared chat ${sharedChatId} is associated with spaces of different category. Not using it for space ${spaceId} (${space.category}).`);
+        sharedChatId = null; // Don't use this chat
+        chatId = null; // Will create a new one
+      }
+    }
+    
+    if (chatId) {
+      // IMPORTANT: Check if this space already has ANY chat (not just this specific chat_id)
+      // If it does, we should NOT create a new association - one space should only have one chat
+      const { data: existingSpaceChat } = await supabase
         .from('space_chats')
-        .insert({ space_id: spaceId, chat_id: chatId });
+        .select('chat_id')
+        .eq('space_id', spaceId)
+        .maybeSingle();
       
-      if (insertError) {
-        // If insert fails (e.g., race condition), get the existing chat
-        if (insertError.code === '23505') { // unique_violation
-          const { data: existingChat } = await supabase
-            .from('space_chats')
-            .select('chat_id')
-            .eq('space_id', spaceId)
-            .maybeSingle();
-          
-          if (existingChat) {
-            chatId = existingChat.chat_id;
+      if (existingSpaceChat) {
+        // Space already has a chat - use that one instead of the shared chat
+        console.log(`[CHAT] Space ${spaceId} already has chat ${existingSpaceChat.chat_id}, not using shared chat ${sharedChatId}`);
+        chatId = existingSpaceChat.chat_id;
+      } else {
+        // No chat exists for this space - safe to associate the shared chat
+        const { error: insertError } = await supabase
+          .from('space_chats')
+          .insert({ space_id: spaceId, chat_id: chatId });
+        
+        if (insertError) {
+          // If insert fails (e.g., race condition), get the existing chat
+          if (insertError.code === '23505') { // unique_violation
+            const { data: existingChat } = await supabase
+              .from('space_chats')
+              .select('chat_id')
+              .eq('space_id', spaceId)
+              .maybeSingle();
+            
+            if (existingChat) {
+              chatId = existingChat.chat_id;
+            }
+          } else {
+            console.error('[CHAT] Error inserting shared chat:', insertError);
           }
-        } else {
-          console.error('[CHAT] Error inserting shared chat:', insertError);
         }
       }
     }
-  } else {
+  }
+  
+  if (!chatId) {
     // Before creating a new chat, double-check if one was created by another concurrent request
     const { data: doubleCheckSpaceChat } = await supabase
       .from('space_chats')
@@ -580,36 +655,38 @@ async function getOrCreateChatForSpace(spaceId, userId) {
       .single();
     
     if (otherUser) {
-      // Check if already participant
+      // Check current participant count - should only be 1 (the current user) or 2 (both users)
+      const { count: participantCount } = await supabase
+        .from('chat_participants')
+        .select('id', { count: 'exact', head: true })
+        .eq('chat_id', chatId);
+      
+      // Only proceed if we have 1 or 2 participants (one-on-one chat)
+      if (participantCount <= 2) {
+        // Check if other user is already participant
       const { data: otherParticipant } = await supabase
         .from('chat_participants')
         .select('id')
         .eq('chat_id', chatId)
         .eq('user_id', otherUser.id)
-        .single();
+          .maybeSingle();
       
       if (!otherParticipant) {
         await supabase
           .from('chat_participants')
           .insert({ chat_id: chatId, user_id: otherUser.id });
+          console.log(`[CHAT] Added user ${otherUser.id} to one-on-one chat ${chatId}`);
+        }
+      } else {
+        // Chat has more than 2 participants - this shouldn't happen for user spaces
+        console.warn(`[CHAT] WARNING: User space chat ${chatId} has ${participantCount} participants (expected max 2). This may be a group chat from a project.`);
       }
     }
     
-    // Also add the space owner if different from current user
-    if (space.user_id && space.user_id !== userId) {
-      const { data: ownerParticipant } = await supabase
-        .from('chat_participants')
-        .select('id')
-        .eq('chat_id', chatId)
-        .eq('user_id', space.user_id)
-        .single();
-      
-      if (!ownerParticipant) {
-        await supabase
-          .from('chat_participants')
-          .insert({ chat_id: chatId, user_id: space.user_id });
-      }
-    }
+    // NOTE: We don't add space.user_id separately because:
+    // 1. For user spaces, space.user_id is the current user (userId) who already added themselves
+    // 2. The other user is identified by space.name (email or name), not space.user_id
+    // 3. This ensures we only have exactly 2 participants (one-on-one)
   }
   
   return chatId;
@@ -888,7 +965,7 @@ router.get('/space/:spaceId/unread-count', async (req, res) => {
         // This ensures we only count messages that arrived AFTER the user last read
         query = query.gt('created_at', lastReadMessage.created_at);
       } else {
-        // If last_read_message_id doesn't exist in chat_messages (deleted), count all messages
+      // If last_read_message_id doesn't exist in chat_messages (deleted), count all messages
         console.log(`[UNREAD-COUNT] Last read message ${readStatus.last_read_message_id} not found, counting all messages`);
       }
     } else {
@@ -1309,16 +1386,16 @@ router.post('/space/:spaceId/mark-read', async (req, res) => {
     
     // Upsert the read status - use the latest message's timestamp to ensure we mark ALL messages up to this point as read
     // Use onConflict to specify which columns to check for conflicts
-    const { error: upsertError } = await supabase
-      .from('chat_message_reads')
-      .upsert({
-        chat_id: chatId,
-        user_id: req.userId,
-        last_read_message_id: latestMessage.id,
+      const { error: upsertError } = await supabase
+        .from('chat_message_reads')
+        .upsert({
+          chat_id: chatId,
+          user_id: req.userId,
+          last_read_message_id: latestMessage.id,
         last_read_at: latestMessage.created_at // Use message timestamp, not current time
-      }, {
-        onConflict: 'chat_id,user_id'
-      });
+        }, {
+          onConflict: 'chat_id,user_id'
+        });
     
     if (upsertError) {
       console.error('[MARK-READ] Error marking as read:', upsertError);
