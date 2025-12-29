@@ -108,14 +108,16 @@ router.get('/', async (req, res) => {
             const existingIds = new Set(spaces.map(s => s.id));
             
             // Collect parent IDs from child spaces that user has access to
+            // We need to recursively fetch all parents in the chain, not just the immediate parent
             const parentIdsToInclude = new Set();
+            
             memberSpaces.forEach(s => {
               if (!existingIds.has(s.id)) {
                 console.log(`[SPACES] Adding shared space: ${s.name} (id: ${s.id}, category: ${s.category}, parent_id: ${s.parent_id || 'none'})`);
                 spaces.push(s);
                 existingIds.add(s.id);
               }
-              // If this is a child space (has parent_id), we need to include the parent as a ghost
+              // If this is a child space (has parent_id), add it to the set to fetch
               if (s.parent_id && !existingIds.has(s.parent_id)) {
                 parentIdsToInclude.add(s.parent_id);
                 console.log(`[SPACES] Will include ghost parent: ${s.parent_id} for child space: ${s.name}`);
@@ -124,35 +126,72 @@ router.get('/', async (req, res) => {
             
             // Fetch parent spaces and mark them as ghost (read-only, visible but not clickable)
             // IMPORTANT: Only include ghost parents if they match the requested category
+            // We need to recursively fetch all parents in the chain
             if (parentIdsToInclude.size > 0) {
-              let parentSpacesQuery = supabase
-                .from('spaces')
-                .select('*')
-                .in('id', Array.from(parentIdsToInclude));
+              // We need to fetch all parents and then recursively fetch their parents too
+              let allParentIds = new Set(parentIdsToInclude);
+              let fetchedParents = new Map();
               
-              // Filter ghost parents by category to ensure projects don't appear in users section
-              if (category) {
-                parentSpacesQuery = parentSpacesQuery.eq('category', category);
-              }
+              // Keep fetching parents until we have all of them in the chain
+              let hasMoreParents = true;
+              let iteration = 0;
+              const maxIterations = 10; // Safety limit to prevent infinite loops
               
-              const { data: parentSpaces, error: parentError } = await parentSpacesQuery;
-              
-              if (!parentError && parentSpaces) {
-                console.log(`[SPACES] Found ${parentSpaces.length} ghost parents to include`);
-                parentSpaces.forEach(parent => {
-                  // Mark as ghost - visible but not accessible
-                  parent.isGhost = true;
-                  parent.isReadOnly = true;
-                  // Double-check category matches before adding
-                  if (!category || parent.category === category) {
-                    if (!existingIds.has(parent.id)) {
-                      console.log(`[SPACES] Adding ghost parent: ${parent.name} (id: ${parent.id}, category: ${parent.category})`);
-                      spaces.push(parent);
-                      existingIds.add(parent.id);
+              while (hasMoreParents && iteration < maxIterations) {
+                iteration++;
+                hasMoreParents = false;
+                
+                // Fetch all parents we haven't fetched yet
+                const idsToFetch = Array.from(allParentIds).filter(id => !fetchedParents.has(id));
+                
+                if (idsToFetch.length === 0) {
+                  break; // No more parents to fetch
+                }
+                
+                let parentSpacesQuery = supabase
+                  .from('spaces')
+                  .select('*')
+                  .in('id', idsToFetch);
+                
+                // Filter ghost parents by category to ensure projects don't appear in users section
+                if (category) {
+                  parentSpacesQuery = parentSpacesQuery.eq('category', category);
+                }
+                
+                const { data: parentSpaces, error: parentError } = await parentSpacesQuery;
+                
+                if (!parentError && parentSpaces) {
+                  console.log(`[SPACES] Found ${parentSpaces.length} ghost parents to include (iteration ${iteration})`);
+                  
+                  // Check if any of these parents have their own parents
+                  parentSpaces.forEach(parent => {
+                    fetchedParents.set(parent.id, parent);
+                    // If this parent has a parent_id and we haven't fetched it yet, add it to the set
+                    if (parent.parent_id && !allParentIds.has(parent.parent_id) && !existingIds.has(parent.parent_id)) {
+                      allParentIds.add(parent.parent_id);
+                      hasMoreParents = true;
+                      console.log(`[SPACES] Found parent of parent: ${parent.parent_id} for ${parent.name}`);
                     }
-                  }
-                });
+                  });
+                } else {
+                  break; // Error or no more parents
+                }
               }
+              
+              // Now add all fetched parents as ghost parents
+              fetchedParents.forEach(parent => {
+                // Mark as ghost - visible but not accessible
+                parent.isGhost = true;
+                parent.isReadOnly = true;
+                // Double-check category matches before adding
+                if (!category || parent.category === category) {
+                  if (!existingIds.has(parent.id)) {
+                    console.log(`[SPACES] Adding ghost parent: ${parent.name} (id: ${parent.id}, category: ${parent.category}, parent_id: ${parent.parent_id || 'none'})`);
+                    spaces.push(parent);
+                    existingIds.add(parent.id);
+                  }
+                }
+              });
             }
           }
         }

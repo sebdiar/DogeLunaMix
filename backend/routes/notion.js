@@ -786,18 +786,7 @@ async function handleTaskCreated(taskData, apiKey) {
     }
 
     // Build message text in English with visual format
-    const currentDate = new Date();
-    const formattedDate = currentDate.toLocaleDateString('en-US', { 
-      month: 'short', 
-      day: 'numeric', 
-      year: 'numeric' 
-    });
-    
-    let messageText = `✅ New task\n\n📋 ${taskDetails.title}\n📅 ${formattedDate}`;
-    
-    if (taskDetails.assignee) {
-      messageText += `\n👤 Assigned: ${taskDetails.assignee}`;
-    }
+    let messageText = `📋 New task: ${taskDetails.title}`;
     
     if (taskDetails.dueDate) {
       // Format due date
@@ -821,10 +810,12 @@ async function handleTaskCreated(taskData, apiKey) {
         dueDateText = `Due: ${dueDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} (Overdue)`;
       }
       
-      messageText += `\n⏰ ${dueDateText}`;
+      messageText += `\n📅 ${dueDateText}`;
     }
     
-    messageText += '\n\n🔗 View Details';
+    if (taskDetails.assignee) {
+      messageText += `\n👤 Assigned: ${taskDetails.assignee}`;
+    }
 
     // Send system message to chat
     const { error: messageError } = await supabase
@@ -1002,28 +993,17 @@ async function handleTaskUpdated(taskData, apiKey) {
                              (!previousState || previousState.isDone === false);
     
     // Build message text in English with visual format
-    const currentDate = new Date();
-    const formattedDate = currentDate.toLocaleDateString('en-US', { 
-      month: 'short', 
-      day: 'numeric', 
-      year: 'numeric' 
-    });
-    
     let messageText = null;
     
     if (wasJustCompleted) {
       // Task was just completed (Done changed from false to true)
-      messageText = `✅ Task completed\n\n📋 ${taskDetails.title}\n📅 ${formattedDate}`;
+      messageText = `✅ Task completed: ${taskDetails.title}`;
     } else {
       // Task was updated but not completed (or was already completed)
-      messageText = `📝 Task updated\n\n📋 ${taskDetails.title}\n📅 ${formattedDate}`;
+      messageText = `📝 Task updated: ${taskDetails.title}`;
     }
     
-    // Add assignee and due date if available
-    if (taskDetails.assignee) {
-      messageText += `\n👤 Assigned: ${taskDetails.assignee}`;
-    }
-    
+    // Add due date if available
     if (taskDetails.dueDate) {
       // Format due date
       const dueDate = new Date(taskDetails.dueDate);
@@ -1046,10 +1026,13 @@ async function handleTaskUpdated(taskData, apiKey) {
         dueDateText = `Due: ${dueDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} (Overdue)`;
       }
       
-      messageText += `\n⏰ ${dueDateText}`;
+      messageText += `\n📅 ${dueDateText}`;
     }
     
-    messageText += '\n\n🔗 View Details';
+    // Add assignee if available
+    if (taskDetails.assignee) {
+      messageText += `\n👤 Assigned: ${taskDetails.assignee}`;
+    }
 
     // Send system message to chat
     const { error: messageError } = await supabase

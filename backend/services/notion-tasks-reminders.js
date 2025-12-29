@@ -4,43 +4,39 @@
  */
 
 import supabase from '../config/database.js';
-import { queryTasksByDueDate } from './notion-tasks.js';
+import { queryOverdueTasks } from './notion-tasks.js';
 import { getOrCreateChatForSpace, sendSystemMessageNotifications } from '../routes/chat.js';
 
 /**
- * Send morning reminders for tasks that are due today
+ * Send morning reminders for overdue tasks (tasks with due date before today)
  */
 export async function sendMorningTaskReminders() {
+  const startTime = new Date();
+
   try {
     const apiKey = process.env.NOTION_API_KEY;
     const tasksDatabaseId = process.env.NOTION_TASKS_DATABASE_ID;
     const reminderEnabled = process.env.NOTION_TASKS_REMINDER_ENABLED === 'true';
 
     if (!reminderEnabled) {
-      console.log('Task reminders are disabled');
+      console.log('⚠️  Task reminders are disabled');
       return;
     }
 
     if (!apiKey || !tasksDatabaseId) {
-      console.log('Notion API key or tasks database ID not configured, skipping reminders');
+      console.log('⚠️  Notion API key or tasks database ID not configured, skipping reminders');
       return;
     }
 
-    // Get today's date in YYYY-MM-DD format
-    const today = new Date();
-    const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-
-    console.log(`🔔 Checking for tasks due today (${todayStr})...`);
-
-    // Query tasks that are due today
-    const tasks = await queryTasksByDueDate(apiKey, tasksDatabaseId, todayStr);
+    // Query overdue tasks (tasks with due date before today and not completed)
+    const tasks = await queryOverdueTasks(apiKey, tasksDatabaseId);
 
     if (!tasks || tasks.length === 0) {
-      console.log('No tasks due today');
+      console.log('✅ No overdue tasks found');
       return;
     }
 
-    console.log(`Found ${tasks.length} task(s) due today`);
+    console.log(`📊 Found ${tasks.length} overdue task(s)`);
 
     let remindersSent = 0;
     let errors = 0;
@@ -50,13 +46,12 @@ export async function sendMorningTaskReminders() {
       try {
         // Skip tasks without project relation
         if (!task.projectId) {
-          console.log(`Task "${task.title}" has no project relation, skipping`);
           continue;
         }
 
-        // Find project by notion_page_id
+        // Find ALL projects by notion_page_id
         // Note: A task might be related to projects owned by different users
-        // We need to send reminders to all projects with this notion_page_id
+        // We need to send reminders to ALL projects with this notion_page_id
         const { data: projects, error: projectError } = await supabase
           .from('spaces')
           .select('id, name, user_id')
@@ -64,7 +59,6 @@ export async function sendMorningTaskReminders() {
           .eq('category', 'project');
 
         if (projectError || !projects || projects.length === 0) {
-          console.log(`Project with Notion ID ${task.projectId} not found for task "${task.title}"`);
           continue;
         }
 
@@ -75,15 +69,31 @@ export async function sendMorningTaskReminders() {
             const chatId = await getOrCreateChatForSpace(project.id, project.user_id);
 
             if (!chatId) {
-              console.error(`Failed to get or create chat for project: ${project.id}`);
               continue;
             }
 
-            // Build reminder message
-            let messageText = `Recordatorio: ${task.title} vence hoy`;
+            // Build reminder message for overdue task
+            // Format due date
+            const dueDate = new Date(task.dueDate);
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            dueDate.setHours(0, 0, 0, 0);
+            const diffTime = today - dueDate;
+            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+            
+            let daysText = diffDays === 1 ? 'day' : 'days';
+            let messageText = `✅ Reminder: ${task.title} is ${diffDays} ${daysText} overdue`;
+            
+            // Add formatted due date
+            const formattedDueDate = dueDate.toLocaleDateString('en-US', { 
+              month: 'short', 
+              day: 'numeric', 
+              year: 'numeric' 
+            });
+            messageText += `\n📅 Due: ${formattedDueDate}`;
             
             if (task.assignee) {
-              messageText += `\nAsignado: ${task.assignee}`;
+              messageText += `\n👤 Assigned: ${task.assignee}`;
             }
 
             // Send system message to chat
@@ -96,31 +106,44 @@ export async function sendMorningTaskReminders() {
               });
 
             if (messageError) {
-              console.error(`Error sending reminder for task "${task.title}" to project "${project.name}":`, messageError);
               errors++;
             } else {
               // Send push notifications for system message (in background)
               setImmediate(async () => {
                 await sendSystemMessageNotifications(chatId, messageText);
               });
-              
-              console.log(`✅ Reminder sent for task "${task.title}" to project "${project.name}"`);
               remindersSent++;
             }
           } catch (error) {
-            console.error(`Error processing reminder for task "${task.title}" in project "${project.name}":`, error);
             errors++;
           }
         }
       } catch (error) {
-        console.error(`Error processing task "${task.title}":`, error);
         errors++;
       }
     }
 
-    console.log(`📊 Reminders summary: ${remindersSent} sent, ${errors} errors`);
+    const endTime = new Date();
+    const duration = ((endTime - startTime) / 1000).toFixed(2);
+    
+    console.log(`\n${'='.repeat(60)}`);
+    console.log(`📊 Reminders Summary:`);
+    console.log(`   ✅ Successfully sent: ${remindersSent}`);
+    console.log(`   ❌ Errors: ${errors}`);
+    console.log(`   ⏱️  Duration: ${duration}s`);
+    console.log(`   🕐 Completed at: ${endTime.toISOString()}`);
+    console.log(`${'='.repeat(60)}\n`);
+
+    return {
+      success: true,
+      remindersSent,
+      errors,
+      tasksProcessed: tasks.length,
+      duration: parseFloat(duration)
+    };
   } catch (error) {
-    console.error('Error in sendMorningTaskReminders:', error);
+    console.error('\n❌ Error in sendMorningTaskReminders:', error);
+    console.error('Stack trace:', error.stack);
     throw error;
   }
 }

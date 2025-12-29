@@ -32,9 +32,6 @@ async function getTaskDetails(apiKey, taskId) {
 
     const page = await response.json();
 
-    // Log page properties for debugging
-    console.log('📄 Task page properties:', Object.keys(page.properties || {}));
-
     // Extract title
     let title = 'Untitled';
     if (page.properties) {
@@ -121,28 +118,20 @@ async function getTaskDetails(apiKey, taskId) {
         const relation = page.properties.Project.relation;
         if (relation && relation.length > 0) {
           projectId = relation[0].id;
-          console.log('✅ Found Project relation:', projectId);
         }
       }
       // Fallback: check any relation property that might be a project
       if (!projectId) {
-        console.log('🔍 Searching for relation properties...');
         for (const propName in page.properties) {
           const prop = page.properties[propName];
-          console.log(`  - ${propName}: type=${prop.type}`);
           if (prop.type === 'relation' && propName.toLowerCase().includes('project')) {
             if (prop.relation && prop.relation.length > 0) {
               projectId = prop.relation[0].id;
-              console.log(`✅ Found project relation in "${propName}":`, projectId);
               break;
             }
           }
         }
       }
-    }
-    
-    if (!projectId) {
-      console.log('⚠️  No project relation found in task properties');
     }
 
     // Extract done status (Checkbox property named "Done")
@@ -316,8 +305,250 @@ async function queryAllTasksAndFilterByDate(apiKey, databaseId, dueDate) {
   }
 }
 
+/**
+ * Extract task data directly from Notion page object (optimized - no API call)
+ */
+function extractTaskDataFromPage(page) {
+  if (!page || !page.properties) {
+    return null;
+  }
+
+  // Extract title
+  let title = 'Untitled';
+  if (page.properties.Task && page.properties.Task.title) {
+    const titleArray = page.properties.Task.title;
+    if (titleArray.length > 0 && titleArray[0].text) {
+      title = titleArray[0].text.content;
+    }
+  } else {
+    // Try to find any title property
+    for (const propName in page.properties) {
+      const prop = page.properties[propName];
+      if (prop.type === 'title' && prop.title && prop.title.length > 0) {
+        title = prop.title[0].text.content;
+        break;
+      }
+    }
+  }
+
+  // Extract assignee
+  let assignee = null;
+  const assigneePropNames = ['User', 'Asignado', 'Assignee', 'Assigned to', 'Person', 'Responsible'];
+  for (const propName of assigneePropNames) {
+    if (page.properties[propName] && page.properties[propName].type === 'people') {
+      const people = page.properties[propName].people;
+      if (people && people.length > 0) {
+        assignee = people[0].name || people[0].id;
+        break;
+      }
+    }
+  }
+
+  // Extract due date
+  let dueDate = null;
+  const dueDatePropNames = ['Due Date', 'Due', 'Fecha de vencimiento', 'Vence', 'Deadline', 'Date'];
+  for (const propName of dueDatePropNames) {
+    if (page.properties[propName] && page.properties[propName].type === 'date') {
+      const date = page.properties[propName].date;
+      if (date && date.start) {
+        dueDate = date.start;
+        break;
+      }
+    }
+  }
+
+  // Extract project relation
+  let projectId = null;
+  if (page.properties.Project && page.properties.Project.type === 'relation') {
+    const relation = page.properties.Project.relation;
+    if (relation && relation.length > 0) {
+      projectId = relation[0].id;
+    }
+  }
+
+  // Extract done status
+  let isDone = false;
+  const donePropNames = ['Done', 'Completado', 'Completed', 'Finished'];
+  for (const propName of donePropNames) {
+    if (page.properties[propName] && page.properties[propName].type === 'checkbox') {
+      isDone = page.properties[propName].checkbox === true;
+      break;
+    }
+  }
+
+  return {
+    id: page.id,
+    title,
+    assignee,
+    dueDate,
+    projectId,
+    isDone
+  };
+}
+
+/**
+ * Query overdue tasks from Notion database (tasks with due date before today and not completed)
+ * OPTIMIZED: Uses Notion API filters directly and extracts data without individual API calls
+ * @param {string} apiKey - Notion API key
+ * @param {string} databaseId - Notion database ID
+ * @returns {Promise<Array<{id: string, title: string, assignee: string|null, dueDate: string|null, projectId: string|null, isDone: boolean}>>}
+ */
+async function queryOverdueTasks(apiKey, databaseId) {
+  if (!apiKey || !databaseId) {
+    throw new Error('API key and database ID are required');
+  }
+
+  try {
+    const allTasks = [];
+    let hasMore = true;
+    let startCursor = null;
+
+    // Get today's date in ISO format for Notion filter (YYYY-MM-DD)
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayISO = today.toISOString().split('T')[0];
+
+    // Try common property names for Due Date and Done
+    const dueDatePropNames = ['Due Date', 'Due', 'Fecha de vencimiento', 'Vence', 'Deadline', 'Date'];
+    const donePropNames = ['Done', 'Completado', 'Completed', 'Finished'];
+
+    while (hasMore) {
+      // Try to use filter - if it fails, fall back to getting all and filtering
+      const body = {
+        page_size: 100,
+        filter: {
+          and: [
+            {
+              property: 'Due', // Most common property name
+              date: {
+                before: todayISO
+              }
+            },
+            {
+              property: 'Done', // Most common property name
+              checkbox: {
+                equals: false
+              }
+            }
+          ]
+        }
+      };
+
+      if (startCursor) {
+        body.start_cursor = startCursor;
+      }
+
+      const response = await fetch(`https://api.notion.com/v1/databases/${databaseId}/query`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+          'Notion-Version': NOTION_API_VERSION
+        },
+        body: JSON.stringify(body)
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        // If filter fails (property name mismatch), fall back to getting all and filtering in code
+        if (errorData.code === 'validation_error') {
+          // Fallback: get all tasks and filter in code
+          return await queryOverdueTasksFallback(apiKey, databaseId);
+        }
+        throw new Error(`Notion API error: ${errorData.message || response.statusText}`);
+      }
+
+      const data = await response.json();
+
+      // Extract task data directly from page objects (no individual API calls)
+      for (const page of data.results || []) {
+        const taskData = extractTaskDataFromPage(page);
+        
+        if (taskData && taskData.dueDate && !taskData.isDone) {
+          // Double-check the date is actually before today (in case filter didn't work perfectly)
+          const dueDate = new Date(taskData.dueDate);
+          dueDate.setHours(0, 0, 0, 0);
+          if (dueDate.getTime() < today.getTime()) {
+            allTasks.push(taskData);
+          }
+        }
+      }
+
+      hasMore = data.has_more || false;
+      startCursor = data.next_cursor || null;
+    }
+
+    return allTasks;
+  } catch (error) {
+    console.error('Error querying overdue tasks:', error);
+    throw error;
+  }
+}
+
+/**
+ * Fallback: Query all tasks and filter for overdue ones in code
+ * Used when Notion filter doesn't work with property names
+ */
+async function queryOverdueTasksFallback(apiKey, databaseId) {
+  const allTasks = [];
+  let hasMore = true;
+  let startCursor = null;
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const todayTimestamp = today.getTime();
+
+  while (hasMore) {
+    const body = {
+      page_size: 100
+    };
+
+    if (startCursor) {
+      body.start_cursor = startCursor;
+    }
+
+    const response = await fetch(`https://api.notion.com/v1/databases/${databaseId}/query`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        'Notion-Version': NOTION_API_VERSION
+      },
+      body: JSON.stringify(body)
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(`Notion API error: ${errorData.message || response.statusText}`);
+    }
+
+    const data = await response.json();
+
+    // Extract task data directly from page objects (no individual API calls)
+    for (const page of data.results || []) {
+      const taskData = extractTaskDataFromPage(page);
+      
+      if (taskData && taskData.dueDate && !taskData.isDone) {
+        const dueDate = new Date(taskData.dueDate);
+        dueDate.setHours(0, 0, 0, 0);
+        const dueDateTimestamp = dueDate.getTime();
+        
+        if (dueDateTimestamp < todayTimestamp) {
+          allTasks.push(taskData);
+        }
+      }
+    }
+
+    hasMore = data.has_more || false;
+    startCursor = data.next_cursor || null;
+  }
+
+  return allTasks;
+}
+
 export {
   getTaskDetails,
-  queryTasksByDueDate
+  queryTasksByDueDate,
+  queryOverdueTasks
 };
 

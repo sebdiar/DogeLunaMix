@@ -169,3 +169,4 @@ pkill -f "node.*server.js" && pkill -f "vite" && pkill -f "cloudflared"
 **¡Ahora prueba el test definitivo!** (cerrar app y recibir notificación)
 
 
+

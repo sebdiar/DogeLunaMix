@@ -105,15 +105,15 @@ class LunaIntegration {
           badge.style.setProperty('transform', 'translateY(-50%)', 'important');
           badge.style.setProperty('right', '8px', 'important');
           
-          // Adjust archive button position when badge is visible
+          // Adjust menu button position when badge is visible
           const projectItem = badge.closest('.project-item');
           if (projectItem) {
-            const archiveBtn = projectItem.querySelector('.project-archive-btn');
-            if (archiveBtn) {
-              archiveBtn.style.position = 'absolute';
-              archiveBtn.style.right = '30px';
-              archiveBtn.style.top = '50%';
-              archiveBtn.style.transform = 'translateY(-50%)';
+            const menuBtn = projectItem.querySelector('.project-menu-btn');
+            if (menuBtn) {
+              menuBtn.style.position = 'absolute';
+              menuBtn.style.right = '30px';
+              menuBtn.style.top = '50%';
+              menuBtn.style.transform = 'translateY(-50%)';
             }
           }
         } else {
@@ -121,15 +121,15 @@ class LunaIntegration {
           badge.style.setProperty('display', 'none', 'important');
           badge.style.setProperty('visibility', 'hidden', 'important');
           
-          // Reset archive button position when badge is hidden
+          // Reset menu button position when badge is hidden
           const projectItem = badge.closest('.project-item');
           if (projectItem) {
-            const archiveBtn = projectItem.querySelector('.project-archive-btn');
-            if (archiveBtn) {
-              archiveBtn.style.position = 'absolute';
-              archiveBtn.style.right = '8px';
-              archiveBtn.style.top = '50%';
-              archiveBtn.style.transform = 'translateY(-50%)';
+            const menuBtn = projectItem.querySelector('.project-menu-btn');
+            if (menuBtn) {
+              menuBtn.style.position = 'absolute';
+              menuBtn.style.right = '8px';
+              menuBtn.style.top = '50%';
+              menuBtn.style.transform = 'translateY(-50%)';
             }
           }
         }
@@ -160,12 +160,12 @@ class LunaIntegration {
         badge.style.display = 'none';
         badge.textContent = '';
         
-        // Reset archive button position
+        // Reset menu button position
         const projectItem = badge.closest('.project-item');
         if (projectItem) {
-          const archiveBtn = projectItem.querySelector('.project-archive-btn');
-          if (archiveBtn) {
-            archiveBtn.style.right = '8px';
+          const menuBtn = projectItem.querySelector('.project-menu-btn');
+          if (menuBtn) {
+            menuBtn.style.right = '8px';
           }
         }
       });
@@ -188,23 +188,23 @@ class LunaIntegration {
             badge.style.transform = 'translateY(-50%)';
             badge.style.right = '8px';
             
-            // Adjust archive button position when badge is visible
+            // Adjust menu button position when badge is visible
             const projectItem = badge.closest('.project-item');
             if (projectItem) {
-              const archiveBtn = projectItem.querySelector('.project-archive-btn');
-              if (archiveBtn) {
-                archiveBtn.style.right = '30px'; // Move left when badge is visible
+              const menuBtn = projectItem.querySelector('.project-menu-btn');
+              if (menuBtn) {
+                menuBtn.style.right = '30px'; // Move left when badge is visible
               }
             }
           } else {
             badge.style.display = 'none';
             
-            // Reset archive button position when badge is hidden
+            // Reset menu button position when badge is hidden
             const projectItem = badge.closest('.project-item');
             if (projectItem) {
-              const archiveBtn = projectItem.querySelector('.project-archive-btn');
-              if (archiveBtn) {
-                archiveBtn.style.right = '8px'; // Back to original position
+              const menuBtn = projectItem.querySelector('.project-menu-btn');
+              if (menuBtn) {
+                menuBtn.style.right = '8px'; // Back to original position
               }
             }
           }
@@ -224,12 +224,12 @@ class LunaIntegration {
             badge.textContent = '';
             badge.style.display = 'none';
             
-            // Reset archive button position when badge is hidden
+            // Reset menu button position when badge is hidden
             const projectItem = badge.closest('.project-item');
             if (projectItem) {
-              const archiveBtn = projectItem.querySelector('.project-archive-btn');
-              if (archiveBtn) {
-                archiveBtn.style.right = '8px'; // Back to original position
+              const menuBtn = projectItem.querySelector('.project-menu-btn');
+              if (menuBtn) {
+                menuBtn.style.right = '8px'; // Back to original position
               }
             }
           });
@@ -1228,6 +1228,34 @@ class LunaIntegration {
     }
   }
 
+  // Save project expansion state to localStorage
+  saveProjectExpansionState() {
+    try {
+      const expansionState = {};
+      this.projects.forEach(project => {
+        if (project.id) {
+          expansionState[project.id] = project.is_expanded === true;
+        }
+      });
+      localStorage.setItem('project_expansion_state', JSON.stringify(expansionState));
+    } catch (err) {
+      console.error('Failed to save project expansion state:', err);
+    }
+  }
+
+  // Load project expansion state from localStorage
+  loadProjectExpansionState() {
+    try {
+      const saved = localStorage.getItem('project_expansion_state');
+      if (saved) {
+        return JSON.parse(saved);
+      }
+    } catch (err) {
+      console.error('Failed to load project expansion state:', err);
+    }
+    return {};
+  }
+
   async loadProjects() {
     if (!this.token) return;
     
@@ -1247,6 +1275,16 @@ class LunaIntegration {
       
       // Show ALL projects (active + archived)
       this.projects = spaces || [];
+      
+      // Load saved expansion state from localStorage
+      const savedExpansionState = this.loadProjectExpansionState();
+      
+      // Apply saved expansion state (override backend values with user preferences)
+      this.projects.forEach(project => {
+        if (project.id && project.id in savedExpansionState) {
+          project.is_expanded = savedExpansionState[project.id];
+        }
+      });
       
       this.renderProjects();
       
@@ -2540,16 +2578,19 @@ class LunaIntegration {
           return;
         }
         
-        // Handle archive
-        const archiveBtn = e.target.closest('.project-archive-btn');
-        if (archiveBtn) {
+        // Handle menu button
+        const menuBtn = e.target.closest('.project-menu-btn');
+        if (menuBtn) {
           e.stopPropagation();
-          this.archiveProject(projectId);
+          const project = this.allProjects.find(p => p.id === projectId) || this.projects.find(p => p.id === projectId);
+          if (project) {
+            this.showProjectMenu(e, project);
+          }
           return;
         }
         
         // Select project
-        if (!e.target.closest('.drop-indicator') && !e.target.closest('.project-archive-btn')) {
+        if (!e.target.closest('.drop-indicator') && !e.target.closest('.project-menu-btn')) {
           this.selectProject(projectId);
           if (window.mobileUI && window.mobileUI.hideAll) {
             window.mobileUI.hideAll();
@@ -4278,6 +4319,137 @@ class LunaIntegration {
     }, 0);
   }
 
+  // Show 3-dots menu for projects
+  showProjectMenu(e, project) {
+    // Close any existing menu
+    const existingMenu = document.querySelector('.project-menu-dropdown');
+    if (existingMenu) {
+      existingMenu.remove();
+      // Remove existing listener
+      if (this.projectMenuCloseListener) {
+        document.removeEventListener('click', this.projectMenuCloseListener);
+        document.removeEventListener('mousedown', this.projectMenuCloseListener);
+        window.removeEventListener('blur', this.projectMenuCloseListener);
+      }
+    }
+
+    const button = e.target.closest('.project-menu-btn');
+    if (!button) return;
+
+    const rect = button.getBoundingClientRect();
+    const menu = document.createElement('div');
+    menu.className = 'project-menu-dropdown absolute bg-white border border-[#e8eaed] rounded-lg shadow-lg py-1';
+    menu.style.left = `${rect.right - 180}px`; // Align to the right of button
+    menu.style.top = `${rect.bottom + 4}px`;
+    menu.style.zIndex = '10001'; // High z-index to appear on top
+    menu.style.minWidth = '180px';
+
+    const isArchived = project.archived === true;
+
+    // Create toggle switch with inline styles
+    const toggleId = `project-toggle-${project.id}`;
+    menu.innerHTML = `
+      <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; font-size: 14px; color: #202124; cursor: pointer;" onmouseover="this.style.backgroundColor='#f5f7fa'" onmouseout="this.style.backgroundColor='transparent'">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 3l18 18"></path>
+            <path d="M19 5l-2 2"></path>
+            <path d="M5 19l-2-2"></path>
+            <path d="M3 12a9 9 0 0 1 9-9"></path>
+            <path d="M21 12a9 9 0 0 1-9 9"></path></svg>
+          <span>Archivado</span>
+        </div>
+        <label style="position: relative; display: inline-flex; align-items: center; cursor: pointer;" for="${toggleId}">
+          <input type="checkbox" id="${toggleId}" style="position: absolute; opacity: 0; width: 0; height: 0;" ${isArchived ? 'checked' : ''} data-project-id="${project.id}">
+          <div style="width: 44px; height: 24px; background-color: ${isArchived ? '#4285f4' : '#d1d5db'}; border-radius: 12px; position: relative; transition: background-color 0.2s;">
+            <div style="position: absolute; top: 2px; left: ${isArchived ? '22px' : '2px'}; width: 20px; height: 20px; background-color: white; border-radius: 50%; transition: left 0.2s; box-shadow: 0 2px 4px rgba(0,0,0,0.2);"></div>
+          </div>
+        </label>
+      </div>
+    `;
+
+    document.body.appendChild(menu);
+
+    // Event handler for toggle
+    const toggle = menu.querySelector('input[type="checkbox"]');
+    const toggleSwitch = menu.querySelector('label > div');
+    const toggleCircle = toggleSwitch ? toggleSwitch.querySelector('div') : null;
+    
+    if (toggle && toggleSwitch && toggleCircle) {
+      toggle.onchange = async (e) => {
+        e.stopPropagation();
+        const projectId = toggle.getAttribute('data-project-id');
+        const wasArchived = toggle.checked;
+        
+        // Update toggle visual state immediately
+        toggleSwitch.style.backgroundColor = wasArchived ? '#4285f4' : '#d1d5db';
+        toggleCircle.style.left = wasArchived ? '22px' : '2px';
+        
+        await this.archiveProject(projectId);
+        // Close menu after toggle
+        menu.remove();
+        if (this.projectMenuCloseListener) {
+          document.removeEventListener('click', this.projectMenuCloseListener, true);
+          document.removeEventListener('mousedown', this.projectMenuCloseListener, true);
+          window.removeEventListener('blur', this.projectMenuCloseListener);
+          this.projectMenuCloseListener = null;
+        }
+      };
+    }
+    
+    // Prevent menu from closing when clicking on toggle area
+    const toggleContainer = menu.querySelector('div[style*="display: flex"]');
+    if (toggleContainer) {
+      toggleContainer.onclick = (e) => {
+        e.stopPropagation();
+        // Let the label handle the click naturally
+      };
+    }
+
+    // Close menu when clicking outside - usando listeners globales para detectar clics en iframe
+    const closeMenu = (event) => {
+      // Verificar si el clic fue fuera del menú y del botón
+      const target = event.target;
+      const clickedInsideMenu = menu.contains(target);
+      const clickedOnButton = button && button.contains(target);
+      
+      // Si no se hizo clic dentro del menú ni en el botón, cerrar
+      if (!clickedInsideMenu && !clickedOnButton) {
+        menu.remove();
+        document.removeEventListener('click', closeMenu, true);
+        document.removeEventListener('mousedown', closeMenu, true);
+        window.removeEventListener('blur', closeMenu);
+        if (this.projectMenuCloseListener) {
+          this.projectMenuCloseListener = null;
+        }
+      }
+    };
+    
+    // Guardar referencia para poder removerla después
+    this.projectMenuCloseListener = closeMenu;
+    
+    // Agregar listener directamente al contenedor de iframes para detectar clicks en el webview
+    const fcnContainer = document.getElementById('fcn');
+    if (fcnContainer) {
+      const fcnCloseHandler = (e) => {
+        // Si se hace clic en el contenedor de iframes, cerrar el menú
+        if (menu && menu.parentNode) {
+          closeMenu(e);
+        }
+      };
+      fcnContainer.addEventListener('click', fcnCloseHandler, true);
+      fcnContainer.addEventListener('mousedown', fcnCloseHandler, true);
+      menu._fcnCloseHandler = fcnCloseHandler;
+    }
+    
+    // Listeners globales en document y window para capturar eventos incluso cuando el mouse está sobre el iframe
+    setTimeout(() => {
+      document.addEventListener('click', closeMenu, true); // Capture phase - intercepta antes del iframe
+      document.addEventListener('mousedown', closeMenu, true); // También mousedown
+      window.addEventListener('blur', closeMenu); // También blur para cuando se pierde el foco
+    }, 0);
+  }
+
   // Show Edit Tab Modal (Luna style - allows editing name, URL, and icon)
   showEditTabModal(tab, isNewTab = false) {
     // Remove existing modal if any
@@ -5229,20 +5401,21 @@ class LunaIntegration {
         ? '' 
         : (isActive ? 'bg-[#4285f4]/10 text-[#4285f4] font-medium shadow-sm' : 'text-[#202124] hover:bg-[#e8eaed]');
       
-      projectEl.className = `project-item group flex items-center gap-2 px-2 py-1.5 rounded-lg transition-all ${
+      // Reduce padding-left to align chevron with section title "PROJECTS"
+      projectEl.className = `project-item group flex items-center gap-2 pl-0 pr-2 py-1.5 rounded-lg transition-all ${
         hoverStyles
       } ${isArchived ? 'opacity-60' : ''} ${ghostStyles}`;
       projectEl.style.cursor = isGhost ? 'default' : 'pointer';
       
-      // Chevron for expand/collapse (EXACTLY like luna-chat) - más compacto
+      // Chevron for expand/collapse - aligned with section title
       const chevronHtml = hasChildren 
-        ? `<button class="p-0.5 hover:bg-gray-100 rounded transition-colors z-10 expand-btn" data-project-id="${project.id}">
+        ? `<button class="p-0 hover:bg-gray-100 rounded transition-colors z-10 expand-btn" data-project-id="${project.id}">
             ${project.is_expanded !== false 
-              ? '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>'
-              : '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>'
+              ? '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>'
+              : '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>'
             }
           </button>`
-        : '<div class="w-4"></div>'; // Spacer if no children - más pequeño
+        : '<div class="w-2.5"></div>'; // Spacer if no children - same width as button (10px icon = ~10px)
       
       projectEl.style.position = 'relative'; // For badge positioning
       projectEl.innerHTML = `
@@ -5252,11 +5425,12 @@ class LunaIntegration {
         </div>
         <span class="flex-1 text-xs truncate">${this.escapeHTML(project.name)}</span>
         ${!isGhost ? `<div class="space-unread-badge" data-space-id="${project.id}" style="display: none; position: absolute; top: 50%; transform: translateY(-50%); right: 8px; background-color: #ea4335; color: white; border-radius: 50%; width: 18px; height: 18px; min-width: 18px; align-items: center; justify-content: center; font-size: 10px; font-weight: 600; z-index: 10; line-height: 1;"></div>
-        <button class="project-archive-btn opacity-0 group-hover:opacity-100 hover:text-[#4285f4] transition-opacity p-0.5 cursor-pointer" data-project-id="${project.id}" title="${isArchived ? 'Unarchive' : 'Archive'}" style="cursor: pointer; position: absolute; right: 8px; top: 50%; transform: translateY(-50%); z-index: 5;">
-          ${isArchived 
-            ? '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18"></path><path d="M19 5l-2 2"></path><path d="M5 19l-2-2"></path><path d="M3 12a9 9 0 0 1 9-9"></path><path d="M21 12a9 9 0 0 1-9 9"></path></svg>'
-            : '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>'
-          }
+        <button class="project-menu-btn shrink-0 p-0.5 opacity-0 group-hover:opacity-100 hover:text-[#4285f4] transition-opacity relative" data-project-id="${project.id}" title="Menu" style="cursor: pointer; position: absolute; right: 8px; top: 50%; transform: translateY(-50%); z-index: 5;">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="1"></circle>
+            <circle cx="12" cy="5" r="1"></circle>
+            <circle cx="12" cy="19" r="1"></circle>
+          </svg>
         </button>` : ''}
       `;
       
@@ -5273,17 +5447,20 @@ class LunaIntegration {
             return;
           }
           
-          // Handle archive button (checkmark)
-          const archiveBtn = e.target.closest('.project-archive-btn');
-          if (archiveBtn) {
+          // Handle menu button (three dots)
+          const menuBtn = e.target.closest('.project-menu-btn');
+          if (menuBtn) {
             e.stopPropagation();
-            const projectId = archiveBtn.getAttribute('data-project-id');
-            this.archiveProject(projectId);
+            const projectId = menuBtn.getAttribute('data-project-id');
+            const project = this.allProjects.find(p => p.id === projectId) || this.projects.find(p => p.id === projectId);
+            if (project) {
+              this.showProjectMenu(e, project);
+            }
             return;
           }
           
-          // Don't trigger click if clicking on drag indicator or archive button
-          if (!e.target.closest('.drop-indicator') && !e.target.closest('.project-archive-btn')) {
+          // Don't trigger click if clicking on drag indicator or menu button
+          if (!e.target.closest('.drop-indicator') && !e.target.closest('.project-menu-btn')) {
             // DESACTIVAR TODOS LOS PROYECTOS/USUARIOS PRIMERO - solo uno activo
             document.querySelectorAll('.project-item').forEach(el => {
               el.classList.remove('bg-[#4285f4]/10', 'text-[#4285f4]', 'font-medium', 'shadow-sm');
@@ -5369,7 +5546,7 @@ class LunaIntegration {
       if (!projectItem) return;
       
       // Don't start drag if clicking on buttons
-      if (e.target.closest('.expand-btn') || e.target.closest('.project-archive-btn')) {
+      if (e.target.closest('.expand-btn') || e.target.closest('.project-menu-btn')) {
         return;
       }
 
@@ -5388,8 +5565,8 @@ class LunaIntegration {
       dragStartY = e.clientY;
       isDragging = false;
       
-      // Hide archive buttons during drag
-      container.querySelectorAll('.project-archive-btn').forEach(btn => {
+      // Hide menu buttons during drag
+      container.querySelectorAll('.project-menu-btn').forEach(btn => {
         btn.style.display = 'none';
       });
     });
@@ -5541,8 +5718,8 @@ class LunaIntegration {
         el.style.opacity = '';
         el.style.cursor = '';
       });
-      // Show archive buttons again
-      container.querySelectorAll('.project-archive-btn').forEach(btn => {
+      // Show menu buttons again
+      container.querySelectorAll('.project-menu-btn').forEach(btn => {
         btn.style.display = '';
       });
     }
@@ -5629,6 +5806,9 @@ class LunaIntegration {
     const newExpanded = !project.is_expanded;
     project.is_expanded = newExpanded;
     
+    // Save to localStorage immediately
+    this.saveProjectExpansionState();
+    
     // Re-render immediately to show updated hierarchy
     this.renderProjects();
     
@@ -5644,6 +5824,7 @@ class LunaIntegration {
         // If backend update fails, revert the change
         console.error('Failed to toggle project expanded:', err);
         project.is_expanded = !newExpanded;
+        this.saveProjectExpansionState();
         this.renderProjects();
       });
     } else {
@@ -6367,7 +6548,7 @@ class LunaIntegration {
     }
   }
 
-  async loadChatMessages(container, chatId, _spaceId = null, skipRealtime = false) { // eslint-disable-line no-unused-vars
+  async loadChatMessages(container, chatId, _spaceId = null, skipRealtime = false) {
     const messagesContainer = container.querySelector('.chat-messages');
     if (!messagesContainer) return;
 
@@ -6452,7 +6633,6 @@ class LunaIntegration {
         const scrollTop = messagesContainer.scrollTop;
         
         // Prepend new messages (they're already in correct order from API)
-        const existingMessages = Array.from(messagesContainer.children);
         this.renderChatMessages(messagesContainer, messages, true); // true = prepend mode
         
         // Restore scroll position
@@ -6587,7 +6767,8 @@ class LunaIntegration {
             table: 'chat_messages',
             filter: `chat_id=eq.${chatId}`
           },
-        async (payload) => {
+        // eslint-disable-next-line no-unused-vars
+        async (_payload) => {
           // Check if user is near bottom (within 100px) - if so, auto-scroll and add new message
           const isNearBottom = messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight < 100;
           
@@ -6600,10 +6781,6 @@ class LunaIntegration {
               // Check if message already exists (prevent duplicates)
               const existingMessage = messagesContainer.querySelector(`[data-message-id="${newMessage.id}"]`);
               if (!existingMessage) {
-                // Get the last message element to check if we need spacing
-                const lastMessageEl = messagesContainer.lastElementChild;
-                const needsSpacing = lastMessageEl && lastMessageEl.getAttribute('data-message-id');
-                
                 // Append new message at the end
                 this.renderChatMessages(messagesContainer, [newMessage], false, true); // append mode
                 
