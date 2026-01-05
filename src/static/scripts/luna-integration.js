@@ -6514,14 +6514,21 @@ class LunaIntegration {
       this.setupSimpleProjectDragAndDrop();
       
       // Restore badge states after re-rendering (preserve visibility and values)
+      // Search in entire document to restore all badges, including those in collapsed projects
       if (badgeStates.size > 0) {
         badgeStates.forEach((state, spaceId) => {
-          const badges = container.querySelectorAll(`.space-unread-badge[data-space-id="${spaceId}"]`);
+          const badges = document.querySelectorAll(`.space-unread-badge[data-space-id="${spaceId}"]`);
           badges.forEach(badge => {
             badge.textContent = state.textContent;
-            badge.style.display = state.display || 'none';
-            badge.style.visibility = state.visibility || 'visible';
-            badge.style.opacity = state.opacity || '1';
+            // Only restore display if it was visible before (preserve hidden state too)
+            if (state.display && state.display !== 'none') {
+              badge.style.display = state.display;
+              badge.style.visibility = state.visibility || 'visible';
+              badge.style.opacity = state.opacity || '1';
+            } else if (state.display === 'none') {
+              // Keep it hidden if it was hidden
+              badge.style.display = 'none';
+            }
           });
         });
       }
