@@ -6038,13 +6038,17 @@ class LunaIntegration {
   }
 
   renderProjects() {
-    const container = document.getElementById('projects-cont');
-    if (!container) return;
-    
-    // Ensure container has position relative for drop indicators
-    if (window.getComputedStyle(container).position === 'static') {
-      container.style.position = 'relative';
-    }
+    try {
+      const container = document.getElementById('projects-cont');
+      if (!container) {
+        console.warn('[FRONTEND] renderProjects: Container not found');
+        return;
+      }
+      
+      // Ensure container has position relative for drop indicators
+      if (window.getComputedStyle(container).position === 'static') {
+        container.style.position = 'relative';
+      }
     
     // También actualizar vista móvil SIEMPRE (usa el mismo código)
     setTimeout(() => {
