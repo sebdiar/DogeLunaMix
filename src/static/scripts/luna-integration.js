@@ -274,17 +274,6 @@ class LunaIntegration {
             badge.textContent = '';
             badge.style.display = 'none';
             
-            // Update cache with hidden badge state
-            if (this._badgeStatesCache) {
-              this._badgeStatesCache.set(spaceId, {
-                textContent: '',
-                display: 'none',
-                visibility: 'hidden',
-                opacity: '0',
-                isVisible: false
-              });
-            }
-            
             // Reset menu button position when badge is hidden
             const projectItem = badge.closest('.project-item');
             if (projectItem) {
@@ -294,6 +283,25 @@ class LunaIntegration {
               }
             }
           });
+          
+          // Update cache: remove from cache if no unread count (marked as read)
+          if (this._badgeStatesCache && this._badgeStatesCache.has(spaceId)) {
+            this._badgeStatesCache.delete(spaceId);
+          }
+        } else {
+          // Even if badge is not in DOM (collapsed project), update cache
+          // This ensures badges are available when project is expanded
+          if (this._badgeStatesCache) {
+            const count = unreadCounts[spaceId];
+            const textContent = count > 99 ? '99+' : String(count);
+            this._badgeStatesCache.set(spaceId, {
+              textContent: textContent,
+              display: 'flex',
+              visibility: 'visible',
+              opacity: '1',
+              isVisible: true
+            });
+          }
         }
       });
     } catch (error) {
