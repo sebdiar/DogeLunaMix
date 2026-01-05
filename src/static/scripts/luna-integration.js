@@ -1336,47 +1336,60 @@ class LunaIntegration {
       // Show ALL projects (active + archived)
       this.projects = spaces || [];
       
+      console.log('[FRONTEND] Before parsing: projects count =', this.projects.length);
+      
       // Parse tags and parent_id from JSONB if needed
-      this.projects.forEach(project => {
-        // Parse tags
-        if (project.tags) {
-          // If tags is a string, parse it
-          if (typeof project.tags === 'string') {
-            try {
-              project.tags = JSON.parse(project.tags);
-            } catch (e) {
-              console.warn('Failed to parse tags for project:', project.name, project.tags);
+      this.projects.forEach((project, index) => {
+        try {
+          // Parse tags
+          if (project.tags) {
+            // If tags is a string, parse it
+            if (typeof project.tags === 'string') {
+              try {
+                project.tags = JSON.parse(project.tags);
+              } catch (e) {
+                console.warn(`[FRONTEND] Failed to parse tags for project "${project.name}":`, project.tags, e);
+                project.tags = [];
+              }
+            }
+            // Ensure it's an array
+            if (!Array.isArray(project.tags)) {
+              console.warn(`[FRONTEND] Tags is not an array for project "${project.name}":`, project.tags);
               project.tags = [];
             }
-          }
-          // Ensure it's an array
-          if (!Array.isArray(project.tags)) {
+          } else {
             project.tags = [];
           }
-        } else {
-          project.tags = [];
-        }
-        
-        // Parse parent_id (now an array JSONB)
-        if (project.parent_id) {
-          // If parent_id is a string, try to parse it
-          if (typeof project.parent_id === 'string') {
-            try {
-              project.parent_id = JSON.parse(project.parent_id);
-            } catch (e) {
-              // If parsing fails, it might be a single UUID string (old format)
-              // Keep it as is for now, will be handled in render logic
-              console.log('parent_id is string (might be old format):', project.parent_id);
+          
+          // Parse parent_id (now an array JSONB)
+          if (project.parent_id) {
+            // If parent_id is a string, try to parse it
+            if (typeof project.parent_id === 'string') {
+              try {
+                project.parent_id = JSON.parse(project.parent_id);
+              } catch (e) {
+                // If parsing fails, it might be a single UUID string (old format)
+                // Convert single UUID string to array
+                console.log(`[FRONTEND] parent_id is string (old format) for "${project.name}":`, project.parent_id);
+                project.parent_id = [project.parent_id];
+              }
             }
+            // Ensure it's an array (if it's a single value, convert to array)
+            if (!Array.isArray(project.parent_id) && project.parent_id !== null) {
+              project.parent_id = [project.parent_id];
+            }
+          } else {
+            project.parent_id = [];
           }
-          // Ensure it's an array (if it's a single value, convert to array)
-          if (!Array.isArray(project.parent_id) && project.parent_id !== null) {
-            project.parent_id = [project.parent_id];
-          }
-        } else {
-          project.parent_id = [];
+        } catch (error) {
+          console.error(`[FRONTEND] Error parsing project at index ${index} (${project.name}):`, error);
+          // Ensure project has valid defaults
+          project.tags = project.tags || [];
+          project.parent_id = project.parent_id || [];
         }
       });
+      
+      console.log('[FRONTEND] After parsing: projects count =', this.projects.length);
       
       // Also parse tags and parent_id for allProjects
       this.allProjects.forEach(project => {
