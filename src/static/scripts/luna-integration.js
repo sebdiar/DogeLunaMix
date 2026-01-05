@@ -6493,8 +6493,13 @@ class LunaIntegration {
       // Setup simple drag and drop for projects (only parent-child relationships)
       this.setupSimpleProjectDragAndDrop();
       
-      // Badges are updated in initNotifications() - no need to update again here
-      // This prevents duplicate calls and flashing badges
+      // Update badges after re-rendering (needed when toggling projects/tags)
+      // Use setTimeout to ensure DOM is fully updated before querying badges
+      setTimeout(() => {
+        this.updateSpaceUnreadBadges().catch(err => {
+          console.error('[FRONTEND] Error updating badges after render:', err);
+        });
+      }, 100);
     } catch (error) {
       console.error('[FRONTEND] Error in renderProjects:', error);
       const container = document.getElementById('projects-cont');
