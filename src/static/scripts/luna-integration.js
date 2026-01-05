@@ -6058,9 +6058,12 @@ class LunaIntegration {
     }, 50);
 
     if (this.projects.length === 0) {
-      container.innerHTML = '';
+      console.warn('[FRONTEND] renderProjects: No projects to render. this.projects.length =', this.projects.length);
+      container.innerHTML = '<div class="text-xs text-gray-400 px-2 py-1">No projects found</div>';
       return;
     }
+    
+    console.log('[FRONTEND] renderProjects: Starting render with', this.projects.length, 'projects');
 
     // Build hierarchy tree - organized: active first, then archived (with separator, collapsed by default)
     const buildTree = (projectsToUse) => {
@@ -6226,6 +6229,8 @@ class LunaIntegration {
       // If neither is in saved order, sort alphabetically
       return a.localeCompare(b);
     });
+    
+    console.log('[FRONTEND] renderProjects: About to render. projectsByTag.size =', projectsByTag.size, ', projectsWithoutTags.length =', projectsWithoutTags.length, ', sortedTags.length =', sortedTags.length);
     
     container.innerHTML = '';
     
