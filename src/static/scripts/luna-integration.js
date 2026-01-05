@@ -276,6 +276,8 @@ class LunaIntegration {
       console.error('Failed to update space unread badges:', error);
     } finally {
       this._updatingBadges = false;
+      // Update child notification indicators after badges are updated
+      this.updateChildNotificationIndicators();
     }
   }
 
