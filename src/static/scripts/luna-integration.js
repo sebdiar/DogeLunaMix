@@ -7049,6 +7049,35 @@ class LunaIntegration {
     // Re-render immediately to show updated hierarchy
     this.renderProjects();
     
+    // If project was expanded (not collapsed), load badges for newly visible children
+    if (newExpanded) {
+      // Get all children of this project (including nested children)
+      const getAllChildrenIds = (parentId, allProjects) => {
+        const children = allProjects.filter(p => {
+          const parentIds = Array.isArray(p.parent_id) ? p.parent_id : (p.parent_id ? [p.parent_id] : []);
+          return parentIds.includes(parentId);
+        });
+        const childIds = children.map(c => c.id);
+        // Recursively get grandchildren
+        children.forEach(child => {
+          const grandchildIds = getAllChildrenIds(child.id, allProjects);
+          childIds.push(...grandchildIds);
+        });
+        return childIds;
+      };
+      
+      const childIds = getAllChildrenIds(projectId, this.projects);
+      console.log(`[BADGES] Project expanded, loading badges for ${childIds.length} children`);
+      
+      // Load badges for all children in parallel
+      Promise.all(childIds.map(childId => this.updateSpaceBadge(childId))).then(() => {
+        // Update child notification indicators after badges are loaded
+        this.updateChildNotificationIndicators();
+      }).catch(err => {
+        console.error('[BADGES] Error loading badges for children:', err);
+      });
+    }
+    
     // Only update backend if NOT a ghost parent
     if (!isGhost) {
       // Update backend in background (don't wait for response)
