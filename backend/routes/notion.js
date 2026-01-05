@@ -438,31 +438,45 @@ router.post('/webhook', async (req, res) => {
     }
     
     // Check if this is a project event (from projects database)
-    if (projectsDatabaseId && event.object === 'page' && event.data) {
-      const pageData = event.data;
-      const receivedDatabaseId = pageData.parent?.database_id;
-      
+    // For page.properties_updated events, event.object is undefined, but event.type starts with "page."
+    // The parent database ID can be in event.data.parent.id or event.data.parent.database_id
+    const isPageEvent = event.type && event.type.startsWith('page.');
+    const pageData = event.data;
+    // Extract database ID from parent - it can be in parent.id (when parent.type === 'database') or parent.database_id
+    const projectDatabaseIdFromParent = pageData?.parent?.type === 'database' 
+      ? pageData?.parent?.id 
+      : pageData?.parent?.database_id;
+    
+    if (projectsDatabaseId && isPageEvent && pageData) {
       // Verify the page belongs to projects database (using normalized comparison)
-      if (receivedDatabaseId && compareNotionIds(receivedDatabaseId, projectsDatabaseId)) {
-        // This is a project event - handle icon updates
+      if (projectDatabaseIdFromParent && compareNotionIds(projectDatabaseIdFromParent, projectsDatabaseId)) {
+        // This is a project event - handle updates
         const pageId = event.entity?.id || event.data?.id || event.data?.page_id || null;
         
         if (pageId && (event.type === 'page.updated' || event.type === 'page.properties_updated')) {
-          console.log('📝 Processing project icon update:', pageId);
+          // Process updates asynchronously (don't block webhook response)
+          handleProjectNameUpdate(pageId, process.env.NOTION_API_KEY).catch(err => {
+            console.error('Error handling project name update:', err);
+          });
           
-          // Process icon update asynchronously (don't block webhook response)
-          handleProjectIconUpdate(pageId, process.env.NOTION_API_KEY)
-            .then(() => {
-              console.log('✅ Project icon update completed successfully');
-            })
-            .catch(err => {
-              console.error('❌ Error handling project icon update:', err);
-            });
+          handleProjectIconUpdate(pageId, process.env.NOTION_API_KEY).catch(err => {
+            console.error('Error handling project icon update:', err);
+          });
+          
+          handleProjectTagsUpdate(pageId, process.env.NOTION_API_KEY).catch(err => {
+            console.error('Error handling project tags update:', err);
+          });
         }
         
         // Respond quickly to Notion
         return res.status(200).json({ received: true, type: 'project', message: 'Project event processed' });
       }
+    } else {
+      console.log('⚠️  Not a project event:', {
+        hasProjectsDatabaseId: !!projectsDatabaseId,
+        eventObject: event.object,
+        hasEventData: !!event.data
+      });
     }
     
     // Unknown event type - respond OK anyway
@@ -508,14 +522,14 @@ async function handlePageUpdate(pageData, apiKey, databaseId) {
       }
     }
     
-    // Obtener parent_id si existe
-    let parentNotionPageId = null;
+    // Obtener TODOS los parent_ids (multi-select relation)
+    let parentNotionPageIds = [];
     if (page.properties) {
       const parentPropNames = ['Parent item', 'Parent Item', 'Parent', 'parent', 'Parent_id'];
       for (const propName of parentPropNames) {
         if (page.properties[propName]?.type === 'relation' && 
             page.properties[propName].relation?.length > 0) {
-          parentNotionPageId = page.properties[propName].relation[0].id;
+          parentNotionPageIds = page.properties[propName].relation.map(r => r.id);
           break;
         }
       }
@@ -527,6 +541,12 @@ async function handlePageUpdate(pageData, apiKey, databaseId) {
       isArchived = page.properties.Archive.checkbox || false;
     } else if (page.archived) {
       isArchived = true;
+    }
+    
+    // Obtener tags de la propiedad "Tag" (singular, multi-select)
+    let tags = [];
+    if (page.properties?.Tag?.type === 'multi_select' && page.properties.Tag.multi_select) {
+      tags = page.properties.Tag.multi_select.map(item => item.name || item).filter(Boolean);
     }
     
     // Buscar TODOS los espacios existentes por notion_page_id (puede haber uno por cada usuario)
@@ -582,9 +602,9 @@ async function handlePageUpdate(pageData, apiKey, databaseId) {
     if (spacesToUpdate.length > 0) {
       // Actualizar cada espacio según su usuario
       for (const space of spacesToUpdate) {
-        // Para parent_id, buscar el espacio del mismo usuario con el parent notion_page_id
-        let parentSpaceId = null;
-        if (parentNotionPageId) {
+        // Convertir todos los parentNotionPageIds a parentSpaceIds (array)
+        const parentSpaceIds = [];
+        for (const parentNotionPageId of parentNotionPageIds) {
           const { data: userParentSpace } = await supabase
             .from('spaces')
             .select('id')
@@ -594,7 +614,7 @@ async function handlePageUpdate(pageData, apiKey, databaseId) {
             .maybeSingle();
           
           if (userParentSpace) {
-            parentSpaceId = userParentSpace.id;
+            parentSpaceIds.push(userParentSpace.id);
           }
         }
         
@@ -602,8 +622,9 @@ async function handlePageUpdate(pageData, apiKey, databaseId) {
           .from('spaces')
           .update({
             name: pageName,
-            parent_id: parentSpaceId,
+            parent_id: parentSpaceIds, // Ahora es un array JSONB
             archived: isArchived,
+            tags: tags,
             updated_at: new Date().toISOString()
           })
           .eq('id', space.id);
@@ -846,6 +867,83 @@ async function handleTaskCreated(taskData, apiKey) {
   }
 }
 
+// Helper: Manejar actualización de nombre de proyecto
+async function handleProjectNameUpdate(pageId, apiKey) {
+  try {
+    if (!apiKey) {
+      console.error('handleProjectNameUpdate: No API key provided');
+      return;
+    }
+
+    console.log('📝 Handling project name update:', pageId);
+
+    // Fetch page from Notion to get name
+    const response = await fetch(`https://api.notion.com/v1/pages/${pageId}`, {
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Notion-Version': '2022-06-28'
+      }
+    });
+
+    if (!response.ok) {
+      console.error('Failed to fetch page from Notion:', response.statusText);
+      return;
+    }
+
+    const page = await response.json();
+
+    // Extract name from "Name" property
+    let pageName = 'Untitled';
+    if (page.properties?.Name?.title) {
+      const titleArray = page.properties.Name.title;
+      if (titleArray.length > 0 && titleArray[0].text) {
+        pageName = titleArray[0].text.content;
+      }
+    }
+
+    console.log('📝 Name from Notion:', pageName);
+
+    // Find all projects with this notion_page_id (can be multiple users)
+    const { data: projects, error: findError } = await supabase
+      .from('spaces')
+      .select('id, name, user_id, notion_page_id')
+      .eq('notion_page_id', pageId)
+      .eq('category', 'project');
+
+    if (findError) {
+      console.error('❌ Error finding projects:', findError);
+      return;
+    }
+
+    if (!projects || projects.length === 0) {
+      console.log(`⚠️  No projects found with Notion ID ${pageId}`);
+      return;
+    }
+
+    // Update all projects with this notion_page_id
+    for (const project of projects) {
+      const { error: updateError } = await supabase
+        .from('spaces')
+        .update({
+          name: pageName,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', project.id);
+
+      if (updateError) {
+        console.error(`❌ Error updating project ${project.id}:`, updateError);
+      } else {
+        console.log(`✅ Updated name for project "${project.name}" -> "${pageName}" (${project.id})`);
+      }
+    }
+
+    console.log(`✅ Project name update completed for ${projects.length} project(s)`);
+  } catch (error) {
+    console.error('Error handling project name update:', error);
+    throw error;
+  }
+}
+
 // Helper: Manejar actualización de ícono de proyecto
 async function handleProjectIconUpdate(pageId, apiKey) {
   try {
@@ -921,6 +1019,80 @@ async function handleProjectIconUpdate(pageId, apiKey) {
     console.log(`✅ Project icon update completed for ${projects.length} project(s)`);
   } catch (error) {
     console.error('Error handling project icon update:', error);
+    throw error;
+  }
+}
+
+// Helper: Manejar actualización de tags de proyecto
+async function handleProjectTagsUpdate(pageId, apiKey) {
+  try {
+    if (!apiKey) {
+      console.error('handleProjectTagsUpdate: No API key provided');
+      return;
+    }
+
+    console.log('🏷️  Handling project tags update:', pageId);
+
+    // Fetch page from Notion to get tags
+    const response = await fetch(`https://api.notion.com/v1/pages/${pageId}`, {
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Notion-Version': '2022-06-28'
+      }
+    });
+
+    if (!response.ok) {
+      console.error('Failed to fetch page from Notion:', response.statusText);
+      return;
+    }
+
+    const page = await response.json();
+
+    // Extract tags from "Tag" property (multi-select)
+    let tags = [];
+    if (page.properties?.Tag?.type === 'multi_select' && page.properties.Tag.multi_select) {
+      tags = page.properties.Tag.multi_select.map(item => item.name || item).filter(Boolean);
+    }
+
+    console.log('🏷️  Tags from Notion:', tags);
+
+    // Find all projects with this notion_page_id (can be multiple users)
+    const { data: projects, error: findError } = await supabase
+      .from('spaces')
+      .select('id, name, user_id, notion_page_id')
+      .eq('notion_page_id', pageId)
+      .eq('category', 'project');
+
+    if (findError) {
+      console.error('❌ Error finding projects:', findError);
+      return;
+    }
+
+    if (!projects || projects.length === 0) {
+      console.log(`⚠️  No projects found with Notion ID ${pageId}`);
+      return;
+    }
+
+    // Update all projects with this notion_page_id
+    for (const project of projects) {
+      const { error: updateError } = await supabase
+        .from('spaces')
+        .update({
+          tags: tags,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', project.id);
+
+      if (updateError) {
+        console.error(`❌ Error updating tags for project ${project.id}:`, updateError);
+      } else {
+        console.log(`✅ Updated tags for project "${project.name}" (${project.id}):`, tags);
+      }
+    }
+
+    console.log(`✅ Project tags update completed for ${projects.length} project(s)`);
+  } catch (error) {
+    console.error('Error handling project tags update:', error);
     throw error;
   }
 }

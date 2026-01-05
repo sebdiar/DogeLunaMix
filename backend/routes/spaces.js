@@ -1,7 +1,7 @@
 import express from 'express';
 import supabase from '../config/database.js';
 import { authenticate } from '../middleware/auth.js';
-import { createNotionPage, updateNotionPageName, archiveNotionPage, updateNotionPageParent } from '../services/notion.js';
+import { createNotionPage, updateNotionPageName, archiveNotionPage, updateNotionPageParent, updateNotionPageTags, addNotionPageParent, removeNotionPageParent } from '../services/notion.js';
 
 const router = express.Router();
 router.use(authenticate);
@@ -1102,9 +1102,20 @@ router.post('/reorder', async (req, res) => {
       return res.status(404).json({ error: 'Space or target not found' });
     }
     
+    // Helper function to check if a space has a specific parent in its parent_id array
+    const hasParent = (space, parentId) => {
+      if (!parentId) {
+        // Check if space has no parents (empty array or null)
+        const parentIds = space.parent_id || [];
+        return Array.isArray(parentIds) ? parentIds.length === 0 : !parentIds;
+      }
+      const parentIds = space.parent_id || [];
+      return Array.isArray(parentIds) ? parentIds.includes(parentId) : parentIds === parentId;
+    };
+    
     const siblings = allSpaces.filter(s => 
       s.id !== spaceId && 
-      ((s.parent_id === targetParentId) || (!s.parent_id && !targetParentId))
+      hasParent(s, targetParentId)
     ).sort((a, b) => (a.position || 0) - (b.position || 0));
     
     let newPosition;
@@ -1114,15 +1125,43 @@ router.post('/reorder', async (req, res) => {
       newPosition = (target.position || 0) + 1;
     } else if (dropPosition === 'inside') {
       // Cuando se arrastra dentro de otro proyecto, ponerlo al final de los hijos
-      const children = allSpaces.filter(s => s.parent_id === targetId && s.id !== spaceId);
+      // Buscar hijos que tengan targetId en su array de parent_id
+      const children = allSpaces.filter(s => {
+        const parentIds = s.parent_id || [];
+        return Array.isArray(parentIds) ? parentIds.includes(targetId) : parentIds === targetId;
+      }).filter(s => s.id !== spaceId);
+      
       newPosition = children.length > 0 
         ? Math.max(...children.map(c => c.position || 0)) + 1 
         : 0;
       
-      // Actualizar parent_id y position
+      // Obtener el proyecto para verificar si tiene múltiples tags
+      const projectTags = space.tags || [];
+      const tagsArray = Array.isArray(projectTags) ? projectTags : (typeof projectTags === 'string' ? JSON.parse(projectTags) : []);
+      const hasMultipleTags = tagsArray.length > 1;
+      
+      // Obtener parent_id actual (puede ser array o string/null)
+      let currentParentIds = space.parent_id || [];
+      if (!Array.isArray(currentParentIds)) {
+        currentParentIds = currentParentIds ? [currentParentIds] : [];
+      }
+      
+      // Agregar targetId al array si no existe (para múltiples tags) o reemplazar (para 1 tag)
+      let newParentIds;
+      if (hasMultipleTags) {
+        // Agregar al array si no existe
+        newParentIds = currentParentIds.includes(targetId) 
+          ? currentParentIds 
+          : [...currentParentIds, targetId];
+      } else {
+        // Reemplazar con solo este parent
+        newParentIds = [targetId];
+      }
+      
+      // Actualizar parent_id (ahora es array) y position
       const { data: updatedSpace } = await supabase
         .from('spaces')
-        .update({ parent_id: targetId, position: newPosition })
+        .update({ parent_id: newParentIds, position: newPosition })
         .eq('id', spaceId)
         .eq('user_id', req.userId)
         .select('notion_page_id, category')
@@ -1135,7 +1174,8 @@ router.post('/reorder', async (req, res) => {
           try {
             const apiKey = process.env.NOTION_API_KEY;
             if (apiKey) {
-              await updateNotionPageParent(apiKey, updatedSpace.notion_page_id, targetSpace.notion_page_id);
+              // Agregar parent a Notion (no reemplazar)
+              await addNotionPageParent(apiKey, updatedSpace.notion_page_id, targetSpace.notion_page_id);
             }
           } catch (notionError) {
             console.error('Failed to update Notion page parent:', notionError);
@@ -1146,30 +1186,50 @@ router.post('/reorder', async (req, res) => {
       
       return res.json({ success: true });
     } else if (!targetId && targetParentId === null) {
-      // Moving to root level (removing from parent)
-      const rootSiblings = allSpaces.filter(s => !s.parent_id && s.id !== spaceId);
+      // Moving to root level (removing from all parents)
+      const rootSiblings = allSpaces.filter(s => {
+        const parentIds = s.parent_id || [];
+        return Array.isArray(parentIds) ? parentIds.length === 0 : !parentIds;
+      }).filter(s => s.id !== spaceId);
+      
       newPosition = rootSiblings.length > 0 
         ? Math.max(...rootSiblings.map(s => s.position || 0)) + 1 
         : 0;
       
-      // Actualizar parent_id a null y position
+      // Obtener notion_page_ids de todos los parents actuales para removerlos de Notion
+      const currentParentIds = space.parent_id || [];
+      const parentIdsArray = Array.isArray(currentParentIds) ? currentParentIds : (currentParentIds ? [currentParentIds] : []);
+      
+      // Actualizar parent_id a array vacío y position
       const { data: updatedSpace } = await supabase
         .from('spaces')
-        .update({ parent_id: null, position: newPosition })
+        .update({ parent_id: [], position: newPosition })
         .eq('id', spaceId)
         .eq('user_id', req.userId)
         .select('notion_page_id, category')
         .single();
       
-      // Sync with Notion - remove parent relation
+      // Sync with Notion - remove all parent relations
       if (updatedSpace?.notion_page_id && updatedSpace?.category === 'project') {
         try {
           const apiKey = process.env.NOTION_API_KEY;
           if (apiKey) {
-            await updateNotionPageParent(apiKey, updatedSpace.notion_page_id, null);
+            // Remover todos los parents de Notion
+            for (const parentId of parentIdsArray) {
+              const { data: parentSpace } = await supabase
+                .from('spaces')
+                .select('notion_page_id')
+                .eq('id', parentId)
+                .eq('user_id', req.userId)
+                .maybeSingle();
+              
+              if (parentSpace?.notion_page_id) {
+                await removeNotionPageParent(apiKey, updatedSpace.notion_page_id, parentSpace.notion_page_id);
+              }
+            }
           }
         } catch (notionError) {
-          console.error('Failed to remove Notion page parent:', notionError);
+          console.error('Failed to remove Notion page parents:', notionError);
           // Continue even if Notion update fails
         }
       }
@@ -1178,48 +1238,22 @@ router.post('/reorder', async (req, res) => {
     }
     
     // Para 'before' y 'after', verificar si el parent_id cambió
-    const oldParentId = space.parent_id || null;
-    const newParentId = targetParentId || null;
-    const parentChanged = oldParentId !== newParentId;
+    // Comparar arrays de parent_id
+    const oldParentIds = Array.isArray(space.parent_id) ? space.parent_id : (space.parent_id ? [space.parent_id] : []);
+    const newParentIds = targetParentId ? [targetParentId] : [];
+    const parentChanged = JSON.stringify(oldParentIds.sort()) !== JSON.stringify(newParentIds.sort());
     
-    // Actualizar parent_id y position
+    // Para 'before' y 'after', solo actualizar position (no cambiar parent_id)
+    // El parent_id ya está correcto porque estamos reordenando dentro del mismo grupo
     const { data: updatedSpace } = await supabase
       .from('spaces')
-      .update({ parent_id: targetParentId, position: newPosition })
+      .update({ position: newPosition })
       .eq('id', spaceId)
       .eq('user_id', req.userId)
-      .select('notion_page_id, category')
+      .select('notion_page_id, category, parent_id')
       .single();
     
-    // Solo sincronizar con Notion si el parent_id cambió (no solo el orden)
-    if (parentChanged && updatedSpace?.notion_page_id && updatedSpace?.category === 'project') {
-      if (newParentId) {
-        // Moving to a new parent - sync with Notion
-        const targetSpace = allSpaces.find(s => s.id === targetId);
-        if (targetSpace?.notion_page_id) {
-          try {
-            const apiKey = process.env.NOTION_API_KEY;
-            if (apiKey) {
-              await updateNotionPageParent(apiKey, updatedSpace.notion_page_id, targetSpace.notion_page_id);
-            }
-          } catch (notionError) {
-            console.error('Failed to update Notion page parent:', notionError);
-            // Continue even if Notion update fails
-          }
-        }
-      } else {
-        // Moving to root - remove parent in Notion
-        try {
-          const apiKey = process.env.NOTION_API_KEY;
-          if (apiKey) {
-            await updateNotionPageParent(apiKey, updatedSpace.notion_page_id, null);
-          }
-        } catch (notionError) {
-          console.error('Failed to remove Notion page parent:', notionError);
-          // Continue even if Notion update fails
-        }
-      }
-    }
+    // No sincronizar con Notion para 'before' y 'after' porque solo cambia el orden, no el parent
     // Si solo cambió el orden (mismo parent), NO sincronizar con Notion
     
     // Ajustar posiciones de los siblings
@@ -1287,6 +1321,68 @@ router.patch('/:id/archive', async (req, res) => {
   } catch (error) {
     console.error('Archive space error:', error);
     res.status(500).json({ error: 'Failed to archive space' });
+  }
+});
+
+// Update tags for a space
+router.patch('/:id/tags', async (req, res) => {
+  try {
+    const { tags } = req.body;
+    
+    if (!Array.isArray(tags)) {
+      return res.status(400).json({ error: 'Tags must be an array' });
+    }
+    
+    // Verify space belongs to user
+    const { data: existingSpace } = await supabase
+      .from('spaces')
+      .select('id, notion_page_id, category, user_id')
+      .eq('id', req.params.id)
+      .eq('user_id', req.userId)
+      .single();
+    
+    if (!existingSpace) {
+      return res.status(404).json({ error: 'Space not found' });
+    }
+    
+    // Update tags in database
+    const { data: space, error } = await supabase
+      .from('spaces')
+      .update({ 
+        tags: tags,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', req.params.id)
+      .select('*')
+      .single();
+    
+    if (error) {
+      console.error('Error updating tags:', error);
+      return res.status(500).json({ error: 'Failed to update tags' });
+    }
+    
+    // Sync with Notion if the project has a notion_page_id
+    if (existingSpace.notion_page_id && existingSpace.category === 'project') {
+      const apiKey = process.env.NOTION_API_KEY;
+      
+      if (apiKey) {
+        // Update tags in Notion asynchronously (don't block response)
+        setImmediate(async () => {
+          try {
+            await updateNotionPageTags(apiKey, existingSpace.notion_page_id, tags);
+            console.log(`✅ Tags synced to Notion for project ${existingSpace.id}`);
+          } catch (notionError) {
+            console.error('❌ Failed to sync tags to Notion:', notionError);
+            // Don't fail the request if Notion sync fails
+          }
+        });
+      }
+    }
+    
+    res.json({ space });
+  } catch (error) {
+    console.error('Update tags error:', error);
+    res.status(500).json({ error: 'Failed to update tags' });
   }
 });
 

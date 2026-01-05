@@ -17,6 +17,7 @@ class LunaIntegration {
     this.menuCloseListener = null; // Track menu close listener
     this.currentChatId = null; // Current active chat ID for message sending
     this.chatNotificationChannel = null; // Supabase Realtime channel for chat notifications
+    this.projectUpdatesChannel = null; // Supabase Realtime channel for project updates
     this.supabaseClient = null; // Supabase client for realtime
     this.chatSubscriptions = new Map(); // Map of chatId -> subscription channel
     this.lastNotificationTime = new Map(); // Track last notification time per space to prevent duplicates
@@ -37,7 +38,8 @@ class LunaIntegration {
     try {
       const response = await fetch(`${API_URL}${endpoint}`, {
         ...options,
-        headers
+        headers,
+        credentials: 'include'  // Crítico para Wavebox - envía cookies en cada request
       });
 
       if (!response.ok) {
@@ -506,7 +508,11 @@ class LunaIntegration {
       const supabase = createClient(config.url, config.anonKey, {
         auth: {
           persistSession: false,
-          autoRefreshToken: false
+          autoRefreshToken: false,
+          cookieOptions: {
+            sameSite: 'none',
+            secure: true
+          }
         }
       });
       
@@ -588,8 +594,48 @@ class LunaIntegration {
       // Initial badge update (only once on setup)
       await this.updateUnreadBadge();
       await this.updateSpaceUnreadBadges();
+      
+      // Setup project updates listener (after Supabase client is initialized)
+      this.setupProjectUpdatesListener();
     } catch (error) {
       console.error('Failed to setup chat notifications:', error);
+    }
+  }
+
+  async setupProjectUpdatesListener() {
+    if (!this.user || !this.user.id || !this.supabaseClient) {
+      return;
+    }
+
+    try {
+      // Subscribe to UPDATE events on spaces table (filter by user_id, then check category in handler)
+      const channelName = `project-updates-${this.user.id}`;
+      
+      const channel = this.supabaseClient
+        .channel(channelName)
+        .on(
+          'postgres_changes',
+          {
+            event: 'UPDATE',
+            schema: 'public',
+            table: 'spaces',
+            filter: `user_id=eq.${this.user.id}`
+          },
+          async (payload) => {
+            // Only process if it's a project (category = 'project')
+            if (payload.new?.category === 'project') {
+              // When a project is updated, reload projects
+              await this.loadProjects();
+              this.renderProjects();
+            }
+          }
+        )
+        .subscribe();
+
+      // Store channel for cleanup
+      this.projectUpdatesChannel = channel;
+    } catch (error) {
+      console.error('Failed to setup project updates listener:', error);
     }
   }
 
@@ -617,8 +663,21 @@ class LunaIntegration {
     await waitForTabManager();
 
     // Setup event listeners
-    document.getElementById('project-btn')?.addEventListener('click', () => this.createProject());
-    document.getElementById('dm-btn')?.addEventListener('click', () => this.showUserPicker());
+    const projectBtn = document.getElementById('project-btn');
+    if (projectBtn) {
+      projectBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this.createProject();
+      });
+    } else {
+      console.error('project-btn not found');
+    }
+    
+    const dmBtn = document.getElementById('dm-btn');
+    if (dmBtn) {
+      dmBtn.addEventListener('click', () => this.showUserPicker());
+    }
     
     
     // tab-btn handler will be set up in setupTabManagerMonitoring after TabManager initializes
@@ -655,6 +714,7 @@ class LunaIntegration {
     await this.loadUsers();
 
     // Setup global chat notifications (listens to ALL user chats)
+    // This also sets up project updates listener
     await this.setupChatNotifications();
     
     // Badges are updated in initNotifications() - no need to update again here
@@ -1275,6 +1335,83 @@ class LunaIntegration {
       
       // Show ALL projects (active + archived)
       this.projects = spaces || [];
+      
+      // Parse tags and parent_id from JSONB if needed
+      this.projects.forEach(project => {
+        // Parse tags
+        if (project.tags) {
+          // If tags is a string, parse it
+          if (typeof project.tags === 'string') {
+            try {
+              project.tags = JSON.parse(project.tags);
+            } catch (e) {
+              console.warn('Failed to parse tags for project:', project.name, project.tags);
+              project.tags = [];
+            }
+          }
+          // Ensure it's an array
+          if (!Array.isArray(project.tags)) {
+            project.tags = [];
+          }
+        } else {
+          project.tags = [];
+        }
+        
+        // Parse parent_id (now an array JSONB)
+        if (project.parent_id) {
+          // If parent_id is a string, try to parse it
+          if (typeof project.parent_id === 'string') {
+            try {
+              project.parent_id = JSON.parse(project.parent_id);
+            } catch (e) {
+              // If parsing fails, it might be a single UUID string (old format)
+              // Keep it as is for now, will be handled in render logic
+              console.log('parent_id is string (might be old format):', project.parent_id);
+            }
+          }
+          // Ensure it's an array (if it's a single value, convert to array)
+          if (!Array.isArray(project.parent_id) && project.parent_id !== null) {
+            project.parent_id = [project.parent_id];
+          }
+        } else {
+          project.parent_id = [];
+        }
+      });
+      
+      // Also parse tags and parent_id for allProjects
+      this.allProjects.forEach(project => {
+        // Parse tags
+        if (project.tags) {
+          if (typeof project.tags === 'string') {
+            try {
+              project.tags = JSON.parse(project.tags);
+            } catch (e) {
+              project.tags = [];
+            }
+          }
+          if (!Array.isArray(project.tags)) {
+            project.tags = [];
+          }
+        } else {
+          project.tags = [];
+        }
+        
+        // Parse parent_id (now an array JSONB)
+        if (project.parent_id) {
+          if (typeof project.parent_id === 'string') {
+            try {
+              project.parent_id = JSON.parse(project.parent_id);
+            } catch (e) {
+              // Old format - single UUID string, convert to array
+            }
+          }
+          if (!Array.isArray(project.parent_id) && project.parent_id !== null) {
+            project.parent_id = [project.parent_id];
+          }
+        } else {
+          project.parent_id = [];
+        }
+      });
       
       // Load saved expansion state from localStorage
       const savedExpansionState = this.loadProjectExpansionState();
@@ -4345,6 +4482,7 @@ class LunaIntegration {
     menu.style.minWidth = '180px';
 
     const isArchived = project.archived === true;
+    const currentTags = project.tags || [];
 
     // Create toggle switch with inline styles
     const toggleId = `project-toggle-${project.id}`;
@@ -4365,6 +4503,13 @@ class LunaIntegration {
             <div style="position: absolute; top: 2px; left: ${isArchived ? '22px' : '2px'}; width: 20px; height: 20px; background-color: white; border-radius: 50%; transition: left 0.2s; box-shadow: 0 2px 4px rgba(0,0,0,0.2);"></div>
           </div>
         </label>
+      </div>
+      <div class="tags-menu-item" style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; font-size: 14px; color: #202124; cursor: pointer; border-top: 1px solid #e8eaed;" onmouseover="this.style.backgroundColor='#f5f7fa'" onmouseout="this.style.backgroundColor='transparent'" data-project-id="${project.id}">
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path>
+          <line x1="7" y1="7" x2="7.01" y2="7"></line>
+        </svg>
+        <span>Tags</span>
       </div>
     `;
 
@@ -4403,6 +4548,31 @@ class LunaIntegration {
       toggleContainer.onclick = (e) => {
         e.stopPropagation();
         // Let the label handle the click naturally
+      };
+    }
+    
+    // Handle Tags menu item click - open submenu without closing main menu
+    const tagsMenuItem = menu.querySelector('.tags-menu-item');
+    if (tagsMenuItem) {
+      // Add arrow indicator
+      const arrowSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      arrowSvg.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+      arrowSvg.setAttribute('width', '12');
+      arrowSvg.setAttribute('height', '12');
+      arrowSvg.setAttribute('viewBox', '0 0 24 24');
+      arrowSvg.setAttribute('fill', 'none');
+      arrowSvg.setAttribute('stroke', 'currentColor');
+      arrowSvg.setAttribute('stroke-width', '2');
+      arrowSvg.setAttribute('stroke-linecap', 'round');
+      arrowSvg.setAttribute('stroke-linejoin', 'round');
+      arrowSvg.style.color = '#6b7280';
+      arrowSvg.innerHTML = '<polyline points="9 18 15 12 9 6"></polyline>';
+      tagsMenuItem.appendChild(arrowSvg);
+      
+      tagsMenuItem.onclick = (e) => {
+        e.stopPropagation();
+        // Don't close the main menu, just open the submenu
+        this.showEditTagsDialog(project, menu);
       };
     }
 
@@ -4448,6 +4618,485 @@ class LunaIntegration {
       document.addEventListener('mousedown', closeMenu, true); // También mousedown
       window.addEventListener('blur', closeMenu); // También blur para cuando se pierde el foco
     }, 0);
+  }
+
+  // Show Edit Tags Dialog - Menu style with checkboxes (submenu)
+  showEditTagsDialog(project, parentMenu = null) {
+    // Remove existing submenu if any
+    const existingMenu = document.querySelector('.tags-menu-dropdown');
+    if (existingMenu) {
+      existingMenu.remove();
+    }
+
+    // Get all available tags from all projects
+    const allTagsSet = new Set();
+    this.allProjects.forEach(p => {
+      if (p.tags && Array.isArray(p.tags)) {
+        p.tags.forEach(tag => allTagsSet.add(tag));
+      }
+    });
+    const allTags = Array.from(allTagsSet).sort();
+
+    const currentTags = project.tags || [];
+    const currentTagsSet = new Set(currentTags);
+
+    // Create submenu similar to Gmail labels menu
+    const submenu = document.createElement('div');
+    submenu.className = 'tags-menu-dropdown absolute bg-white border border-[#e8eaed] rounded-lg shadow-lg py-1';
+    submenu.style.zIndex = '10002'; // Higher than parent menu
+    submenu.style.minWidth = '200px';
+    submenu.style.maxHeight = '400px';
+    submenu.style.overflowY = 'auto';
+
+    // Build menu items
+    let menuHTML = '';
+    
+    // Existing tags with checkboxes
+    allTags.forEach(tag => {
+      const isChecked = currentTagsSet.has(tag);
+      menuHTML += `
+        <div class="tag-menu-item flex items-center gap-2 px-4 py-2 hover:bg-[#f5f7fa] cursor-pointer" data-tag="${this.escapeHTML(tag)}">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-gray-500">
+            <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path>
+            <line x1="7" y1="7" x2="7.01" y2="7"></line>
+          </svg>
+          <span class="flex-1 text-sm text-[#202124]">${this.escapeHTML(tag)}</span>
+          ${isChecked ? `
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4285f4" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>
+          ` : ''}
+        </div>
+      `;
+    });
+
+    // Add "New Tag" option
+    menuHTML += `
+      <div class="border-t border-[#e8eaed] mt-1"></div>
+      <div class="tag-menu-item flex items-center gap-2 px-4 py-2 hover:bg-[#f5f7fa] cursor-pointer" id="new-tag-item">
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-gray-500">
+          <line x1="12" y1="5" x2="12" y2="19"></line>
+          <line x1="5" y1="12" x2="19" y2="12"></line>
+        </svg>
+        <span class="flex-1 text-sm text-[#202124]">+ New Tag</span>
+      </div>
+    `;
+
+    submenu.innerHTML = menuHTML;
+
+    // Position submenu to the right of the parent menu
+    if (parentMenu) {
+      const rect = parentMenu.getBoundingClientRect();
+      submenu.style.position = 'fixed';
+      submenu.style.left = `${rect.right + 4}px`;
+      // Align top with the Tags menu item (approximately)
+      submenu.style.top = `${rect.top + 40}px`; // Adjust based on menu item height
+    } else {
+      // Fallback: try to find project menu
+      const projectMenu = document.querySelector('.project-menu-dropdown');
+      if (projectMenu) {
+        const rect = projectMenu.getBoundingClientRect();
+        submenu.style.position = 'fixed';
+        submenu.style.left = `${rect.right + 4}px`;
+        submenu.style.top = `${rect.top + 40}px`;
+      } else {
+        // Last resort: center it
+        submenu.style.position = 'fixed';
+        submenu.style.left = '50%';
+        submenu.style.top = '50%';
+        submenu.style.transform = 'translate(-50%, -50%)';
+      }
+    }
+
+    document.body.appendChild(submenu);
+
+    // Handle tag item clicks
+    submenu.querySelectorAll('.tag-menu-item[data-tag]').forEach(item => {
+      item.onclick = async (e) => {
+        e.stopPropagation();
+        const tag = item.getAttribute('data-tag');
+        const isCurrentlyChecked = currentTagsSet.has(tag);
+        
+        let newTags;
+        if (isCurrentlyChecked) {
+          // Remove tag
+          newTags = currentTags.filter(t => t !== tag);
+        } else {
+          // Add tag
+          newTags = [...currentTags, tag];
+        }
+
+        // Update immediately
+        await this.updateProjectTags(project.id, newTags);
+        
+        // Close submenu but keep parent menu open
+        submenu.remove();
+      };
+    });
+
+    // Handle "New Tag" click
+    const newTagItem = submenu.querySelector('#new-tag-item');
+    if (newTagItem) {
+      newTagItem.onclick = async (e) => {
+        e.stopPropagation();
+        const tagName = prompt('Enter new tag name:');
+        if (tagName && tagName.trim()) {
+          const trimmedTag = tagName.trim();
+          const newTags = [...currentTags, trimmedTag];
+          await this.updateProjectTags(project.id, newTags);
+        }
+        submenu.remove();
+      };
+    }
+
+    // Close submenu when clicking outside (but not on parent menu)
+    const closeSubmenu = (event) => {
+      const clickedOnParentMenu = parentMenu && parentMenu.contains(event.target);
+      const clickedOnSubmenu = submenu.contains(event.target);
+      const clickedOnTagsMenuItem = event.target.closest('.tags-menu-item');
+      
+      if (!clickedOnSubmenu && !clickedOnParentMenu && !clickedOnTagsMenuItem) {
+        submenu.remove();
+        document.removeEventListener('click', closeSubmenu, true);
+        document.removeEventListener('mousedown', closeSubmenu, true);
+      }
+    };
+
+    setTimeout(() => {
+      document.addEventListener('click', closeSubmenu, true);
+      document.addEventListener('mousedown', closeSubmenu, true);
+    }, 0);
+  }
+
+  // Get the parent_id for a project in a specific tag context
+  // parent_id is now an array, so we need to find which parent has the matching tag
+  getParentIdForTag(project, tagName) {
+    const parentIds = project.parent_id || [];
+    const parentIdsArray = Array.isArray(parentIds) ? parentIds : (parentIds ? [parentIds] : []);
+    
+    // Find the parent that has this tag
+    for (const parentId of parentIdsArray) {
+      const parent = this.projects.find(p => p.id === parentId);
+      if (parent) {
+        const parentTags = parent.tags || [];
+        let parentTagsArray = parentTags;
+        if (typeof parentTags === 'string') {
+          try {
+            parentTagsArray = JSON.parse(parentTags);
+          } catch (e) {
+            parentTagsArray = [];
+          }
+        }
+        if (!Array.isArray(parentTagsArray)) parentTagsArray = [];
+        
+        // If parent has this tag, return this parent
+        if (parentTagsArray.includes(tagName)) {
+          return parentId;
+        }
+      }
+    }
+    
+    return null;
+  }
+
+  // Get the current tag context from the DOM (which tag group we're in)
+  getCurrentTagContext(element) {
+    // Find the closest tag group header
+    let current = element;
+    while (current && current !== document.body) {
+      const tagHeader = current.querySelector ? current.querySelector('.tag-group-header') : null;
+      if (tagHeader) {
+        return tagHeader.getAttribute('data-tag-name');
+      }
+      if (current.classList && current.classList.contains('tag-group-header')) {
+        return current.getAttribute('data-tag-name');
+      }
+      current = current.parentElement;
+    }
+    return null;
+  }
+
+  // Render "No Tag" group
+  renderNoTagGroup(projectsWithoutTags, container, buildTreeFn) {
+    // Get collapse state from localStorage
+    const noTagCollapseKey = 'tag_collapsed_No Tag';
+    const isNoTagCollapsed = localStorage.getItem(noTagCollapseKey) === 'true';
+    
+    // Create "No Tag" group header (draggable)
+    const noTagHeader = document.createElement('div');
+    noTagHeader.className = 'flex items-center gap-1 pl-0 pr-2 py-1 text-xs text-gray-500 font-medium cursor-pointer hover:text-gray-700 transition-colors group tag-group-header';
+    noTagHeader.style.marginTop = '4px';
+    noTagHeader.draggable = true;
+    noTagHeader.setAttribute('data-tag-name', 'No Tag');
+    
+    // Chevron for expand/collapse
+    const chevron = document.createElement('span');
+    chevron.className = 'transition-transform';
+    chevron.style.transform = isNoTagCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)';
+    chevron.innerHTML = `
+      <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="6 9 12 15 18 9"></polyline>
+      </svg>
+    `;
+    
+    const tagLabel = document.createElement('span');
+    tagLabel.className = 'flex-1';
+    tagLabel.textContent = 'No Tag';
+    
+    noTagHeader.appendChild(chevron);
+    noTagHeader.appendChild(tagLabel);
+    
+    // Toggle collapse on click (but not when dragging)
+    noTagHeader.addEventListener('click', (e) => {
+      if (e.target.closest('.tag-group-header') && !noTagHeader.dragging) {
+        e.stopPropagation();
+        const newState = !isNoTagCollapsed;
+        localStorage.setItem(noTagCollapseKey, newState.toString());
+        this.renderProjects(); // Re-render to update
+      }
+    });
+    
+    // Drag and drop handlers for "No Tag" group
+    noTagHeader.addEventListener('dragstart', (e) => {
+      noTagHeader.dragging = true;
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', 'No Tag');
+      noTagHeader.style.opacity = '0.5';
+    });
+    
+    noTagHeader.addEventListener('dragend', (e) => {
+      noTagHeader.dragging = false;
+      noTagHeader.style.opacity = '1';
+      document.querySelectorAll('.tag-drop-indicator').forEach(el => el.remove());
+    });
+    
+    noTagHeader.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      
+      document.querySelectorAll('.tag-drop-indicator').forEach(el => el.remove());
+      
+      const targetHeader = e.target.closest('.tag-group-header');
+      if (targetHeader && targetHeader !== noTagHeader) {
+        const rect = targetHeader.getBoundingClientRect();
+        const indicator = document.createElement('div');
+        indicator.className = 'tag-drop-indicator';
+        indicator.style.position = 'fixed';
+        indicator.style.left = `${rect.left}px`;
+        indicator.style.top = `${rect.top - 2}px`;
+        indicator.style.width = `${rect.width}px`;
+        indicator.style.height = '2px';
+        indicator.style.backgroundColor = '#4285f4';
+        indicator.style.zIndex = '10000';
+        indicator.style.pointerEvents = 'none';
+        document.body.appendChild(indicator);
+      }
+    });
+    
+    noTagHeader.addEventListener('drop', (e) => {
+      e.preventDefault();
+      const draggedTagName = e.dataTransfer.getData('text/plain');
+      
+      if (draggedTagName && draggedTagName !== 'No Tag') {
+        const currentOrder = JSON.parse(localStorage.getItem('tag_order') || '[]');
+        const filteredOrder = currentOrder.filter(t => t !== draggedTagName);
+        const targetIndex = filteredOrder.indexOf('No Tag');
+        
+        if (targetIndex !== -1) {
+          filteredOrder.splice(targetIndex, 0, draggedTagName);
+        } else {
+          filteredOrder.push('No Tag');
+          filteredOrder.push(draggedTagName);
+        }
+        
+        localStorage.setItem('tag_order', JSON.stringify(filteredOrder));
+        this.renderProjects();
+      }
+      
+      document.querySelectorAll('.tag-drop-indicator').forEach(el => el.remove());
+    });
+    
+    noTagHeader.addEventListener('dragleave', (e) => {
+      if (!e.target.closest('.tag-group-header')) {
+        document.querySelectorAll('.tag-drop-indicator').forEach(el => el.remove());
+      }
+    });
+    
+    container.appendChild(noTagHeader);
+    
+    // Render projects without tags (only if not collapsed)
+    if (!isNoTagCollapsed && buildTreeFn) {
+      // For "No Tag" group, use first parent from array (or null if empty)
+      const modifiedNoTagProjects = projectsWithoutTags.map(project => {
+        const projectCopy = { ...project };
+        const parentIds = project.parent_id || [];
+        const parentIdsArray = Array.isArray(parentIds) ? parentIds : (parentIds ? [parentIds] : []);
+        // Use first parent for "No Tag" group (or null if no parents)
+        projectCopy.parent_id = parentIdsArray.length > 0 ? parentIdsArray[0] : null;
+        return projectCopy;
+      });
+      
+      const noTagsHierarchicalProjects = buildTreeFn(modifiedNoTagProjects);
+      
+      noTagsHierarchicalProjects.forEach(item => {
+        if (item.isSeparator) {
+          this.renderSeparator(item, container);
+          return;
+        }
+        
+        this.renderProjectItem(item, container, modifiedNoTagProjects);
+      });
+    }
+  }
+
+  // Show tag menu (for deleting tag)
+  showTagMenu(e, tagName) {
+    // Close any existing menu
+    const existingMenu = document.querySelector('.tag-group-menu-dropdown');
+    if (existingMenu) {
+      existingMenu.remove();
+    }
+
+    const button = e.target.closest('.tag-menu-btn');
+    if (!button) return;
+
+    const rect = button.getBoundingClientRect();
+    const menu = document.createElement('div');
+    menu.className = 'tag-group-menu-dropdown absolute bg-white border border-[#e8eaed] rounded-lg shadow-lg py-1';
+    menu.style.position = 'fixed';
+    menu.style.left = `${rect.right - 150}px`;
+    menu.style.top = `${rect.bottom + 4}px`;
+    menu.style.zIndex = '10001';
+    menu.style.minWidth = '150px';
+
+    menu.innerHTML = `
+      <div class="tag-delete-item flex items-center gap-2 px-4 py-2 hover:bg-red-50 cursor-pointer text-red-600" data-tag-name="${this.escapeHTML(tagName)}">
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="3 6 5 6 21 6"></polyline>
+          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+        </svg>
+        <span class="text-sm">Delete Tag</span>
+      </div>
+    `;
+
+    document.body.appendChild(menu);
+
+    // Handle delete click
+    const deleteItem = menu.querySelector('.tag-delete-item');
+    if (deleteItem) {
+      deleteItem.onclick = async (e) => {
+        e.stopPropagation();
+        const tagToDelete = deleteItem.getAttribute('data-tag-name');
+        
+        if (confirm(`Are you sure you want to delete the tag "${tagToDelete}"? This will remove it from all projects.`)) {
+          await this.deleteTagFromAllProjects(tagToDelete);
+          menu.remove();
+          // Re-render to update the sidebar
+          this.renderProjects();
+        }
+      };
+    }
+
+    // Close menu when clicking outside
+    const closeMenu = (event) => {
+      if (!menu.contains(event.target) && !event.target.closest('.tag-menu-btn')) {
+        menu.remove();
+        document.removeEventListener('click', closeMenu, true);
+        document.removeEventListener('mousedown', closeMenu, true);
+      }
+    };
+
+    setTimeout(() => {
+      document.addEventListener('click', closeMenu, true);
+      document.addEventListener('mousedown', closeMenu, true);
+    }, 0);
+  }
+
+  // Delete tag from all projects
+  async deleteTagFromAllProjects(tagName) {
+    try {
+      // Get all projects that have this tag
+      const projectsWithTag = this.allProjects.filter(p => {
+        const tags = p.tags || [];
+        return Array.isArray(tags) && tags.includes(tagName);
+      });
+
+      console.log(`🗑️  Deleting tag "${tagName}" from ${projectsWithTag.length} project(s)`);
+
+      // Update each project to remove the tag
+      for (const project of projectsWithTag) {
+        const currentTags = project.tags || [];
+        const newTags = currentTags.filter(t => t !== tagName);
+
+        try {
+          const response = await fetch(`/api/spaces/${project.id}/tags`, {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ tags: newTags })
+          });
+
+          if (!response.ok) {
+            throw new Error('Failed to update tags');
+          }
+
+          // Update local data
+          const projectIndex = this.projects.findIndex(p => p.id === project.id);
+          if (projectIndex !== -1) {
+            this.projects[projectIndex].tags = newTags;
+          }
+
+          const allProjectIndex = this.allProjects.findIndex(p => p.id === project.id);
+          if (allProjectIndex !== -1) {
+            this.allProjects[allProjectIndex].tags = newTags;
+          }
+        } catch (error) {
+          console.error(`Error removing tag from project ${project.name}:`, error);
+        }
+      }
+
+      console.log(`✅ Tag "${tagName}" deleted from all projects`);
+    } catch (error) {
+      console.error('Error deleting tag:', error);
+      alert('Failed to delete tag. Please try again.');
+    }
+  }
+
+  // Helper function to update project tags
+  async updateProjectTags(projectId, tags) {
+    try {
+      const response = await fetch(`/api/spaces/${projectId}/tags`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ tags })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to update tags');
+      }
+
+      const { space } = await response.json();
+      
+      // Update project in local data
+      const projectIndex = this.projects.findIndex(p => p.id === projectId);
+      if (projectIndex !== -1) {
+        this.projects[projectIndex].tags = tags;
+      }
+      
+      const allProjectIndex = this.allProjects.findIndex(p => p.id === projectId);
+      if (allProjectIndex !== -1) {
+        this.allProjects[allProjectIndex].tags = tags;
+      }
+
+      // Re-render projects to show updated tags
+      this.renderProjects();
+    } catch (error) {
+      console.error('Error updating tags:', error);
+      alert('Failed to update tags. Please try again.');
+    }
   }
 
   // Show Edit Tab Modal (Luna style - allows editing name, URL, and icon)
@@ -5223,6 +5872,158 @@ class LunaIntegration {
     }
   }
 
+  // Helper function to render a single project item
+  renderProjectItem(project, container, allProjectsForChildren) {
+    const isActive = this.activeSpace?.id === project.id;
+    const hasChildren = allProjectsForChildren.some(p => p.parent_id === project.id);
+    const isGhost = project.isGhost === true || project.isReadOnly === true;
+    
+    const hasIcon = project.avatar_photo || project.avatar_emoji;
+    let iconHtml = '';
+    if (project.avatar_photo) {
+      iconHtml = `<img src="${project.avatar_photo}" alt="" class="w-full h-full object-cover" />`;
+    } else if (project.avatar_emoji) {
+      iconHtml = `<span class="text-sm">${project.avatar_emoji}</span>`;
+    } else {
+      iconHtml = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>`;
+    }
+    
+    const wrapperEl = document.createElement('div');
+    wrapperEl.style.marginLeft = `${project.depth * 16}px`;
+    wrapperEl.className = 'relative';
+    wrapperEl.setAttribute('data-project-id', project.id);
+    
+    const isArchived = project.archived === true;
+    const projectEl = document.createElement('div');
+    const ghostStyles = isGhost 
+      ? 'opacity-50 bg-gray-100 text-gray-500' 
+      : '';
+    const hoverStyles = isGhost 
+      ? '' 
+      : (isActive ? 'bg-[#4285f4]/10 text-[#4285f4] font-medium shadow-sm' : 'text-[#202124] hover:bg-[#e8eaed]');
+    
+    projectEl.className = `project-item group flex items-center gap-2 pl-0 pr-2 py-1.5 rounded-lg transition-all ${
+      hoverStyles
+    } ${isArchived ? 'opacity-60' : ''} ${ghostStyles}`;
+    projectEl.style.cursor = isGhost ? 'default' : 'pointer';
+    
+    const chevronHtml = hasChildren 
+      ? `<button class="p-0 hover:bg-gray-100 rounded transition-colors z-10 expand-btn" data-project-id="${project.id}">
+          ${project.is_expanded !== false 
+            ? '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>'
+            : '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>'
+          }
+        </button>`
+      : '<div class="w-2.5"></div>';
+    
+    // If there's an icon, don't show the circle background
+    const iconContainerClass = hasIcon 
+      ? 'w-6 h-6 flex items-center justify-center flex-shrink-0'
+      : 'w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0';
+    const iconContainerStyle = hasIcon 
+      ? ''
+      : `border: 1px solid ${project.avatar_color || '#e8eaed'}; color: ${project.avatar_color || '#6b7280'}`;
+    
+    projectEl.style.position = 'relative';
+    projectEl.innerHTML = `
+      ${chevronHtml}
+      <div class="${iconContainerClass}" style="${iconContainerStyle}">
+        ${iconHtml}
+      </div>
+      <span class="flex-1 text-xs truncate">${this.escapeHTML(project.name)}</span>
+      ${!isGhost ? `<div class="space-unread-badge" data-space-id="${project.id}" style="display: none; position: absolute; top: 50%; transform: translateY(-50%); right: 8px; background-color: #ea4335; color: white; border-radius: 50%; width: 18px; height: 18px; min-width: 18px; align-items: center; justify-content: center; font-size: 10px; font-weight: 600; z-index: 10; line-height: 1;"></div>
+      <button class="project-menu-btn shrink-0 p-0.5 opacity-0 group-hover:opacity-100 hover:text-[#4285f4] transition-opacity relative" data-project-id="${project.id}" title="Menu" style="cursor: pointer; position: absolute; right: 8px; top: 50%; transform: translateY(-50%); z-index: 5;">
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="1"></circle>
+          <circle cx="12" cy="5" r="1"></circle>
+          <circle cx="12" cy="19" r="1"></circle>
+        </svg>
+      </button>` : ''}
+    `;
+    
+    if (!isGhost) {
+      projectEl.addEventListener('click', (e) => {
+        const expandBtn = e.target.closest('.expand-btn');
+        if (expandBtn) {
+          e.stopPropagation();
+          const projectId = expandBtn.getAttribute('data-project-id');
+          this.toggleProjectExpanded(projectId);
+          return;
+        }
+        
+        const menuBtn = e.target.closest('.project-menu-btn');
+        if (menuBtn) {
+          e.stopPropagation();
+          const projectId = menuBtn.getAttribute('data-project-id');
+          const project = this.allProjects.find(p => p.id === projectId) || this.projects.find(p => p.id === projectId);
+          if (project) {
+            this.showProjectMenu(e, project);
+          }
+          return;
+        }
+        
+        if (!e.target.closest('.drop-indicator') && !e.target.closest('.project-menu-btn')) {
+          document.querySelectorAll('.project-item').forEach(el => {
+            el.classList.remove('bg-[#4285f4]/10', 'text-[#4285f4]', 'font-medium', 'shadow-sm');
+            el.classList.add('hover:bg-[#e8eaed]');
+          });
+          document.querySelectorAll('.user-item').forEach(el => {
+            el.classList.remove('bg-[#4285f4]/10', 'text-[#4285f4]', 'font-medium', 'shadow-sm');
+            el.classList.add('hover:bg-[#e8eaed]');
+          });
+          
+          projectEl.classList.add('bg-[#4285f4]/10', 'text-[#4285f4]', 'font-medium', 'shadow-sm');
+          projectEl.classList.remove('hover:bg-[#f5f7fa]');
+          
+          this.selectProject(project.id);
+        }
+      });
+    } else {
+      projectEl.addEventListener('click', (e) => {
+        const projectId = project.id;
+        this.toggleProjectExpanded(projectId);
+        e.stopPropagation();
+      });
+    }
+    
+    wrapperEl.appendChild(projectEl);
+    container.appendChild(wrapperEl);
+  }
+
+  // Helper function to render separator
+  renderSeparator(item, container) {
+    const parentId = item.parentId !== undefined ? item.parentId : null;
+    const showArchived = this.showArchivedForParent.get(parentId) || false;
+    
+    const separatorWrapper = document.createElement('div');
+    separatorWrapper.className = 'flex items-center justify-center my-1 cursor-pointer group';
+    separatorWrapper.style.marginLeft = `${item.depth * 16}px`;
+    separatorWrapper.title = showArchived ? 'Click to hide archived projects' : 'Click to show archived projects';
+    separatorWrapper.setAttribute('data-parent-id', parentId || 'root');
+    
+    const iconContainer = document.createElement('div');
+    iconContainer.className = 'flex items-center justify-center text-gray-400 group-hover:text-gray-500 transition-all';
+    iconContainer.style.flexShrink = '0';
+    iconContainer.style.transform = showArchived ? 'rotate(180deg)' : 'rotate(0deg)';
+    iconContainer.style.transition = 'transform 0.2s ease';
+    iconContainer.innerHTML = `
+      <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="6 9 12 15 18 9"></polyline>
+      </svg>
+    `;
+    
+    separatorWrapper.appendChild(iconContainer);
+    
+    separatorWrapper.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const currentState = this.showArchivedForParent.get(parentId) || false;
+      this.showArchivedForParent.set(parentId, !currentState);
+      this.renderProjects();
+    });
+    
+    container.appendChild(separatorWrapper);
+  }
+
   renderProjects() {
     const container = document.getElementById('projects-cont');
     if (!container) return;
@@ -5249,9 +6050,17 @@ class LunaIntegration {
     }
 
     // Build hierarchy tree - organized: active first, then archived (with separator, collapsed by default)
-    const buildTree = () => {
+    const buildTree = (projectsToUse) => {
       // Separate roots: active first, then archived
-      const allRoots = this.projects.filter(p => !p.parent_id);
+      // parent_id is now a JSONB array, so check if it's empty or null
+      const allRoots = projectsToUse.filter(p => {
+        const parentId = p.parent_id;
+        if (!parentId) return true;
+        // If it's an array, check if it's empty
+        if (Array.isArray(parentId)) return parentId.length === 0;
+        // Old format: single value means it has a parent
+        return false;
+      });
       console.log(`[FRONTEND] Building tree: ${this.projects.length} total projects, ${allRoots.length} roots`);
       allRoots.forEach(r => {
         console.log(`[FRONTEND] Root: ${r.name} (id: ${r.id}, isGhost: ${r.isGhost || false})`);
@@ -5263,7 +6072,13 @@ class LunaIntegration {
       activeRoots.sort((a, b) => (a.position || 0) - (b.position || 0));
       archivedRoots.sort((a, b) => (a.position || 0) - (b.position || 0));
       
-      const allChildren = this.projects.filter(p => p.parent_id);
+      const allChildren = projectsToUse.filter(p => {
+        const parentId = p.parent_id;
+        if (!parentId) return false;
+        // parent_id is now a JSONB array, so check if it's non-empty
+        if (Array.isArray(parentId)) return parentId.length > 0;
+        return true; // old format (single value)
+      });
       
       const tree = [];
       
@@ -5283,7 +6098,14 @@ class LunaIntegration {
         // Use is_expanded exactly like luna-chat (defaults to true if undefined)
         if (parent.is_expanded !== false) {
           // Get children for this parent
-          const parentChildren = allChildren.filter(c => c.parent_id === parent.id);
+          // parent_id is now a JSONB array, so check if parent.id is included in the array
+          const parentChildren = allChildren.filter(c => {
+            const cParentId = c.parent_id;
+            if (!cParentId) return false;
+            // Handle both array format (new) and single value format (old)
+            const cParentIdArray = Array.isArray(cParentId) ? cParentId : (cParentId ? [cParentId] : []);
+            return cParentIdArray.includes(parent.id) && projectsToUse.includes(c);
+          });
           
           // Separate: active first, then archived
           const activeKids = parentChildren.filter(c => !c.archived);
@@ -5327,170 +6149,324 @@ class LunaIntegration {
       return tree;
     };
 
-    const hierarchicalProjects = buildTree();
+    // Group projects by tags
+    const projectsByTag = new Map();
+    const projectsWithoutTags = [];
+    
+    // First, collect all projects with their tags
+    this.projects.forEach(project => {
+      // Handle tags - can be array, JSON string, or null/undefined
+      let tags = project.tags || [];
+      
+      // If tags is a string, try to parse it
+      if (typeof tags === 'string') {
+        try {
+          tags = JSON.parse(tags);
+        } catch (e) {
+          console.warn('Failed to parse tags as JSON:', tags);
+          tags = [];
+        }
+      }
+      
+      // Ensure tags is an array
+      if (!Array.isArray(tags)) {
+        tags = [];
+      }
+      
+      console.log(`[TAGS] Project "${project.name}": tags =`, tags);
+      
+      if (tags.length > 0) {
+        // Project has tags - add it to each tag group
+        tags.forEach(tag => {
+          if (!projectsByTag.has(tag)) {
+            projectsByTag.set(tag, []);
+          }
+          projectsByTag.get(tag).push(project);
+        });
+      } else {
+        // Project has no tags
+        projectsWithoutTags.push(project);
+      }
+    });
+    
+    console.log(`[TAGS] Projects with tags: ${projectsByTag.size} tag groups, Projects without tags: ${projectsWithoutTags.length}`);
+    
+    // Get saved tag order from localStorage
+    const savedTagOrder = JSON.parse(localStorage.getItem('tag_order') || '[]');
+    
+    // Get all tags
+    const allTags = Array.from(projectsByTag.keys());
+    
+    // Sort tags: first by saved order, then alphabetically for new tags
+    const sortedTags = allTags.sort((a, b) => {
+      const indexA = savedTagOrder.indexOf(a);
+      const indexB = savedTagOrder.indexOf(b);
+      
+      // If both are in saved order, use that order
+      if (indexA !== -1 && indexB !== -1) {
+        return indexA - indexB;
+      }
+      // If only A is in saved order, A comes first
+      if (indexA !== -1) return -1;
+      // If only B is in saved order, B comes first
+      if (indexB !== -1) return 1;
+      // If neither is in saved order, sort alphabetically
+      return a.localeCompare(b);
+    });
     
     container.innerHTML = '';
     
-    hierarchicalProjects.forEach(item => {
-      // Handle separator (clickable to expand/collapse archived projects for specific parent)
-      if (item.isSeparator) {
-        const parentId = item.parentId !== undefined ? item.parentId : null;
-        const showArchived = this.showArchivedForParent.get(parentId) || false;
-        
-        // Create container for the separator (just the arrow icon)
-        const separatorWrapper = document.createElement('div');
-        separatorWrapper.className = 'flex items-center justify-center my-1 cursor-pointer group';
-        separatorWrapper.style.marginLeft = `${item.depth * 16}px`;
-        separatorWrapper.title = showArchived ? 'Click to hide archived projects' : 'Click to show archived projects';
-        separatorWrapper.setAttribute('data-parent-id', parentId || 'root');
-        
-        // Icon container (centered, compact) - just the arrow
-        const iconContainer = document.createElement('div');
-        iconContainer.className = 'flex items-center justify-center text-gray-400 group-hover:text-gray-500 transition-all';
-        iconContainer.style.flexShrink = '0';
-        iconContainer.style.transform = showArchived ? 'rotate(180deg)' : 'rotate(0deg)';
-        iconContainer.style.transition = 'transform 0.2s ease';
-        iconContainer.innerHTML = `
-          <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="6 9 12 15 18 9"></polyline>
-          </svg>
-        `;
-        
-        // Assemble separator (just the arrow)
-        separatorWrapper.appendChild(iconContainer);
-        
-        // Make separator clickable to toggle archived projects for this specific parent
-        separatorWrapper.addEventListener('click', (e) => {
-          e.stopPropagation();
-          const currentState = this.showArchivedForParent.get(parentId) || false;
-          this.showArchivedForParent.set(parentId, !currentState);
-          this.renderProjects();
-        });
-        
-        container.appendChild(separatorWrapper);
-        return;
+    // Determine where "No Tag" should appear based on saved order
+    const noTagIndex = savedTagOrder.indexOf('No Tag');
+    const shouldShowNoTag = projectsWithoutTags.length > 0;
+    
+    // Render each tag group
+    sortedTags.forEach((tagName, tagIndex) => {
+      const tagProjects = projectsByTag.get(tagName);
+      
+      // Check if we should render "No Tag" before this tag (based on saved order)
+      if (shouldShowNoTag && noTagIndex !== -1 && noTagIndex <= tagIndex && !container.querySelector('[data-tag-name="No Tag"]')) {
+        this.renderNoTagGroup(projectsWithoutTags, container, buildTree);
       }
       
-      const project = item;
-      const isActive = this.activeSpace?.id === project.id;
-      const hasChildren = this.projects.some(p => p.parent_id === project.id);
-      const isGhost = project.isGhost === true || project.isReadOnly === true;
+      // Get collapse state from localStorage
+      const collapseKey = `tag_collapsed_${tagName}`;
+      const isCollapsed = localStorage.getItem(collapseKey) === 'true';
       
-      let iconHtml = '';
-      if (project.avatar_photo) {
-        iconHtml = `<img src="${project.avatar_photo}" alt="" class="w-full h-full rounded-full object-cover" />`;
-      } else if (project.avatar_emoji) {
-        iconHtml = `<span class="text-sm">${project.avatar_emoji}</span>`;
-      } else {
-        iconHtml = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>`;
-      }
+      // Create tag group header (draggable)
+      const tagHeader = document.createElement('div');
+      tagHeader.className = 'flex items-center gap-1 pl-0 pr-2 py-1 text-xs text-gray-500 font-medium cursor-pointer hover:text-gray-700 transition-colors group tag-group-header';
+      tagHeader.style.marginTop = '4px';
+      tagHeader.draggable = true;
+      tagHeader.setAttribute('data-tag-name', tagName);
+      tagHeader.setAttribute('data-tag-index', tagIndex);
       
-      // Create wrapper div with marginLeft for indentation (like luna-chat SortableItem)
-      const wrapperEl = document.createElement('div');
-      wrapperEl.style.marginLeft = `${project.depth * 16}px`; // EXACTLY like luna-chat (16px per depth)
-      wrapperEl.className = 'relative';
-      wrapperEl.setAttribute('data-project-id', project.id);
-      
-      const isArchived = project.archived === true;
-      const projectEl = document.createElement('div');
-      // Ghost parents: gray, semi-transparent, no hover, normal cursor (just not clickable)
-      const ghostStyles = isGhost 
-        ? 'opacity-50 bg-gray-100 text-gray-500' 
-        : '';
-      const hoverStyles = isGhost 
-        ? '' 
-        : (isActive ? 'bg-[#4285f4]/10 text-[#4285f4] font-medium shadow-sm' : 'text-[#202124] hover:bg-[#e8eaed]');
-      
-      // Reduce padding-left to align chevron with section title "PROJECTS"
-      projectEl.className = `project-item group flex items-center gap-2 pl-0 pr-2 py-1.5 rounded-lg transition-all ${
-        hoverStyles
-      } ${isArchived ? 'opacity-60' : ''} ${ghostStyles}`;
-      projectEl.style.cursor = isGhost ? 'default' : 'pointer';
-      
-      // Chevron for expand/collapse - aligned with section title
-      const chevronHtml = hasChildren 
-        ? `<button class="p-0 hover:bg-gray-100 rounded transition-colors z-10 expand-btn" data-project-id="${project.id}">
-            ${project.is_expanded !== false 
-              ? '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>'
-              : '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>'
-            }
-          </button>`
-        : '<div class="w-2.5"></div>'; // Spacer if no children - same width as button (10px icon = ~10px)
-      
-      projectEl.style.position = 'relative'; // For badge positioning
-      projectEl.innerHTML = `
-        ${chevronHtml}
-        <div class="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0" style="border: 1px solid ${project.avatar_color || '#e8eaed'}; color: ${project.avatar_color || '#6b7280'}">
-          ${iconHtml}
-        </div>
-        <span class="flex-1 text-xs truncate">${this.escapeHTML(project.name)}</span>
-        ${!isGhost ? `<div class="space-unread-badge" data-space-id="${project.id}" style="display: none; position: absolute; top: 50%; transform: translateY(-50%); right: 8px; background-color: #ea4335; color: white; border-radius: 50%; width: 18px; height: 18px; min-width: 18px; align-items: center; justify-content: center; font-size: 10px; font-weight: 600; z-index: 10; line-height: 1;"></div>
-        <button class="project-menu-btn shrink-0 p-0.5 opacity-0 group-hover:opacity-100 hover:text-[#4285f4] transition-opacity relative" data-project-id="${project.id}" title="Menu" style="cursor: pointer; position: absolute; right: 8px; top: 50%; transform: translateY(-50%); z-index: 5;">
-          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="1"></circle>
-            <circle cx="12" cy="5" r="1"></circle>
-            <circle cx="12" cy="19" r="1"></circle>
-          </svg>
-        </button>` : ''}
+      // Chevron for expand/collapse
+      const chevron = document.createElement('span');
+      chevron.className = 'transition-transform';
+      chevron.style.transform = isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)';
+      chevron.innerHTML = `
+        <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="6 9 12 15 18 9"></polyline>
+        </svg>
       `;
       
-      // Set event listener AFTER setting innerHTML
-      // Ghost parents are not clickable - they're just visual indicators
-      if (!isGhost) {
-        projectEl.addEventListener('click', (e) => {
-          // Handle expand/collapse button
-          const expandBtn = e.target.closest('.expand-btn');
-          if (expandBtn) {
-            e.stopPropagation();
-            const projectId = expandBtn.getAttribute('data-project-id');
-            this.toggleProjectExpanded(projectId);
-            return;
-          }
-          
-          // Handle menu button (three dots)
-          const menuBtn = e.target.closest('.project-menu-btn');
-          if (menuBtn) {
-            e.stopPropagation();
-            const projectId = menuBtn.getAttribute('data-project-id');
-            const project = this.allProjects.find(p => p.id === projectId) || this.projects.find(p => p.id === projectId);
-            if (project) {
-              this.showProjectMenu(e, project);
-            }
-            return;
-          }
-          
-          // Don't trigger click if clicking on drag indicator or menu button
-          if (!e.target.closest('.drop-indicator') && !e.target.closest('.project-menu-btn')) {
-            // DESACTIVAR TODOS LOS PROYECTOS/USUARIOS PRIMERO - solo uno activo
-            document.querySelectorAll('.project-item').forEach(el => {
-              el.classList.remove('bg-[#4285f4]/10', 'text-[#4285f4]', 'font-medium', 'shadow-sm');
-              el.classList.add('hover:bg-[#f5f7fa]');
-            });
-            document.querySelectorAll('.user-item').forEach(el => {
-              el.classList.remove('bg-[#4285f4]/10', 'text-[#4285f4]', 'font-medium', 'shadow-sm');
-              el.classList.add('hover:bg-[#e8eaed]');
-            });
-            
-            // Activar este proyecto
-            projectEl.classList.add('bg-[#4285f4]/10', 'text-[#4285f4]', 'font-medium', 'shadow-sm');
-            projectEl.classList.remove('hover:bg-[#f5f7fa]');
-            
-            this.selectProject(project.id);
-          }
-        });
-      } else {
-        // For ghost parents, the entire project is clickable to expand/collapse
-        projectEl.addEventListener('click', (e) => {
-          // Allow clicks anywhere on the ghost parent to toggle expand/collapse
-          const projectId = project.id;
-          this.toggleProjectExpanded(projectId);
-          e.stopPropagation();
-        });
-      }
+      const tagLabel = document.createElement('span');
+      tagLabel.className = 'flex-1';
+      tagLabel.textContent = tagName;
       
-      wrapperEl.appendChild(projectEl);
-      container.appendChild(wrapperEl);
+      // Menu button (three dots) - only visible on hover
+      const menuBtn = document.createElement('button');
+      menuBtn.className = 'tag-menu-btn opacity-0 group-hover:opacity-100 hover:text-[#4285f4] transition-opacity p-0.5';
+      menuBtn.style.cursor = 'pointer';
+      menuBtn.setAttribute('data-tag-name', tagName);
+      menuBtn.innerHTML = `
+        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="1"></circle>
+          <circle cx="12" cy="5" r="1"></circle>
+          <circle cx="12" cy="19" r="1"></circle>
+        </svg>
+      `;
+      
+      tagHeader.appendChild(chevron);
+      tagHeader.appendChild(tagLabel);
+      tagHeader.appendChild(menuBtn);
+      
+      // Track if we're dragging to prevent click
+      let isDraggingTag = false;
+      let dragStartY = 0;
+      
+      // Handle menu button click
+      menuBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.showTagMenu(e, tagName);
+      });
+      
+      // Toggle collapse on chevron click only
+      chevron.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const newState = !isCollapsed;
+        localStorage.setItem(collapseKey, newState.toString());
+        this.renderProjects();
+      });
+      
+      // Drag and drop handlers for tag groups
+      tagHeader.addEventListener('mousedown', (e) => {
+        // Don't start drag on menu button or chevron
+        if (e.target.closest('.tag-menu-btn') || e.target.closest('svg')) {
+          return;
+        }
+        dragStartY = e.clientY;
+        isDraggingTag = false;
+      });
+      
+      tagHeader.addEventListener('mousemove', (e) => {
+        if (dragStartY === 0) return;
+        const distance = Math.abs(e.clientY - dragStartY);
+        if (distance > 5) {
+          isDraggingTag = true;
+        }
+      });
+      
+      tagHeader.addEventListener('mouseup', (e) => {
+        if (!isDraggingTag && dragStartY !== 0) {
+          // It was a click, not a drag - toggle collapse
+          if (!e.target.closest('.tag-menu-btn') && !e.target.closest('svg')) {
+            const newState = !isCollapsed;
+            localStorage.setItem(collapseKey, newState.toString());
+            this.renderProjects();
+          }
+        }
+        dragStartY = 0;
+        isDraggingTag = false;
+      });
+      
+      tagHeader.addEventListener('dragstart', (e) => {
+        // Don't drag if clicking on menu button or chevron
+        if (e.target.closest('.tag-menu-btn') || e.target.closest('svg')) {
+          e.preventDefault();
+          return false;
+        }
+        
+        tagHeader.dragging = true;
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', tagName);
+        tagHeader.style.opacity = '0.5';
+      });
+      
+      tagHeader.addEventListener('dragend', (e) => {
+        tagHeader.dragging = false;
+        tagHeader.style.opacity = '1';
+        // Remove all drop indicators
+        document.querySelectorAll('.tag-drop-indicator').forEach(el => el.remove());
+      });
+      
+      tagHeader.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        e.dataTransfer.dropEffect = 'move';
+        
+        // Remove existing indicators
+        document.querySelectorAll('.tag-drop-indicator').forEach(el => el.remove());
+        
+        // Find the target tag header
+        const targetHeader = e.target.closest('.tag-group-header');
+        if (targetHeader && targetHeader !== tagHeader) {
+          const rect = targetHeader.getBoundingClientRect();
+          const indicator = document.createElement('div');
+          indicator.className = 'tag-drop-indicator';
+          indicator.style.position = 'fixed';
+          indicator.style.left = `${rect.left}px`;
+          indicator.style.top = `${rect.top - 2}px`;
+          indicator.style.width = `${rect.width}px`;
+          indicator.style.height = '2px';
+          indicator.style.backgroundColor = '#4285f4';
+          indicator.style.zIndex = '10000';
+          indicator.style.pointerEvents = 'none';
+          document.body.appendChild(indicator);
+        }
+      });
+      
+      tagHeader.addEventListener('drop', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const draggedTagName = e.dataTransfer.getData('text/plain');
+        
+        if (draggedTagName && draggedTagName !== tagName) {
+          // Get current order
+          const currentOrder = JSON.parse(localStorage.getItem('tag_order') || '[]');
+          
+          // Remove dragged tag from order
+          const filteredOrder = currentOrder.filter(t => t !== draggedTagName);
+          
+          // Find index of target tag
+          const targetIndex = filteredOrder.indexOf(tagName);
+          
+          // Insert dragged tag at target position
+          if (targetIndex !== -1) {
+            filteredOrder.splice(targetIndex, 0, draggedTagName);
+          } else {
+            // If target not in order, add both
+            filteredOrder.push(tagName);
+            filteredOrder.push(draggedTagName);
+          }
+          
+          // Save new order
+          localStorage.setItem('tag_order', JSON.stringify(filteredOrder));
+          
+          // Re-render to apply new order
+          this.renderProjects();
+        }
+        
+        // Remove indicators
+        document.querySelectorAll('.tag-drop-indicator').forEach(el => el.remove());
+      });
+      
+      tagHeader.addEventListener('dragleave', (e) => {
+        // Remove indicators when leaving
+        if (!e.target.closest('.tag-group-header')) {
+          document.querySelectorAll('.tag-drop-indicator').forEach(el => el.remove());
+        }
+      });
+      
+      container.appendChild(tagHeader);
+      
+      // Render projects in this tag group (only if not collapsed)
+      if (!isCollapsed) {
+        // Get all projects that have this tag
+        const projectsWithThisTag = this.projects.filter(p => {
+          const tags = p.tags || [];
+          if (typeof tags === 'string') {
+            try {
+              tags = JSON.parse(tags);
+            } catch (e) {
+              tags = [];
+            }
+          }
+          if (!Array.isArray(tags)) tags = [];
+          return tags.includes(tagName);
+        });
+        
+        // Create a modified version of projects where:
+        // - parent_id is now an array, so we find which parent has the matching tag
+        // - If no parent has the tag, make it a root in this tag group
+        const modifiedProjects = projectsWithThisTag.map(project => {
+          const projectCopy = { ...project };
+          
+          // Find the parent that has this tag
+          const tagSpecificParentId = this.getParentIdForTag(project, tagName);
+          
+          if (tagSpecificParentId !== null) {
+            // Use the parent that has this tag
+            projectCopy.parent_id = tagSpecificParentId;
+          } else {
+            // No parent has this tag, make it a root in this group
+            projectCopy.parent_id = null;
+          }
+          
+          return projectCopy;
+        });
+        
+        // Build tree with modified projects
+        const tagHierarchicalProjects = buildTree(modifiedProjects);
+        
+        // Render projects in this tag group
+        tagHierarchicalProjects.forEach(item => {
+          if (item.isSeparator) {
+            this.renderSeparator(item, container);
+            return;
+          }
+          
+          this.renderProjectItem(item, container, modifiedProjects);
+        });
+        
+      }
     });
+    
+    // Render "No Tag" group at the end if it wasn't rendered yet (or if it's not in saved order)
+    if (shouldShowNoTag && !container.querySelector('[data-tag-name="No Tag"]')) {
+      this.renderNoTagGroup(projectsWithoutTags, container, buildTree);
+    }
     
     // Setup simple drag and drop for projects (only parent-child relationships)
     this.setupSimpleProjectDragAndDrop();
@@ -5600,10 +6576,25 @@ class LunaIntegration {
       const targetWrapper = elementAtPoint.closest('[data-project-id]');
       const targetProjectId = targetWrapper?.getAttribute('data-project-id');
       
+      // Check if we're inside a tag group
+      const currentTag = this.getCurrentTagContext(draggedElement);
+      
+      // Get the effective parent_id for the current tag context
+      // parent_id is now an array, so we find which parent has the matching tag
+      let effectiveParentId = null;
+      if (currentTag && currentTag !== 'No Tag') {
+        effectiveParentId = this.getParentIdForTag(draggedProject, currentTag);
+      } else {
+        // "No Tag" group or outside - use first parent from array (or null)
+        const parentIds = draggedProject?.parent_id || [];
+        const parentIdsArray = Array.isArray(parentIds) ? parentIds : (parentIds ? [parentIds] : []);
+        effectiveParentId = parentIdsArray.length > 0 ? parentIdsArray[0] : null;
+      }
+      
       // Check if we're over the container itself (for moving to root)
       const isOverContainer = container.contains(elementAtPoint) && !targetWrapper;
       
-      if (isOverContainer && draggedProject?.parent_id) {
+      if (isOverContainer && effectiveParentId) {
         // Show indicator at top of container for "move to root"
         this.showDropIndicator(container, 'top', 'Move to root level');
         dropIndicator = { type: 'root', targetId: null };
@@ -5618,8 +6609,19 @@ class LunaIntegration {
           return;
         }
         
+        // Get effective parent_id for target project in current tag context
+        let targetEffectiveParentId = null;
+        if (currentTag && currentTag !== 'No Tag') {
+          targetEffectiveParentId = this.getParentIdForTag(targetProject, currentTag);
+        } else {
+          // "No Tag" group or outside - use first parent from array (or null)
+          const targetParentIds = targetProject?.parent_id || [];
+          const targetParentIdsArray = Array.isArray(targetParentIds) ? targetParentIds : (targetParentIds ? [targetParentIds] : []);
+          targetEffectiveParentId = targetParentIdsArray.length > 0 ? targetParentIdsArray[0] : null;
+        }
+        
         // Determine if we can reorder (same parent) or make child (different parent)
-        const canReorder = draggedProject?.parent_id === targetProject?.parent_id;
+        const canReorder = effectiveParentId === targetEffectiveParentId;
         const canMakeChild = targetProjectId !== draggedProjectId;
         
         // Calculate position (before/after)
@@ -5659,7 +6661,12 @@ class LunaIntegration {
         return;
       }
       
+      // Check if we're inside a tag group
+      const currentTag = this.getCurrentTagContext(draggedElement);
+      
       try {
+        // Always use the API to update parent_id (now an array)
+        // The backend will handle adding/removing from the array based on tags
         if (dropIndicator.type === 'root') {
           // Moving to root level
           await this.request('/api/spaces/reorder', {
@@ -5672,18 +6679,18 @@ class LunaIntegration {
             })
           });
         } else if (dropIndicator.type === 'reorder') {
-          // Reordering within same parent (no Notion sync needed)
+          // Reordering within same parent (no parent change)
           await this.request('/api/spaces/reorder', {
             method: 'POST',
             body: JSON.stringify({
               spaceId: draggedProjectId,
               targetId: dropIndicator.targetId,
               position: dropIndicator.position,
-              targetParentId: draggedProject?.parent_id || null
+              targetParentId: effectiveParentId
             })
           });
         } else if (dropIndicator.type === 'child') {
-          // Making child (syncs with Notion)
+          // Making child - backend will add to array if multiple tags, or replace if single tag
           await this.request('/api/spaces/reorder', {
             method: 'POST',
             body: JSON.stringify({
@@ -6702,6 +7709,12 @@ class LunaIntegration {
         // Dynamic import of Supabase
         const { createClient } = await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm');
         this.supabaseClient = createClient(config.url, config.anonKey, {
+          auth: {
+            cookieOptions: {
+              sameSite: 'none',
+              secure: true
+            }
+          },
           realtime: {
             params: {
               eventsPerSecond: 10

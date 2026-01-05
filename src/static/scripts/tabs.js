@@ -570,6 +570,52 @@ class TabManager {
     }
   };
 
+  // Función para enviar configuración de UI a todos los iframes de Notion
+  sendNotionUISettings = () => {
+    const hideUI = localStorage.getItem('hideNotionUI') === 'true';
+    if (this.frames) {
+      Object.keys(this.frames).forEach((tabId) => {
+        const frameData = this.frames[tabId];
+        if (frameData && frameData.frame) {
+          const iframe = frameData.frame;
+          try {
+            // Check if it's a Notion iframe
+            const isNotion = iframe.src && (
+              iframe.src.includes('silent-queen-f1d8.sebdiar.workers.dev') ||
+              iframe.src.includes('notion.so') ||
+              iframe.src.includes('notion.com')
+            );
+            if (isNotion) {
+              // Try multiple times to ensure the iframe is ready
+              setTimeout(() => {
+                try {
+                  iframe.contentWindow.postMessage({
+                    type: 'notion-hide-ui',
+                    hide: hideUI
+                  }, '*');
+                } catch (e) {
+                  // Ignore cross-origin errors
+                }
+              }, 100);
+              setTimeout(() => {
+                try {
+                  iframe.contentWindow.postMessage({
+                    type: 'notion-hide-ui',
+                    hide: hideUI
+                  }, '*');
+                } catch (e) {
+                  // Ignore cross-origin errors
+                }
+              }, 500);
+            }
+          } catch (e) {
+            // Ignore cross-origin errors
+          }
+        }
+      });
+    }
+  };
+
   // Removed startTracking, track, stopTrack - no polling needed
 
   isChatUrl = (url) => {
@@ -1340,6 +1386,10 @@ class TabManager {
             this.ui.value = tab.originalUrl || currentSrc;
           }
         }
+        // Send UI settings to the iframe when it loads
+        setTimeout(() => {
+          this.sendNotionUISettings();
+        }, 500);
       } else {
         // Para Scramjet y otros tipos, intentar leer URL del iframe
         const isScramjet = this.frames[id] && this.frames[id].go;
@@ -2369,6 +2419,48 @@ window.addEventListener('load', async () => {
       const currentValue = localStorage.getItem('showProxyIndicator') === 'true';
       localStorage.setItem('showProxyIndicator', (!currentValue).toString());
       updateProxyIndicatorStatus();
+      
+      // Close menu after toggle
+      if (menuPopover) {
+        menuPopover.setAttribute('aria-hidden', 'true');
+      }
+      if (menuBtn) {
+        menuBtn.setAttribute('aria-expanded', 'false');
+      }
+    });
+  }
+
+  // Setup toggle for Notion Settings
+  const toggleNotionSettings = document.getElementById('toggle-notion-settings');
+  const notionSettingsStatus = document.getElementById('notion-settings-status');
+  
+  // Function to update the status display
+  const updateNotionSettingsStatus = () => {
+    const isEnabled = localStorage.getItem('hideNotionUI') === 'true';
+    if (notionSettingsStatus) {
+      notionSettingsStatus.textContent = isEnabled ? 'ON' : 'OFF';
+      notionSettingsStatus.style.color = isEnabled ? '#10b981' : '#6b7280';
+    }
+    // Send message to all Notion iframes
+    sendNotionSettingsToAllFrames(isEnabled);
+  };
+
+  // Function to send settings to all Notion iframes
+  const sendNotionSettingsToAllFrames = (hideUI) => {
+    if (tabManager) {
+      tabManager.sendNotionUISettings();
+    }
+  };
+
+  if (toggleNotionSettings) {
+    // Initialize status display
+    updateNotionSettingsStatus();
+    
+    // Add click handler
+    toggleNotionSettings.addEventListener('click', () => {
+      const currentValue = localStorage.getItem('hideNotionUI') === 'true';
+      localStorage.setItem('hideNotionUI', (!currentValue).toString());
+      updateNotionSettingsStatus();
       
       // Close menu after toggle
       if (menuPopover) {

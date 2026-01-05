@@ -1959,6 +1959,10 @@
                       <span>Show Proxy Indicator</span>
                       <span id="proxy-indicator-status" class="text-muted-foreground text-xs"></span>
                     </div>
+                    <div role="menuitem" id="toggle-notion-settings" class="flex items-center justify-between">
+                      <span>Notion Settings</span>
+                      <span id="notion-settings-status" class="text-muted-foreground text-xs"></span>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -2029,7 +2033,8 @@
                         headers: {
                           'Authorization': `Bearer ${token}`,
                           'Content-Type': 'application/json'
-                        }
+                        },
+                        credentials: 'include'
                       });
                       
                       if (response.ok) {
@@ -2045,7 +2050,8 @@
                             headers: {
                               'Authorization': `Bearer ${token}`,
                               'Content-Type': 'application/json'
-                            }
+                            },
+                            credentials: 'include'
                           });
                         }
                       }

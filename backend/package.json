@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "sync-tags": "node scripts/sync-tags-from-notion.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.39.0",

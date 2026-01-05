@@ -100,47 +100,94 @@ async function importProjectsFromNotion() {
           continue;
         }
         
-        // Check if parent is processed (or if it has no parent)
-        const canProcess = !page.parent_id || 
-                          processed.has(page.parent_id) || 
-                          notionToSpaceId.has(page.parent_id) ||
-                          !notionPages.find(p => p.id === page.parent_id);
+        // Get ALL parent IDs (handle both old format with parent_id and new format with parent_ids)
+        const parentNotionIds = page.parent_ids || (page.parent_id ? [page.parent_id] : []);
         
-        if (!canProcess) {
+        // Check if all parents are processed (or if it has no parents)
+        const allParentsProcessed = parentNotionIds.length === 0 || 
+                                    parentNotionIds.every(pid => 
+                                      processed.has(pid) || 
+                                      notionToSpaceId.has(pid) ||
+                                      !notionPages.find(p => p.id === pid)
+                                    );
+        
+        if (!allParentsProcessed) {
           remaining.push(page);
           continue;
         }
         
-        // Find parent space_id if parent exists
-        let parentSpaceId = null;
-        if (page.parent_id && notionToSpaceId.has(page.parent_id)) {
-          parentSpaceId = notionToSpaceId.get(page.parent_id);
+        // Find parent space_ids for ALL parents
+        // parent_id is now a JSONB array, so we need to convert all parents to an array
+        let parentSpaceIds = [];
+        for (const parentNotionId of parentNotionIds) {
+          if (notionToSpaceId.has(parentNotionId)) {
+            parentSpaceIds.push(notionToSpaceId.get(parentNotionId));
+          }
+        }
+        
+        // Get tags from page (if available)
+        const tags = page.tags || [];
+        
+        // Get icon data from page (if available)
+        const iconData = page.icon || { type: null, emoji: null, url: null };
+        let avatar_emoji = null;
+        let avatar_photo = null;
+        let avatar_color = null;
+        
+        if (iconData.type === 'emoji' && iconData.emoji) {
+          avatar_emoji = iconData.emoji;
+          avatar_color = '#4285f4'; // Default blue color for emoji
+        } else if ((iconData.type === 'file' || iconData.type === 'external') && iconData.url) {
+          avatar_photo = iconData.url;
         }
         
         // Get max position for this category and parent
-        const { data: maxPosSpace } = await supabase
-          .from('spaces')
-          .select('position')
-          .eq('user_id', SEBASTIAN_USER_ID)
-          .eq('category', 'project')
-          .eq('parent_id', parentSpaceId || null)
-          .order('position', { ascending: false, nullsFirst: false })
-          .limit(1)
-          .maybeSingle();
+        // For JSONB array, we need to check if the array contains the parent_id
+        let maxPosSpace;
+        if (parentSpaceIds.length > 0) {
+          // Query for projects with this parent in the parent_id array
+          // Use @> operator for JSONB array containment
+          const { data: siblings } = await supabase
+            .from('spaces')
+            .select('position')
+            .eq('user_id', SEBASTIAN_USER_ID)
+            .eq('category', 'project')
+            .contains('parent_id', parentSpaceIds[0])
+            .order('position', { ascending: false, nullsFirst: false })
+            .limit(1)
+            .maybeSingle();
+          maxPosSpace = siblings;
+        } else {
+          // Query for root-level projects (parent_id is empty array)
+          const { data: rootProjects } = await supabase
+            .from('spaces')
+            .select('position')
+            .eq('user_id', SEBASTIAN_USER_ID)
+            .eq('category', 'project')
+            .eq('parent_id', '[]')
+            .order('position', { ascending: false, nullsFirst: false })
+            .limit(1)
+            .maybeSingle();
+          maxPosSpace = rootProjects;
+        }
         
         const position = maxPosSpace?.position != null ? maxPosSpace.position + 1 : 0;
         
-        // Create space
+        // Create space with parent_id as JSONB array
         const { data: newSpace, error: createError } = await supabase
           .from('spaces')
           .insert({
             user_id: SEBASTIAN_USER_ID,
             name: page.name,
             category: 'project',
-            parent_id: parentSpaceId,
+            parent_id: parentSpaceIds, // JSONB array
             position: position,
             notion_page_id: page.id,
             notion_page_url: page.url,
+            tags: tags, // JSONB array of tags
+            avatar_emoji: avatar_emoji,
+            avatar_photo: avatar_photo,
+            avatar_color: avatar_color,
             archived: false,
             is_expanded: true
           })
@@ -152,7 +199,7 @@ async function importProjectsFromNotion() {
           continue;
         }
         
-        console.log(`   ✅ Created: ${newSpace.name}${parentSpaceId ? ' (child)' : ''}`);
+        console.log(`   ✅ Created: ${newSpace.name}${parentSpaceIds.length > 0 ? ' (child)' : ''}`);
         notionToSpaceId.set(page.id, newSpace.id);
         processed.add(page.id);
         processedInThisPass++;
@@ -162,16 +209,34 @@ async function importProjectsFromNotion() {
         console.log(`   ⚠️  Warning: Could not process ${remaining.length} projects (circular dependencies?)`);
         // Try to create them anyway without parent
         for (const page of remaining) {
+          // Get tags and icon data
+          const tags = page.tags || [];
+          const iconData = page.icon || { type: null, emoji: null, url: null };
+          let avatar_emoji = null;
+          let avatar_photo = null;
+          let avatar_color = null;
+          
+          if (iconData.type === 'emoji' && iconData.emoji) {
+            avatar_emoji = iconData.emoji;
+            avatar_color = '#4285f4';
+          } else if ((iconData.type === 'file' || iconData.type === 'external') && iconData.url) {
+            avatar_photo = iconData.url;
+          }
+          
           const { data: newSpace, error: createError } = await supabase
             .from('spaces')
             .insert({
               user_id: SEBASTIAN_USER_ID,
               name: page.name,
               category: 'project',
-              parent_id: null, // Force no parent
+              parent_id: [], // Force no parent (empty array)
               position: 0,
               notion_page_id: page.id,
               notion_page_url: page.url,
+              tags: tags, // JSONB array of tags
+              avatar_emoji: avatar_emoji,
+              avatar_photo: avatar_photo,
+              avatar_color: avatar_color,
               archived: false,
               is_expanded: true
             })
