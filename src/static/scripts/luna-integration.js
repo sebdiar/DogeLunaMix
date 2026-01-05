@@ -6508,13 +6508,18 @@ class LunaIntegration {
       // Setup simple drag and drop for projects (only parent-child relationships)
       this.setupSimpleProjectDragAndDrop();
       
-      // Update badges after re-rendering (needed when toggling projects/tags)
-      // Use setTimeout to ensure DOM is fully updated before querying badges
-      setTimeout(() => {
-        this.updateSpaceUnreadBadges().catch(err => {
-          console.error('[FRONTEND] Error updating badges after render:', err);
+      // Restore badge states after re-rendering (preserve visibility and values)
+      if (badgeStates.size > 0) {
+        badgeStates.forEach((state, spaceId) => {
+          const badges = container.querySelectorAll(`.space-unread-badge[data-space-id="${spaceId}"]`);
+          badges.forEach(badge => {
+            badge.textContent = state.textContent;
+            badge.style.display = state.display || 'none';
+            badge.style.visibility = state.visibility || 'visible';
+            badge.style.opacity = state.opacity || '1';
+          });
         });
-      }, 100);
+      }
     } catch (error) {
       console.error('[FRONTEND] Error in renderProjects:', error);
       const container = document.getElementById('projects-cont');
