@@ -177,18 +177,33 @@ class LunaIntegration {
       
       console.log(`[BADGES] Received unread counts for ${Object.keys(unreadCounts || {}).length} spaces:`, unreadCounts);
       
+      // Initialize badge cache if it doesn't exist
+      if (!this._badgeStatesCache) {
+        this._badgeStatesCache = new Map();
+      }
+      
       // Update all badges at once (only spaces with count > 0 will be in unreadCounts)
       Object.entries(unreadCounts || {}).forEach(([spaceId, count]) => {
         const badges = document.querySelectorAll(`.space-unread-badge[data-space-id="${spaceId}"]`);
         badges.forEach(badge => {
           if (count > 0) {
-            badge.textContent = count > 99 ? '99+' : String(count);
+            const textContent = count > 99 ? '99+' : String(count);
+            badge.textContent = textContent;
             badge.style.display = 'flex';
             badge.style.alignItems = 'center';
             badge.style.justifyContent = 'center';
             badge.style.top = '50%';
             badge.style.transform = 'translateY(-50%)';
             badge.style.right = '8px';
+            
+            // Update cache with visible badge state
+            this._badgeStatesCache.set(spaceId, {
+              textContent: textContent,
+              display: 'flex',
+              visibility: 'visible',
+              opacity: '1',
+              isVisible: true
+            });
             
             // Adjust menu button position when badge is visible
             const projectItem = badge.closest('.project-item');
@@ -200,6 +215,15 @@ class LunaIntegration {
             }
           } else {
             badge.style.display = 'none';
+            
+            // Update cache with hidden badge state
+            this._badgeStatesCache.set(spaceId, {
+              textContent: '',
+              display: 'none',
+              visibility: 'hidden',
+              opacity: '0',
+              isVisible: false
+            });
             
             // Reset menu button position when badge is hidden
             const projectItem = badge.closest('.project-item');
@@ -225,6 +249,17 @@ class LunaIntegration {
           badges.forEach(badge => {
             badge.textContent = '';
             badge.style.display = 'none';
+            
+            // Update cache with hidden badge state
+            if (this._badgeStatesCache) {
+              this._badgeStatesCache.set(spaceId, {
+                textContent: '',
+                display: 'none',
+                visibility: 'hidden',
+                opacity: '0',
+                isVisible: false
+              });
+            }
             
             // Reset menu button position when badge is hidden
             const projectItem = badge.closest('.project-item');
@@ -5885,11 +5920,41 @@ class LunaIntegration {
     }
   }
 
+  // Helper function to check if a project has children with notifications
+  hasChildrenWithNotifications(projectId, allProjectsForChildren) {
+    if (!this._badgeStatesCache) return false;
+    
+    // Get all direct children
+    const children = allProjectsForChildren.filter(p => {
+      const parentIds = Array.isArray(p.parent_id) ? p.parent_id : (p.parent_id ? [p.parent_id] : []);
+      return parentIds.includes(projectId);
+    });
+    
+    // Check if any child has visible notifications
+    for (const child of children) {
+      const badgeState = this._badgeStatesCache.get(child.id);
+      if (badgeState && badgeState.isVisible && badgeState.textContent && badgeState.textContent.trim() !== '') {
+        return true;
+      }
+      
+      // Recursively check grandchildren
+      if (this.hasChildrenWithNotifications(child.id, allProjectsForChildren)) {
+        return true;
+      }
+    }
+    
+    return false;
+  }
+
   // Helper function to render a single project item
   renderProjectItem(project, container, allProjectsForChildren) {
     const isActive = this.activeSpace?.id === project.id;
-    const hasChildren = allProjectsForChildren.some(p => p.parent_id === project.id);
+    const hasChildren = allProjectsForChildren.some(p => {
+      const parentIds = Array.isArray(p.parent_id) ? p.parent_id : (p.parent_id ? [p.parent_id] : []);
+      return parentIds.includes(project.id);
+    });
     const isGhost = project.isGhost === true || project.isReadOnly === true;
+    const hasChildrenNotifications = hasChildren && this.hasChildrenWithNotifications(project.id, allProjectsForChildren);
     
     const hasIcon = project.avatar_photo || project.avatar_emoji;
     let iconHtml = '';
@@ -5921,11 +5986,12 @@ class LunaIntegration {
     projectEl.style.cursor = isGhost ? 'default' : 'pointer';
     
     const chevronHtml = hasChildren 
-      ? `<button class="p-0 hover:bg-gray-100 rounded transition-colors z-10 expand-btn" data-project-id="${project.id}">
+      ? `<button class="p-0 hover:bg-gray-100 rounded transition-colors z-10 expand-btn relative" data-project-id="${project.id}" style="position: relative;">
           ${project.is_expanded !== false 
             ? '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>'
             : '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>'
           }
+          ${hasChildrenNotifications ? '<div class="child-notification-dot" style="position: absolute; top: -2px; right: -2px; width: 6px; height: 6px; background-color: #ea4335; border-radius: 50%; border: 1px solid white; z-index: 20;"></div>' : ''}
         </button>`
       : '<div class="w-2.5"></div>';
     
@@ -6237,22 +6303,29 @@ class LunaIntegration {
     console.log('[FRONTEND] renderProjects: About to render. projectsByTag.size =', projectsByTag.size, ', projectsWithoutTags.length =', projectsWithoutTags.length, ', sortedTags.length =', sortedTags.length);
     
     // Preserve badge states before clearing container
-    // Search in entire document to catch all badges, including those in collapsed projects
-    const badgeStates = new Map();
+    // Strategy: Store badge states in a class property so they persist across renders
+    // This way, even if projects are collapsed and their badges aren't in DOM, we still have the state
+    if (!this._badgeStatesCache) {
+      this._badgeStatesCache = new Map();
+    }
+    
+    // First, update cache with current visible badges from DOM
     const existingBadges = document.querySelectorAll('.space-unread-badge');
+    console.log('[BADGES] Preserving badges before render. Found', existingBadges.length, 'badges in DOM');
     existingBadges.forEach(badge => {
       const spaceId = badge.getAttribute('data-space-id');
       if (spaceId) {
         // Use computed style to check actual visibility (not just inline style)
         const computedStyle = window.getComputedStyle(badge);
-        const isVisible = computedStyle.display !== 'none' && computedStyle.visibility !== 'hidden';
+        const isVisible = computedStyle.display !== 'none' && computedStyle.visibility !== 'hidden' && badge.textContent && badge.textContent.trim() !== '';
         const currentDisplay = badge.style.display || computedStyle.display;
         const currentVisibility = badge.style.visibility || computedStyle.visibility;
         const currentOpacity = badge.style.opacity || computedStyle.opacity;
         
-        // Always preserve the state, but prefer visible badges if multiple exist
-        if (!badgeStates.has(spaceId) || isVisible) {
-          badgeStates.set(spaceId, {
+        // Update cache with current state (prefer visible state if badge is visible)
+        if (isVisible || !this._badgeStatesCache.has(spaceId)) {
+          console.log(`[BADGES] Caching badge for space ${spaceId}: text="${badge.textContent}", isVisible=${isVisible}`);
+          this._badgeStatesCache.set(spaceId, {
             textContent: badge.textContent,
             display: currentDisplay,
             visibility: currentVisibility,
@@ -6262,6 +6335,7 @@ class LunaIntegration {
         }
       }
     });
+    console.log('[BADGES] Cache now has', this._badgeStatesCache.size, 'badge states');
     
     container.innerHTML = '';
     
@@ -6521,16 +6595,19 @@ class LunaIntegration {
       this.setupSimpleProjectDragAndDrop();
       
       // Restore badge states after re-rendering (preserve visibility and values)
-      // Search in entire document to restore all badges, including those in collapsed projects
-      if (badgeStates.size > 0) {
-        badgeStates.forEach((state, spaceId) => {
+      // Use cached states so we can restore badges even for projects that were collapsed
+      if (this._badgeStatesCache && this._badgeStatesCache.size > 0) {
+        console.log('[BADGES] Restoring', this._badgeStatesCache.size, 'badge states from cache after render');
+        this._badgeStatesCache.forEach((state, spaceId) => {
           const badges = document.querySelectorAll(`.space-unread-badge[data-space-id="${spaceId}"]`);
+          console.log(`[BADGES] Restoring badge for space ${spaceId}: found ${badges.length} badges, isVisible=${state.isVisible}, text="${state.textContent}"`);
           badges.forEach(badge => {
             badge.textContent = state.textContent;
             
             // Restore visibility state - if it was visible, make it visible again
             if (state.isVisible && state.textContent && state.textContent.trim() !== '') {
               // Badge was visible and had content - restore it
+              console.log(`[BADGES] Making badge visible for space ${spaceId}`);
               badge.style.setProperty('display', 'flex', 'important');
               badge.style.setProperty('visibility', 'visible', 'important');
               badge.style.setProperty('opacity', '1', 'important');
@@ -6539,10 +6616,13 @@ class LunaIntegration {
               badge.style.setProperty('right', '8px', 'important');
             } else if (state.display === 'none' || !state.isVisible) {
               // Badge was hidden - keep it hidden
+              console.log(`[BADGES] Keeping badge hidden for space ${spaceId}`);
               badge.style.setProperty('display', 'none', 'important');
             }
           });
         });
+      } else {
+        console.log('[BADGES] No badge states in cache to restore');
       }
     } catch (error) {
       console.error('[FRONTEND] Error in renderProjects:', error);
