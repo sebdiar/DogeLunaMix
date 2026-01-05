@@ -207,11 +207,23 @@ class LunaIntegration {
       }
       
       // Update all badges at once (only spaces with count > 0 will be in unreadCounts)
+      // IMPORTANT: Update cache for ALL projects with unread counts, even if not in DOM (collapsed)
       Object.entries(unreadCounts || {}).forEach(([spaceId, count]) => {
-        const badges = document.querySelectorAll(`.space-unread-badge[data-space-id="${spaceId}"]`);
-        badges.forEach(badge => {
-          if (count > 0) {
-            const textContent = count > 99 ? '99+' : String(count);
+        if (count > 0) {
+          const textContent = count > 99 ? '99+' : String(count);
+          
+          // Update cache FIRST (for all projects, even collapsed ones)
+          this._badgeStatesCache.set(spaceId, {
+            textContent: textContent,
+            display: 'flex',
+            visibility: 'visible',
+            opacity: '1',
+            isVisible: true
+          });
+          
+          // Then update DOM badges if they exist (for visible projects)
+          const badges = document.querySelectorAll(`.space-unread-badge[data-space-id="${spaceId}"]`);
+          badges.forEach(badge => {
             badge.textContent = textContent;
             badge.style.display = 'flex';
             badge.style.alignItems = 'center';
@@ -219,15 +231,6 @@ class LunaIntegration {
             badge.style.top = '50%';
             badge.style.transform = 'translateY(-50%)';
             badge.style.right = '8px';
-            
-            // Update cache with visible badge state
-            this._badgeStatesCache.set(spaceId, {
-              textContent: textContent,
-              display: 'flex',
-              visibility: 'visible',
-              opacity: '1',
-              isVisible: true
-            });
             
             // Adjust menu button position when badge is visible
             const projectItem = badge.closest('.project-item');
@@ -237,17 +240,15 @@ class LunaIntegration {
                 menuBtn.style.right = '30px'; // Move left when badge is visible
               }
             }
-          } else {
+          });
+        } else {
+          // No unread count - remove from cache and hide DOM badges
+          this._badgeStatesCache.delete(spaceId);
+          
+          const badges = document.querySelectorAll(`.space-unread-badge[data-space-id="${spaceId}"]`);
+          badges.forEach(badge => {
             badge.style.display = 'none';
-            
-            // Update cache with hidden badge state
-            this._badgeStatesCache.set(spaceId, {
-              textContent: '',
-              display: 'none',
-              visibility: 'hidden',
-              opacity: '0',
-              isVisible: false
-            });
+            badge.textContent = '';
             
             // Reset menu button position when badge is hidden
             const projectItem = badge.closest('.project-item');
@@ -257,8 +258,8 @@ class LunaIntegration {
                 menuBtn.style.right = '8px'; // Back to original position
               }
             }
-          }
-        });
+          });
+        }
       });
       
       // Also update spaces that don't have unread counts (hide their badges)
