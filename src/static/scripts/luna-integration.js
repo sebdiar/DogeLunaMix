@@ -5946,6 +5946,40 @@ class LunaIntegration {
     return false;
   }
 
+  // Update child notification indicators (red dots on chevrons)
+  updateChildNotificationIndicators() {
+    if (!this.projects || this.projects.length === 0) return;
+    
+    // Get all projects that have children
+    const projectsWithChildren = this.projects.filter(p => {
+      return this.projects.some(child => {
+        const parentIds = Array.isArray(child.parent_id) ? child.parent_id : (child.parent_id ? [child.parent_id] : []);
+        return parentIds.includes(p.id);
+      });
+    });
+    
+    projectsWithChildren.forEach(project => {
+      const expandBtn = document.querySelector(`.expand-btn[data-project-id="${project.id}"]`);
+      if (expandBtn) {
+        const hasNotifications = this.hasChildrenWithNotifications(project.id, this.projects);
+        let dot = expandBtn.querySelector('.child-notification-dot');
+        
+        if (hasNotifications) {
+          if (!dot) {
+            dot = document.createElement('div');
+            dot.className = 'child-notification-dot';
+            dot.style.cssText = 'position: absolute; top: -2px; right: -2px; width: 6px; height: 6px; background-color: #ea4335; border-radius: 50%; border: 1px solid white; z-index: 20;';
+            expandBtn.appendChild(dot);
+          }
+        } else {
+          if (dot) {
+            dot.remove();
+          }
+        }
+      }
+    });
+  }
+
   // Helper function to render a single project item
   renderProjectItem(project, container, allProjectsForChildren) {
     const isActive = this.activeSpace?.id === project.id;
@@ -6593,6 +6627,9 @@ class LunaIntegration {
     
       // Setup simple drag and drop for projects (only parent-child relationships)
       this.setupSimpleProjectDragAndDrop();
+      
+      // Update child notification indicators (red dots on chevrons)
+      this.updateChildNotificationIndicators();
       
       // Restore badge states after re-rendering (preserve visibility and values)
       // Use cached states so we can restore badges even for projects that were collapsed
