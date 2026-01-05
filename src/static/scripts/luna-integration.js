@@ -6237,17 +6237,22 @@ class LunaIntegration {
     console.log('[FRONTEND] renderProjects: About to render. projectsByTag.size =', projectsByTag.size, ', projectsWithoutTags.length =', projectsWithoutTags.length, ', sortedTags.length =', sortedTags.length);
     
     // Preserve badge states before clearing container
+    // Search in entire document to catch all badges, including those in collapsed projects
     const badgeStates = new Map();
-    const existingBadges = container.querySelectorAll('.space-unread-badge');
+    const existingBadges = document.querySelectorAll('.space-unread-badge');
     existingBadges.forEach(badge => {
       const spaceId = badge.getAttribute('data-space-id');
       if (spaceId) {
-        badgeStates.set(spaceId, {
-          textContent: badge.textContent,
-          display: badge.style.display,
-          visibility: badge.style.visibility,
-          opacity: badge.style.opacity
-        });
+        // Only update if we don't have this spaceId yet, or if current badge is visible
+        // This ensures we preserve the most recent visible state
+        if (!badgeStates.has(spaceId) || badge.style.display !== 'none') {
+          badgeStates.set(spaceId, {
+            textContent: badge.textContent,
+            display: badge.style.display,
+            visibility: badge.style.visibility,
+            opacity: badge.style.opacity
+          });
+        }
       }
     });
     
