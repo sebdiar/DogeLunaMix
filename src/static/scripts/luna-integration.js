@@ -7049,7 +7049,8 @@ class LunaIntegration {
     // Re-render immediately to show updated hierarchy
     this.renderProjects();
     
-    // If project was expanded (not collapsed), load badges for newly visible children
+    // Fallback: If project was expanded, load badges for newly visible children
+    // (This is a fallback in case initial load missed some)
     if (newExpanded) {
       // Get all children of this project (including nested children)
       const getAllChildrenIds = (parentId, allProjects) => {
@@ -7067,7 +7068,7 @@ class LunaIntegration {
       };
       
       const childIds = getAllChildrenIds(projectId, this.projects);
-      console.log(`[BADGES] Project expanded, loading badges for ${childIds.length} children`);
+      console.log(`[BADGES] Project expanded (fallback), loading badges for ${childIds.length} children`);
       
       // Load badges for all children in parallel
       Promise.all(childIds.map(childId => this.updateSpaceBadge(childId))).then(() => {
