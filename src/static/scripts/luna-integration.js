@@ -6236,6 +6236,21 @@ class LunaIntegration {
     
     console.log('[FRONTEND] renderProjects: About to render. projectsByTag.size =', projectsByTag.size, ', projectsWithoutTags.length =', projectsWithoutTags.length, ', sortedTags.length =', sortedTags.length);
     
+    // Preserve badge states before clearing container
+    const badgeStates = new Map();
+    const existingBadges = container.querySelectorAll('.space-unread-badge');
+    existingBadges.forEach(badge => {
+      const spaceId = badge.getAttribute('data-space-id');
+      if (spaceId) {
+        badgeStates.set(spaceId, {
+          textContent: badge.textContent,
+          display: badge.style.display,
+          visibility: badge.style.visibility,
+          opacity: badge.style.opacity
+        });
+      }
+    });
+    
     container.innerHTML = '';
     
     // Determine where "No Tag" should appear based on saved order
