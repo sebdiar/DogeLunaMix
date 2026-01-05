@@ -93,12 +93,18 @@ class LunaIntegration {
       const response = await this.request(`/api/chat/space/${spaceId}/unread-count`);
       const unreadCount = response.unreadCount || 0;
       
+      // Initialize badge cache if it doesn't exist
+      if (!this._badgeStatesCache) {
+        this._badgeStatesCache = new Map();
+      }
+      
       // Find ALL badges using data-space-id (both desktop and mobile)
       const badges = document.querySelectorAll(`.space-unread-badge[data-space-id="${spaceId}"]`);
       
       badges.forEach((badge) => {
         if (unreadCount > 0) {
-          badge.textContent = unreadCount > 99 ? '99+' : String(unreadCount);
+          const textContent = unreadCount > 99 ? '99+' : String(unreadCount);
+          badge.textContent = textContent;
           // Force display and visibility - use important styles to prevent hiding
           badge.style.setProperty('display', 'flex', 'important');
           badge.style.setProperty('visibility', 'visible', 'important');
@@ -106,6 +112,15 @@ class LunaIntegration {
           badge.style.setProperty('top', '50%', 'important');
           badge.style.setProperty('transform', 'translateY(-50%)', 'important');
           badge.style.setProperty('right', '8px', 'important');
+          
+          // Update cache with visible badge state
+          this._badgeStatesCache.set(spaceId, {
+            textContent: textContent,
+            display: 'flex',
+            visibility: 'visible',
+            opacity: '1',
+            isVisible: true
+          });
           
           // Adjust menu button position when badge is visible
           const projectItem = badge.closest('.project-item');
@@ -123,6 +138,9 @@ class LunaIntegration {
           badge.style.setProperty('display', 'none', 'important');
           badge.style.setProperty('visibility', 'hidden', 'important');
           
+          // Remove from cache when badge is hidden (marked as read)
+          this._badgeStatesCache.delete(spaceId);
+          
           // Reset menu button position when badge is hidden
           const projectItem = badge.closest('.project-item');
           if (projectItem) {
@@ -136,15 +154,21 @@ class LunaIntegration {
           }
         }
       });
+      
+      // Update child notification indicators after badge update
+      this.updateChildNotificationIndicators();
     } catch (error) {
       console.error(`[BADGE] Error updating badge for space ${spaceId}:`, error);
-      // On error, hide ALL badges
+      // On error, hide ALL badges and remove from cache
       const badges = document.querySelectorAll(`.space-unread-badge[data-space-id="${spaceId}"]`);
       badges.forEach(badge => {
         badge.textContent = '';
         badge.style.setProperty('display', 'none', 'important');
         badge.style.setProperty('visibility', 'hidden', 'important');
       });
+      if (this._badgeStatesCache) {
+        this._badgeStatesCache.delete(spaceId);
+      }
     }
   }
 
@@ -6346,6 +6370,8 @@ class LunaIntegration {
     }
     
     // First, update cache with current visible badges from DOM
+    // IMPORTANT: Only preserve badges that are actually visible with content
+    // If a badge is hidden or empty, remove it from cache (it was marked as read)
     const existingBadges = document.querySelectorAll('.space-unread-badge');
     console.log('[BADGES] Preserving badges before render. Found', existingBadges.length, 'badges in DOM');
     existingBadges.forEach(badge => {
@@ -6358,16 +6384,23 @@ class LunaIntegration {
         const currentVisibility = badge.style.visibility || computedStyle.visibility;
         const currentOpacity = badge.style.opacity || computedStyle.opacity;
         
-        // Update cache with current state (prefer visible state if badge is visible)
-        if (isVisible || !this._badgeStatesCache.has(spaceId)) {
+        // Only update cache if badge is visible with content
+        // If badge is hidden/empty, remove from cache (it was marked as read)
+        if (isVisible) {
           console.log(`[BADGES] Caching badge for space ${spaceId}: text="${badge.textContent}", isVisible=${isVisible}`);
           this._badgeStatesCache.set(spaceId, {
             textContent: badge.textContent,
             display: currentDisplay,
             visibility: currentVisibility,
             opacity: currentOpacity,
-            isVisible: isVisible
+            isVisible: true
           });
+        } else {
+          // Badge is hidden/empty - remove from cache (was marked as read)
+          if (this._badgeStatesCache.has(spaceId)) {
+            console.log(`[BADGES] Removing badge from cache for space ${spaceId} (marked as read)`);
+            this._badgeStatesCache.delete(spaceId);
+          }
         }
       }
     });
