@@ -6243,14 +6243,21 @@ class LunaIntegration {
     existingBadges.forEach(badge => {
       const spaceId = badge.getAttribute('data-space-id');
       if (spaceId) {
-        // Only update if we don't have this spaceId yet, or if current badge is visible
-        // This ensures we preserve the most recent visible state
-        if (!badgeStates.has(spaceId) || badge.style.display !== 'none') {
+        // Use computed style to check actual visibility (not just inline style)
+        const computedStyle = window.getComputedStyle(badge);
+        const isVisible = computedStyle.display !== 'none' && computedStyle.visibility !== 'hidden';
+        const currentDisplay = badge.style.display || computedStyle.display;
+        const currentVisibility = badge.style.visibility || computedStyle.visibility;
+        const currentOpacity = badge.style.opacity || computedStyle.opacity;
+        
+        // Always preserve the state, but prefer visible badges if multiple exist
+        if (!badgeStates.has(spaceId) || isVisible) {
           badgeStates.set(spaceId, {
             textContent: badge.textContent,
-            display: badge.style.display,
-            visibility: badge.style.visibility,
-            opacity: badge.style.opacity
+            display: currentDisplay,
+            visibility: currentVisibility,
+            opacity: currentOpacity,
+            isVisible: isVisible
           });
         }
       }
@@ -6520,14 +6527,19 @@ class LunaIntegration {
           const badges = document.querySelectorAll(`.space-unread-badge[data-space-id="${spaceId}"]`);
           badges.forEach(badge => {
             badge.textContent = state.textContent;
-            // Only restore display if it was visible before (preserve hidden state too)
-            if (state.display && state.display !== 'none') {
-              badge.style.display = state.display;
-              badge.style.visibility = state.visibility || 'visible';
-              badge.style.opacity = state.opacity || '1';
-            } else if (state.display === 'none') {
-              // Keep it hidden if it was hidden
-              badge.style.display = 'none';
+            
+            // Restore visibility state - if it was visible, make it visible again
+            if (state.isVisible && state.textContent && state.textContent.trim() !== '') {
+              // Badge was visible and had content - restore it
+              badge.style.setProperty('display', 'flex', 'important');
+              badge.style.setProperty('visibility', 'visible', 'important');
+              badge.style.setProperty('opacity', '1', 'important');
+              badge.style.setProperty('top', '50%', 'important');
+              badge.style.setProperty('transform', 'translateY(-50%)', 'important');
+              badge.style.setProperty('right', '8px', 'important');
+            } else if (state.display === 'none' || !state.isVisible) {
+              // Badge was hidden - keep it hidden
+              badge.style.setProperty('display', 'none', 'important');
             }
           });
         });
